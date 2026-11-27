@@ -389,8 +389,11 @@ test('CSS: both pages have .ho-strip (min-height 32px, nowrap), .ho-list, .ho-fl
     const rule = (sel) => { const m = css.match(new RegExp('\\.handoff-cards ' + sel.replace(/\./g, '\\.') + ' \\{([^}]*)\\}')); assert.ok(m, f + ' has ' + sel); return m[1]; };
     const strip = rule('.ho-strip');
     assert.match(strip, /min-height: 32px/, f);
-    assert.match(strip, /white-space: nowrap/, f);
-    assert.match(rule('.ho-sum'), /text-overflow: ellipsis/, f);
+    assert.doesNotMatch(strip, /white-space: nowrap|overflow: hidden/, f);
+    assert.doesNotMatch(rule('.ho-sum'), /text-overflow|overflow: hidden|nowrap/, f);
+    assert.match(rule('.ho-sum'), /white-space: normal/, f);
+    assert.match(rule('.ho-sum'), /overflow-wrap: anywhere/, f);
+    assert.match(rule('.ho-next'), /white-space: nowrap/, f);
     assert.match(rule('.ho-list'), /gap: 4px/, f);
     assert.match(css, /\.ho-list\[hidden\] \{ display: none; \}/, f);
     assert.match(css, /\.ho-strip\[aria-expanded="true"\] \.ho-chev/, f);

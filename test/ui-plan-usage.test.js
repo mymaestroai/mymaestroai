@@ -25,8 +25,9 @@ test('desktop: a chip in the sidebar header while a weekly allowance is past a w
 test('desktop: no pop-up for plan events; a usage badge next to each Claude agent\'s model; brief toasts sit near the top', () => {
   assert.ok(app.includes("source.addEventListener('plan_warning', e => { const ev = parse(e); if (!ev) return; refreshPlanChip();"), 'plan_warning refreshes, no toast');
   assert.ok(!/addEventListener\('plan_(warning|limit)'[^\n]*hubToast/.test(app), 'no toast for plan events');
-  assert.ok(app.includes('<span class="plan-badge" id="plan-badge-${chatId}" hidden onclick="openPlanSettings()"></span>'), 'badge in the chat header after the effort picker');
-  assert.ok(app.includes("el.textContent = `${w.family ? w.label : 'Plan'} ${planPctText(w, levels)} this week`;"), 'label "Fable 90% this week"');
+  assert.ok(app.includes('<button type="button" class="plan-badge" id="plan-badge-${chatId}" hidden></button>'), 'badge in the chat header after the effort picker (a button now: it opens the chooser, see ui-plan-badge-chooser.test.js)');
+  // the plan leads ("Claude plan 18% this week"); the family window follows only when worse ("· Fable 19%") — see ui-plan-state.test.js
+  assert.ok(app.includes("`${x.kind === 'plan' ? 'Claude plan' : x.w.label} ${badgeAmount(x.w, levels)}` + (i === 0 ? ' this week' : '')"), 'label "Claude plan 18% this week" (planBadgeText)');
   assert.match(app, /compactionRefresh\(chatId\);[^\n]*\n\s*paintPlanBadges\(\);/, 'painted when a chat opens');
   assert.match(app, /refreshEffortPick\(chat\);\s*\n\s*paintPlanBadges\(\);/, 'and when the agent\'s model changes');
   assert.ok(app.includes('paintPlanChip(); paintPlanBadges();'), 'and with every new reading');
@@ -44,9 +45,9 @@ test('desktop: Settings → Claude plan: windows, warning levels, the automatic 
 
 test('phone: plan usage in the chat header for Claude agents; no plan pop-ups', () => {
   const mhtml = read('mobile.html');
-  assert.ok(mhtml.includes('<span class="sub" id="chat-plan" hidden></span>') && mhtml.includes('#chat-plan.warn'), 'header element + style');
+  assert.ok(mhtml.includes('<button type="button" class="sub" id="chat-plan" hidden></button>') && mhtml.includes('#chat-plan.warn'), 'header element + style');
   assert.ok(mjs.includes("on('plan_limit', () => refreshPlanUsage());") && mjs.includes("on('plan_warning', () => refreshPlanUsage());"), 'events refresh, no toast');
-  assert.ok(mjs.includes("el.textContent = `${w.family ? w.label : 'Plan'} ${planPctText(w, levels)}`;"), 'label "Fable 90%"');
+  assert.ok(mjs.includes("`${x.kind === 'plan' ? 'Claude plan' : x.w.label} ${badgeAmount(x.w, levels)}` + (i === 0 ? ' this week' : '')"), 'label "Claude plan 18% this week" (phone now says "this week" too)');
   assert.match(mjs, /await loadMe\(\);\s*\n\s*applyMultiUser\(\);\s*\n\s*refreshPlanUsage\(\);/, 'read at start');
   assert.ok(mjs.includes('paintCtx(); refreshCtx(name); paintPlan();'), 'painted on open');
   assert.ok(mjs.includes('if (refreshPlanUsage.tries <= 8) next = Math.min(next, 15000);'), 'asks again soon while the hub has no reading yet');
@@ -56,8 +57,8 @@ test('phone: plan usage in the chat header for Claude agents; no plan pop-ups', 
 test('extra usage paying: warning (not refused) on the chip, the badge, the Settings rows and the phone; own event on both pages', () => {
   assert.ok(app.includes("if (top.extraUsage && !top.rejected) {") && app.includes("el.textContent = `⚠ ${top.family ? top.label : 'Claude plan'} ${planPctText(top)}`;") && app.includes("el.classList.remove('hot');"), 'chip: extra usage is not hot');
   assert.ok(app.includes('is used up for this week until ${planWhen(top.resetsAt)}; extra usage is paying for Claude replies until then. Click to choose your agents\' models.`'), 'chip title');
-  assert.ok(app.includes("el.className = 'plan-badge' + (cls ? ' ' + cls : '');") && !/el\.className = 'plan-badge' \+ \(w\.rejected/.test(app), 'badge class from planState');
-  assert.ok(app.includes('is used up for this week until ${planWhen(w.resetsAt)}; extra usage is paying for Claude replies until then. Click to choose models (Settings → Claude plan).`'), 'badge title');
+  assert.ok(app.includes("el.className = 'plan-badge' + (view.cls ? ' ' + view.cls : '');") && !/el\.className = 'plan-badge' \+ \(w\.rejected/.test(app), 'badge class from planState');
+  assert.ok(app.includes('is used up for this week until ${planWhen(w.resetsAt)}; extra usage is paying for Claude replies until then`') && app.includes("'. Click to choose what this shows.'"), 'badge title (the sentence is now built per window, then the click sentence)');
   // looks-vars: the value is unchanged; index.html/app.js now spell it as a variable (defined in index.html :root)
   assert.ok(app.includes("const color = w.extraUsage ? 'var(--status-warn)' : w.rejected || pct >= 100 ? 'var(--status-hot)'"), 'extra row in warning gold, before the refused colour');
   assert.ok(app.includes('${esc(planPctText(w))}</b>'), 'row shows "100% · extra usage"');
@@ -65,12 +66,12 @@ test('extra usage paying: warning (not refused) on the chip, the badge, the Sett
   assert.ok(app.includes("d.overage && d.overage.status === 'allowed_warning'") && app.includes('Extra usage is close to its monthly limit') && app.includes('when it is reached, every Claude agent stops.'), 'monthly-limit line');
   assert.ok(/plan_extra_usage', e => \{ const ev = parse\(e\); if \(!ev\) return; refreshPlanChip\(\); if \(document\.getElementById\('st-plan-section'\)\) loadPlanBox\(\); \}\);/.test(app) && !/addEventListener\('plan_extra_usage'[^\n]*hubToast/.test(app), 'desktop listener, no toast');
   assert.ok(mjs.includes("on('plan_extra_usage', () => refreshPlanUsage());"), 'phone listener');
-  assert.ok(mjs.includes("el.className = 'sub' + (cls ? ' ' + cls : '');") && mjs.includes('the weekly Claude plan is used up until') && mjs.includes('extra usage is paying`'), 'phone class and title');
+  assert.ok(mjs.includes("el.className = 'sub' + (view.cls ? ' ' + view.cls : '');") && mjs.includes("'the weekly Claude plan is used up'} until ${planWhenText(w)}") && mjs.includes('extra usage is paying`'), 'phone class and title');
 });
 
 test('the five-hour row and the phone title follow the extra-usage state too', () => {
   assert.ok(app.includes("rows.push({ label: '5-hour window', utilization: five.utilization, resetsAt: five.resets_at, extraUsage: !!five.extraUsage && !five.rejected });"), 'Settings five-hour row carries extraUsage');
-  assert.ok(mjs.includes("Number.isFinite(Date.parse(w.resetsAt || '')) ?") && mjs.includes(": 'the reset'}; extra usage is paying`"), 'phone title says "the reset" when the time is missing');
+  assert.ok(mjs.includes("Number.isFinite(Date.parse(w.resetsAt || '')) ?") && mjs.includes(": 'the reset')") && mjs.includes("'the weekly Claude plan is used up'} until ${planWhenText(w)}; extra usage is paying`"), 'phone title says "the reset" when the time is missing');
 });
 
 test('both chat renderers show a whole line in underscores (the hub\'s notices) in italics', () => {
@@ -81,4 +82,17 @@ test('both chat renderers show a whole line in underscores (the hub\'s notices) 
   assert.strictEqual('_⚠️ Fable has used 90% (resets Wed 8:00 PM)._\n\nOK.'.replace(re, '$1<em>$2</em>'), '<em>⚠️ Fable has used 90% (resets Wed 8:00 PM).</em>\n\nOK.');
   assert.strictEqual('m0a1b2T0~'.replace(re, '$1<em>$2</em>'), 'm0a1b2T0~', 'render markers untouched');
   assert.strictEqual('see my_file_name here'.replace(re, '$1<em>$2</em>'), 'see my_file_name here', 'snake_case untouched');
+});
+
+test('usage wording: "5-hour" and "Claude plan" everywhere; no "5h" or bare "Plan " badge word; both pages build the same words', () => {
+  const fn = (src, name) => { const i = src.indexOf(`function ${name}(`); assert.ok(i >= 0, name); return src.slice(i, i + src.slice(i).search(/\n\s*}\n/) + 3).replace(/^\s+/gm, '').replace(/\s*}?\s*$/, ''); };
+  const chooser = (src) => src.match(/planChooserLabel = \(k, w\) => [^\n]*/)[0];
+  assert.strictEqual(fn(app, 'planBadgeText'), fn(mjs, 'planBadgeText'), 'badge words are the same function on both pages');
+  assert.strictEqual(chooser(app), chooser(mjs), 'chooser labels are the same on both pages');
+  for (const [name, src] of [['app.js', app], ['mobile.js', mjs]]) {
+    const words = fn(src, 'planBadgeText') + chooser(src);
+    assert.ok(!/5h/.test(words) && !/'Plan'|'Plan \(/.test(words), name + ': no 5h, no bare Plan');
+    assert.ok(words.includes("`5-hour ${badgeAmount(x.w, levels)}`") && words.includes("'Claude plan' : x.w.label") && words.includes("'Claude plan (all models)'") && words.includes("'5-hour window'"), name);
+    assert.ok(!src.includes(".replace(/-hour$/, 'h')"), name + ': the ChatGPT badge keeps "5-hour" too');
+  }
 });

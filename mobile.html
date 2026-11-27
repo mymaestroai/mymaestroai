@@ -312,9 +312,10 @@
     .question .qcheck small { display: block; margin-top: 2px; font-size: 12px; color: var(--text-dim); }
     .reattach { font-size: 12px; color: var(--warning); margin-top: 6px; }
     /* Provider pacing: slim amber bar under the header of every screen (tap to resume full parallel) */
-    #health-notice { flex-shrink: 0; box-sizing: border-box; width: 100%; padding: 6px 12px; background: var(--health-notice-bg); color: var(--on-health-notice); font-size: 13px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
-    #health-notice[hidden] { display: none; }
-    #health-notice a { color: var(--on-accent); text-decoration: underline; }
+    #review-banner { flex-shrink: 0; box-sizing: border-box; width: 100%; padding: 6px 12px; background: var(--health-notice-bg); color: var(--on-health-notice); font-size: 13px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+    #review-banner[hidden] { display: none; }
+    #review-banner a { color: var(--on-accent); text-decoration: underline; }
+    #review-banner button.rvb-fix { margin-left: 4px; padding: 2px 10px; border-radius: 4px; border: 1px solid var(--on-health-notice); background: transparent; color: var(--on-health-notice); font: inherit; cursor: pointer; }
     .pacing-bar { display: none; width: 100%; flex-shrink: 0; padding: 4px 12px; background: var(--pacing-bar-bg); color: var(--on-pacing); font-size: 12px; font-weight: 600; text-align: left; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     #pacing-text { white-space: pre-line; }
     .pacing-bar.on { display: block; }
@@ -354,7 +355,21 @@
     #chat-meta .sub-wrap { position: relative; display: flex; min-width: 0; }
     #chat-meta .sub-wrap.pickable::after { content: '\25BE'; flex: none; margin-left: 4px; font-size: 12px; line-height: 1.4; color: var(--accent); }
     #chat-ctx, #chat-plan { flex: 0 0 auto; white-space: nowrap; }
-    #chat-plan.warn { color: var(--caution); } #chat-plan.hot { color: var(--chat-plan-hot-text); } #chat-plan.refused { color: var(--alert); }
+    #chat-meta #chat-plan { background: none; border: 0; padding: 0; margin: 0; font: inherit; font-size: 12px; color: inherit; cursor: pointer; text-align: left; min-height: 36px; display: inline-flex; align-items: center; }
+    /* after the button reset (same weight + a class), so a warning colour is never undone by color: inherit */
+    #chat-plan.warn, #chat-meta #chat-plan.warn { color: var(--caution); } #chat-plan.hot, #chat-meta #chat-plan.hot { color: var(--chat-plan-hot-text); } #chat-plan.refused, #chat-meta #chat-plan.refused { color: var(--alert); }
+    /* it can be pressed: the same ▾ as the model and effort pickers beside it */
+    #chat-meta #chat-plan[aria-haspopup]::after { content: '\25BE'; margin-left: 4px; color: var(--accent); }
+    #chat-meta #chat-plan:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+    /* the popup under the Claude usage badge: what the badge shows */
+    .plan-chooser { position: fixed; z-index: 1000; background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 8px 24px var(--shadow-menu); padding: 4px; font-size: 14px; }
+    .plan-chooser .pc-list { display: flex; flex-direction: column; }
+    .plan-chooser .pc-row { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 6px 10px; border-radius: 8px; color: var(--text); cursor: pointer; }
+    .plan-chooser .pc-row.current { color: var(--text); }
+    .plan-chooser .pc-row:active { background: var(--hover-tint); color: var(--text); border-color: var(--accent); }
+    .plan-chooser .pc-row:focus-visible, .plan-chooser .pc-subs:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .plan-chooser .pc-check { flex: none; width: 1em; color: var(--accent); }
+    .plan-chooser .pc-subs { display: block; width: 100%; min-height: 36px; margin-top: 4px; padding: 6px 10px; background: none; color: var(--accent); border: 0; border-top: 1px solid var(--border); border-radius: 0 0 8px 8px; font: inherit; text-align: left; cursor: pointer; }
     #chat-ctx.hot { color: var(--warning); }
     #chat-meta .effort-wrap { flex: none; }
     #chat-meta .effort-wrap[hidden] { display: none; }
@@ -478,6 +493,10 @@
     /* Workers (mobile.js wkRefresh / wkShow): a chip in the row under the chat's name while workers are listed, and one
        full-screen sheet for the list, a worker, the history and an old run. */
     .wk-chip { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border-strong); border-radius: 999px; padding: 2px 9px; font-size: 12px; color: var(--text-dim); background: transparent; }
+    .wk-chip { max-width: 100%; box-sizing: border-box; min-width: 0; }   /* never wider than its row: the noun gives way, the counts stay */
+    .wk-chip .wb-label { display: inline-flex; min-width: 0; max-width: 100%; }
+    .wk-chip .wb-noun { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .wk-chip .wb-counts { flex: none; white-space: pre; }
     .wk-chip .wb-dot { width: 7px; height: 7px; border-radius: 50%; display: none; }
     .wk-chip.busy { border-color: var(--accent-edge); color: var(--text); }
     .wk-chip.busy .wb-dot { display: inline-block; background: var(--worker-busy); box-shadow: 0 0 0 3px var(--worker-busy-glow); }
@@ -654,6 +673,21 @@
     .question .qsubmit { min-height: 44px; padding: 8px 18px; border: none; border-radius: 8px; background: var(--accent); color: var(--on-accent); font-weight: 600; }
     .question .qsubmit:disabled { opacity: 0.45; }
     .question .qbuttons { display: flex; gap: 8px; flex-shrink: 0; }
+    /* The confirm card for a change the lead wants to make: rows, then Cancel and Confirm (no text box) */
+    .question-fixed .qrows { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; margin: 8px 0 0; font-size: 14px; }
+    .question-fixed .qrows dt { color: var(--text-dim); }
+    .question-fixed .qrows dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+    .question-fixed .qrows dd.qrow-note { grid-column: 1 / -1; color: var(--text-dim); font-size: 13px; }
+    .question .qcancel { min-height: 44px; padding: 8px 16px; border: 1px solid var(--border-strong); border-radius: 8px; background: transparent; color: var(--text); }
+    /* The strip above the lead's composer: what it changed in the last 24 h, each with Undo; the × dismisses */
+    .change-strip { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 6px 44px 6px 12px; font-size: 13px; color: var(--text-dim); }
+    .change-strip[hidden] { display: none; }
+    .change-strip .change-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .change-strip .change-text { color: var(--text); overflow-wrap: anywhere; }
+    .change-strip .change-undo { min-height: 36px; padding: 0 14px; border: 1px solid var(--border-strong); border-radius: 8px; background: transparent; color: var(--text); font: inherit; }
+    .change-strip .change-msg:empty { display: none; }
+    .change-strip .change-x { position: absolute; top: 2px; right: 4px; min-width: 40px; min-height: 40px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text-dim); font-size: 20px; line-height: 1; }
+    html.mm-simple .change-strip .change-text { color: var(--text); }
     .question .qskip { min-height: 44px; padding: 8px 16px; border: 1px solid var(--border-strong); border-radius: 8px; background: transparent; color: var(--text); }
     .question .qcustom textarea { flex: 1; min-height: 76px; max-height: 50vh; resize: vertical; font: inherit; font-size: 16px; line-height: 1.4; color: var(--text); background: var(--bg-input); border: 1px solid var(--border-strong); border-radius: 8px; padding: 8px 10px; }
     .question .qcustom textarea:focus { outline: none; border-color: var(--accent); }
@@ -716,8 +750,14 @@
     #menu.open { display: block; }
     #menu a, #menu button { display: flex; align-items: center; width: 100%; min-height: 48px; padding: 0 16px; text-align: left; color: var(--text); text-decoration: none; font-size: 15px; }
     #menu a:active, #menu button:active { background: var(--border); }
-    #menu #menu-optimize-team { flex-direction: column; align-items: flex-start; justify-content: center; }
     #menu .menu-sub { font-size: 12px; color: var(--text-tertiary); }
+    /* The count of things for the owner's review (lib/ui-review.js): a number on Settings in this menu, a dot on the ⋮ button. Only problems take a warning colour. */
+    #menu .rv-count { margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; border-radius: 10px; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+    .rv-count.rv-critical, .iconbtn.rv-has.rv-critical::after { background: var(--error); color: var(--on-error); }
+    .rv-count.rv-warn, .iconbtn.rv-has.rv-warn::after { background: var(--warning); color: var(--on-warning); }
+    .rv-count.rv-info, .iconbtn.rv-has.rv-info::after { background: var(--accent); color: var(--on-accent); }
+    .iconbtn.rv-has { position: relative; }
+    .iconbtn.rv-has::after { content: ''; position: absolute; top: 8px; right: 8px; width: 9px; height: 9px; border-radius: 50%; }
     #menu .danger { color: var(--error); }
     #toast { position: fixed; left: 50%; bottom: calc(80px + var(--sab)); transform: translateX(-50%); background: var(--border-strong); color: var(--text); padding: 10px 16px; border-radius: 20px; font-size: 14px; z-index: 30; display: none; max-width: 90%; text-align: center; }
     #toast.on { display: block; }
@@ -945,6 +985,10 @@
   #call-panel .cp-dnd input { width: 26px; height: 26px; accent-color: var(--accent); flex: none; }
   #call-panel .cp-disp { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; font-size: 16px; }
   #call-panel .cp-disp select { flex: 1; max-width: 60%; min-height: 44px; font-size: 16px; border-radius: 10px; background: var(--bg-card); color: var(--text); border: 1px solid var(--border); padding: 0 8px; }
+  /* Call display pickers: Linux WebKit paints a closed select white on white unless colour, background and colour-scheme are explicit (also the option rows) */
+  select#cp-display, select#vp-display, select.ucd-display { color: var(--text); background-color: var(--bg-input); color-scheme: dark; }
+  html.mm-simple.mm-light select#cp-display, html.mm-simple.mm-light select#vp-display, html.mm-simple.mm-light select.ucd-display { color-scheme: light; }
+  select#cp-display option, select#vp-display option, select.ucd-display option { color: var(--text); background-color: var(--bg-input); }
   /* Hang up never needs a scroll: on a short or landscape phone the panel scrolls, and this row stays at its bottom edge on an opaque panel-colored background. */
   #call-panel .cp-actions { display: flex; gap: 8px; position: sticky; bottom: 0; z-index: 2; background: var(--bg-card); padding-top: 8px; }
   /* The Recording badge of a recorded call is the panel's first line, pinned to its top on the same opaque background, so it never scrolls away. */
@@ -1041,10 +1085,11 @@
   .handoff-cards .ho-card.ho-ended { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 13px; }
   .handoff-cards .ho-ended .ho-line { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
   .handoff-cards .ho-ended .ho-pill, .handoff-cards .ho-ended .ho-status { flex: none; }
-  /* the strip: one compact line that expands into the cards (collapsed: 32 px + 6 px padding = 38 px, under 40) */
+  /* the strip: a compact line that expands into the cards (collapsed: 38 px on one line; on a narrow screen the summary wraps to a second line, about 50 px) */
   .handoff-cards { gap: 4px; }
-  .handoff-cards .ho-strip { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; white-space: nowrap; overflow: hidden; box-sizing: border-box; padding: 6px 10px; font: inherit; font-size: 13px; text-align: left; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; cursor: pointer; transition: border-color .3s, background-color .3s; }
-  .handoff-cards .ho-sum { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .handoff-cards .ho-strip { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; box-sizing: border-box; padding: 6px 10px; font: inherit; font-size: 13px; text-align: left; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; cursor: pointer; transition: border-color .3s, background-color .3s; }
+  .handoff-cards .ho-sum { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
+  .handoff-cards .ho-next { white-space: nowrap; overflow-wrap: normal; }
   .handoff-cards .ho-chev { flex: none; width: 7px; height: 7px; border-right: 2px solid var(--text-dim); border-bottom: 2px solid var(--text-dim); transform: rotate(45deg); margin-top: -3px; transition: transform .15s; }
   .handoff-cards .ho-strip[aria-expanded="true"] .ho-chev { transform: rotate(-135deg); margin-top: 3px; }
   .handoff-cards .ho-list { display: flex; flex-direction: column; gap: 4px; }
@@ -1063,6 +1108,19 @@
   .handoff-cards .wo-row .wo-stop { color: var(--pill-failed); border: 1px solid var(--pill-failed); }
   .handoff-cards .wo-quiet { padding: 6px 10px; font-size: 13px; color: var(--text-dim); border: 1px dashed var(--border); border-radius: 10px; }
   .research-lines .research-line { cursor: default; white-space: normal; overflow-wrap: anywhere; overflow: visible; min-height: 0; }
+  /* The notice for research an agent started on its own: a card with the words and two real buttons (Stop, Make it thorough) */
+  .research-lines .research-notice { display: flex; flex-direction: column; gap: 2px; }
+  .research-lines .research-head { display: flex; align-items: flex-start; gap: 8px; }
+  .research-lines .research-head .ho-title { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  /* collapsed: the title is at most two lines; opened it has no research-title-clamp class and shows whole */
+  .research-lines .research-head .ho-title.research-title-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+  .research-lines .research-q { white-space: normal; overflow-wrap: anywhere; color: var(--text); }
+  .research-lines .research-why, .research-lines .research-cost { color: var(--text-dim); font-size: 13px; overflow-wrap: anywhere; }
+  .research-lines .research-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .research-lines .research-notice button { min-height: 36px; padding: 0 14px; font: inherit; font-size: 13px; border-radius: 8px; background: transparent; cursor: pointer; text-decoration: none; color: var(--text); border: 1px solid var(--border-strong, var(--border)); }
+  .research-lines .research-notice .research-toggle, .research-lines .research-notice .research-x { flex: none; min-width: 36px; padding: 0 9px; border-color: transparent; color: var(--text-dim); }
+  .research-lines .research-notice button.wo-stop { flex: none; color: var(--pill-failed); border-color: var(--pill-failed); }
+  .research-lines .research-notice button:disabled { opacity: .5; cursor: default; }
   /* The hand-off Status sheet (lib/ui-hand-off-card.js openStatus): a bottom sheet at normal reading size */
   .ho-sheet { position: fixed; inset: auto 0 0 0; margin: 0; padding: 0; border: 0; border-top: 1px solid var(--border); border-radius: 14px 14px 0 0; background: var(--bg-secondary, var(--bg-input)); color: var(--text); width: 100%; max-width: 100%; max-height: 85vh; overflow: hidden; box-sizing: border-box; }
   .ho-sheet[open] { display: flex; flex-direction: column; }
@@ -1183,6 +1241,77 @@
   #share-list-dialog .sl-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); }
   #share-list-dialog .sl-row .sec-title { font-size: 15px; overflow-wrap: anywhere; }
   #share-list-dialog .sl-row .sec-btn { min-height: 40px; padding: 0 14px; flex: none; color: var(--error); }
+  /* The agent card (lib/ui-agent-card.js): a full-screen sheet; its header stays visible while the rows scroll */
+  .ac-panel { position: fixed; inset: 0; z-index: 60; box-sizing: border-box; overflow-y: auto; padding: 0 16px calc(24px + var(--sab)); background: var(--bg-dark); color: var(--text); font-size: 15px; line-height: 1.45; }
+  .ac-panel:focus { outline: none; }
+  .ac-header { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 12px; padding: calc(12px + var(--sat)) 0 12px; margin-top: calc(0px - var(--sat)); background: var(--bg-dark); border-bottom: 1px solid var(--border); }
+  .ac-icon { flex: none; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; font-size: 26px; }
+  .ac-dot { border-radius: 50%; background: var(--accent); }
+  .ac-titles { flex: 1; min-width: 0; }
+  .ac-title { margin: 0; font-size: 20px; font-weight: 700; overflow-wrap: anywhere; }
+  .ac-role { color: var(--text-dim); font-size: 14px; }
+  .ac-x { flex: none; width: 44px; height: 44px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-card); color: var(--text); font-size: 26px; line-height: 1; }
+  .ac-x:focus-visible, .ac-sec-head:focus-visible, .ac-more-head:focus-visible, .ac-reset:focus-visible, .ac-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .ac-sec { margin: 14px 0 0; background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; }
+  .ac-sec-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; width: 100%; min-height: 48px; box-sizing: border-box; padding: 14px; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; }
+  .ac-sec-title { font-weight: 700; font-size: 17px; flex: none; }
+  .ac-sec-sum { flex: 1 1 100%; color: var(--text-dim); font-size: 14px; overflow-wrap: anywhere; }
+  .ac-shield { margin-left: 6px; color: var(--accent); }
+  .ac-sec-body { border-top: 1px solid var(--border); padding: 4px 14px 12px; }
+  .ac-row { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .ac-row:last-child { border-bottom: 0; }
+  .ac-main { flex: 1 1 100%; min-width: 0; }
+  .ac-label { font-weight: 600; font-size: 17px; overflow-wrap: anywhere; }
+  .ac-desc, .ac-note, .ac-default { color: var(--text-dim); font-size: 14px; margin-top: 2px; }
+  .ac-note .ac-link { color: var(--accent); }
+  .ac-err { color: var(--error); font-size: 14px; margin-top: 4px; }
+  .ac-ctl { flex: 1 1 100%; }
+  .ac-select, .ac-input { width: 100%; min-height: 44px; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-input); color: var(--text); font: inherit; }
+  .ac-select:disabled, .ac-input:disabled, .ac-action:disabled, .ac-reset:disabled, .ac-seg-b:disabled { opacity: 0.55; }
+  .ac-value { color: var(--text-dim); }
+  .ac-seg { display: flex; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; }
+  .ac-seg-b { flex: 1; min-height: 44px; padding: 8px 12px; border: 0; background: var(--bg-input); color: var(--text); font: inherit; }
+  .ac-seg-b.on { background: var(--accent); color: var(--on-accent); }
+  .ac-action, .ac-reset, .ac-more-head { border: 1px solid var(--border-strong); border-radius: 8px; background: transparent; color: var(--text); font: inherit; }
+  .ac-action { min-height: 44px; padding: 8px 14px; }
+  .ac-reset { margin-top: 8px; min-height: 40px; padding: 6px 12px; font-size: 14px; }
+  .ac-bottom { margin-top: 24px; }
+  .ac-bottom .ac-remove { border-color: var(--error); color: var(--error); }
+  .ac-row.ac-editor-open .ac-ctl { flex: 1 1 100%; width: 100%; max-width: none; }
+  .ac-editor { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+  .ac-editor-tools, .ac-editor-bar, .ac-offer { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .ac-textarea { width: 100%; box-sizing: border-box; font-family: var(--font-mono); min-height: 50vh; font-size: 14px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border-strong); border-radius: 8px; padding: 10px; }
+  .ac-action.ac-delete { border-color: var(--error); color: var(--error); }
+  .ac-checks { display: flex; flex-direction: column; gap: 10px; }
+  .ac-check { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+  .ac-more-head { display: block; width: 100%; min-height: 44px; margin-top: 8px; padding: 10px 12px; border-style: dashed; color: var(--text-dim); font-size: 14px; text-align: left; overflow-wrap: anywhere; }
+  .ac-row.st-door-hit { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+  .ac-foot { margin: 16px 0 0; color: var(--text-dim); font-size: 14px; text-align: center; }
+  .ac-folders { display: flex; flex-direction: column; gap: 10px; }
+  .ac-folder-title { color: var(--text-dim); font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
+  .ac-folder { display: flex; align-items: center; gap: 10px; min-height: 44px; font-size: 16px; overflow-wrap: anywhere; }
+  .ac-folder input { width: 22px; height: 22px; flex: none; margin: 0; }
+  .ac-area { display: block; min-height: 88px; resize: vertical; font-family: var(--font-mono); font-size: 15px; }
+  .ac-blocked { font-size: 14px; }
+  .ac-blocked-item { margin: 0 0 8px; }
+  .ac-blocked-when { color: var(--text-dim); }
+  .ac-blocked-what { font-family: var(--font-mono); overflow-wrap: anywhere; }
+  /* The ⓘ help beside a setting (lib/ui-settings-help.js): a round button after the label, at least 32 px to tap; the panel is a bottom sheet here */
+  .st-info { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 32px; height: 32px; box-sizing: border-box; margin: -9px 0 -9px 4px; padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; background: transparent; color: var(--text-dim); font: inherit; font-size: 17px; line-height: 1; cursor: pointer; vertical-align: middle; }   /* centred on the text line, never taller than it: the 32 px is for the finger, the negative margin keeps the line its own height */
+  :is(#notify-agent-sheet, #notify-prefs-sheet, #research-sheet, #settings-sheet, #security-sheet, #profile-sheet) button.st-info { min-height: 0; width: 32px; height: 32px; margin: -9px 0 -9px 4px; padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; background: transparent; color: var(--text-dim); text-align: center; }   /* outranks the sheets' own "#sheet button" tile rule (an id inside :is counts as an id), so the ⓘ is the same round outline in every sheet */
+  :not(.st-row) > label.st-has-info { display: inline-block; }   /* a label followed by its ⓘ shares its line (the script adds the class only then) */
+  [hidden] + .st-info, [style*="display:none"] + .st-info, [style*="display: none"] + .st-info { display: none; }   /* an ⓘ after a control that is not shown is not shown either */
+  .st-info:focus-visible, .st-help-x:focus-visible, .st-help-ask:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .st-help-panel { position: fixed; z-index: 100; left: 0; right: 0; bottom: 0; top: auto; box-sizing: border-box; max-height: 70vh; overflow-y: auto; padding: 16px 16px calc(16px + var(--sab)); background: var(--bg-card); color: var(--text); border: 1px solid var(--border-strong); border-radius: 14px 14px 0 0; box-shadow: 0 -8px 24px var(--shadow-sheet); font-size: 15px; line-height: 1.45; }
+  .st-help-panel:focus { outline: none; }
+  .st-help-head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 4px; }
+  .st-help-title { flex: 1; font-size: 18px; font-weight: 600; color: var(--text); }
+  .st-help-today { color: var(--text-dim); font-size: 13px; font-weight: 400; }
+  .st-help-x { flex: none; width: 40px; height: 40px; border: 1px solid var(--border); border-radius: 50%; background: transparent; color: var(--text); font-size: 22px; line-height: 1; cursor: pointer; }
+  .st-help-h { margin-top: 10px; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+  .st-help-p { margin: 2px 0 0; color: var(--text); }
+  .st-help-ask { display: block; width: 100%; min-height: 44px; margin-top: 14px; padding: 12px 14px; border: 0; border-radius: 8px; background: var(--accent); color: var(--on-accent); font: inherit; font-weight: 600; cursor: pointer; }
+  .st-help-scrim { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 99; background: var(--overlay-bg); }
 </style>
 <style id="simple-css">
 /* Simple mode (phone). Everything is under html.mm-simple; the elements below are only ever created there. */
@@ -1404,6 +1533,7 @@ html.mm-simple .sa-more b { font-weight: 600; font-size: 17px; color: var(--text
 @media (prefers-reduced-motion: reduce) { html.mm-simple .sa-dot { animation: none !important; } }
 html.mm-simple .ss-sec { margin-bottom: 18px; }
 html.mm-simple .ss-title { color: var(--text-tertiary); font-size: 14px; margin-bottom: 8px; }
+html.mm-simple .ss-gh { margin: 18px 0 8px; font-size: 16px; font-weight: 600; color: var(--text); }
 html.mm-simple .ss-seg { display: flex; gap: 6px; }
 html.mm-simple .ss-follow { font-size: 13px; color: var(--text-dim); }
 html.mm-simple .ss-follow[hidden] { display: none; }
@@ -1414,6 +1544,7 @@ html.mm-simple .ss-rseg { display: flex; gap: 6px; }
 html.mm-simple .ss-rseg button { flex: 1; min-height: 48px; border: 1px solid var(--border); border-radius: 24px; color: var(--text-dim); font-size: 16px; padding: 0 8px; }
 html.mm-simple .ss-rseg button[aria-pressed="true"] { border-color: var(--accent); color: var(--text); background: var(--sp-soft); box-shadow: inset 0 0 0 1px var(--accent); }
 html.mm-simple .ss-rhint { font-size: 13px; color: var(--text-dim); margin-top: 8px; }
+html.mm-simple .ss-rhint.ss-warn { color: var(--warning); }
 html.mm-simple .ss-row { display: block; width: 100%; min-height: 56px; padding: 10px 14px; border-radius: 16px; text-align: left; color: var(--text); font-size: 17px; }
 html.mm-simple .ss-row:active { background: var(--sp-soft); }
 html.mm-simple .ss-row small { display: block; color: var(--text-tertiary); font-size: 14px; line-height: 1.3; }
@@ -1498,7 +1629,7 @@ html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, htm
 </head>
 <body>
   <section id="screen-agents" class="screen active">
-    <div id="health-notice" role="status" hidden></div>
+    <div id="review-banner" role="status" hidden></div>
     <div class="topbar" id="agents-head"><h1>My Maestro AI</h1><select id="owner-view" hidden aria-label="Whose agents to show"></select><a class="iconbtn" href="/?desktop=once" title="Full UI" style="text-decoration:none">&#x1F5A5;</a><button type="button" class="mode-toggle" role="switch" aria-checked="false" title="Simple view on/off" hidden><span class="mt-lab">Simple</span><span class="mt-track"><span class="mt-knob"></span></span></button><button class="iconbtn" id="agents-refresh" aria-label="Reload" title="Reload">&#x21BB;</button><button class="iconbtn" id="agents-menu-btn" aria-label="Menu">&#x22EE;</button></div>
     <div id="update-card" hidden></div>
     <button class="pacing-bar" title="Tap to resume full parallel"></button>
@@ -1521,7 +1652,7 @@ html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, htm
     <!-- The model, effort, plan usage and context size get their own thin row, which wraps rather than cutting anything
          off: the model stays in view busy or idle (the bell and Stop buttons leave the name a 46 px column on a 360 px
          phone). Under the name, only what the agent is doing right now, while it works; a tap tells it in full. -->
-    <div id="chat-meta"><span class="sub-wrap"><span class="sub" id="chat-model"></span><select id="chat-model-pick" aria-label="Change this agent's model" hidden></select></span><span class="sub-wrap effort-wrap" id="chat-effort-wrap" hidden><span class="sub" id="chat-effort"></span><select id="chat-effort-pick" aria-label="Reasoning effort"></select></span><span class="sub" id="chat-plan" hidden></span><span class="sub" id="chat-ctx" hidden></span><button type="button" class="wk-chip" id="chat-workers-btn" aria-haspopup="dialog" title="Workers: what is working now, and the history of past workers" hidden><span class="wb-dot" aria-hidden="true"></span><span class="wb-label">Workers</span></button></div>
+    <div id="chat-meta"><span class="sub-wrap"><span class="sub" id="chat-model"></span><select id="chat-model-pick" aria-label="Change this agent's model" hidden></select></span><span class="sub-wrap effort-wrap" id="chat-effort-wrap" hidden><span class="sub" id="chat-effort"></span><select id="chat-effort-pick" aria-label="Reasoning effort"></select></span><button type="button" class="sub" id="chat-plan" hidden></button><span class="sub" id="chat-ctx" hidden></span><button type="button" class="wk-chip" id="chat-workers-btn" aria-haspopup="dialog" title="Workers: what is working now, and the history of past workers" hidden><span class="wb-dot" aria-hidden="true"></span><span class="wb-label"><span class="wb-noun">Workers</span><span class="wb-counts"></span></span></button></div>
     <button class="pacing-bar" title="Tap to resume full parallel"></button>
     <div class="scroll" id="chat-scroll"><div id="messages"></div></div>
     <div id="call-ended-bar" role="status" hidden><span class="ceb-text">The call ended when you left the app</span><button type="button" id="call-again" class="ceb-again">Call again</button><button type="button" id="call-ended-x" class="ceb-x" aria-label="Dismiss">&#x2715;</button></div>
@@ -1534,7 +1665,7 @@ html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, htm
       <button type="button" id="cp-retry-mic" class="cp-retry-mic" hidden>Try the microphone again</button>
       <div id="cp-held"></div>
       <label class="cp-dnd"><input type="checkbox" id="cp-dnd" role="switch"> <span>Do not disturb</span></label>
-      <label class="cp-disp ucd-dup" for="cp-display"><span>Display</span><select id="cp-display"><option value="follow">Follow agent default</option></select></label>
+      <label class="cp-disp ucd-dup" for="cp-display"><span>Call display</span><select id="cp-display"><option value="follow">Follow agent default</option></select></label>
       <div class="cp-actions">
         <button type="button" id="cp-levels" class="cp-levels">Levels</button>
         <button type="button" id="cp-hangup" class="cp-hang ucd-dup" aria-label="Hang up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 15c2-4 16-4 18 0l-3 2.5-3-1.5v-2c-2-.7-4-.7-6 0v2l-3 1.5z"></path></svg><span>Hang up</span></button>
@@ -1545,6 +1676,7 @@ html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, htm
       <div id="team-offer-slot" class="team-offer-slot" hidden></div>
       <div id="handoff-cards" class="handoff-cards" hidden></div>
       <div id="research-lines" class="handoff-cards research-lines" hidden></div>
+      <div id="change-strip" class="change-strip" hidden></div>
       <div id="previews"></div>
       <div id="voice-strip" hidden><button type="button" id="voice-mode-chip" class="voice-chip" aria-label="Talk mode: tap to switch">Tap to talk</button></div>
       <div id="voice-panel" role="dialog" aria-label="Voice settings" hidden>
@@ -1649,9 +1781,6 @@ html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, htm
     <button id="menu-reload">&#x21BB; Reload app</button>
     <button id="menu-profile">&#x1F464; Profile</button>
     <button id="menu-settings">&#x2699; Settings</button>
-    <a id="menu-agent-settings" class="chat-only" href="/agent-settings.html" hidden>&#x2699; Agent settings</a>
-    <button id="menu-build-team" class="chat-only" hidden>&#x1F3D7; Build team</button>
-    <button id="menu-optimize-team" class="chat-only" hidden><span id="menu-optimize-label">&#x1F50D; Optimize team</span><small id="menu-optimize-sub" class="menu-sub">reads the last 30 days</small></button>
     <!-- This device: how this phone shows things and what it does; what you set for the hub is in Settings (admins) -->
     <div class="menu-group" data-group="device" role="group" aria-labelledby="menu-gt-device">
       <div class="menu-group-title" id="menu-gt-device">This device</div>
@@ -1738,13 +1867,21 @@ html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, htm
   <script src="/ui-agent-dot.js"></script>
   <script src="/ui-hand-off-card.js"></script>
   <script src="/ui-claude-signin.js"></script>
+  <script src="/ui-review.js"></script>
   <script src="/ui-code-copy.js"></script>
   <script src="/ui-team-card.js"></script>
+  <script src="/ui-feature-card.js"></script>
   <script src="/ui-simple.js"></script>
+  <script src="/ui-settings-help.js"></script>
+  <script src="/ui-agent-card.js"></script>
+  <script src="/ui-agent-card-basics.js"></script>
+  <script src="/ui-agent-card-more.js"></script>
+  <script src="/ui-agent-card-access.js"></script>
   <script defer src="/ui-model-offer-groups.js"></script>
   <script src="/ui-teams.js"></script>
   <script src="/password-eye.js"></script>
   <script>document.addEventListener('DOMContentLoaded', function () { PasswordEye.watch(); });</script>
   <script src="mobile.js"></script>
+  <script>try { window.hubAgentCard.configure({ guard: typeof dialogGuard !== 'undefined' ? dialogGuard : null }); window.hubAgentCard.cardDoorStart(); } catch (e) { /* the card is optional: the page runs without it */ }</script>
 </body>
 </html>

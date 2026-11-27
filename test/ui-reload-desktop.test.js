@@ -33,18 +33,15 @@ function fakeStorage() {
   return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k), _m: m };
 }
 
-test('the ⋯ menu entry sits right after About with the exact text, title and onclick', () => {
-  const lines = html.split('\n');
-  const at = lineOf('about-btn');
-  const l = lines[at + 1];
-  assert.match(l, /<button id="reload-app-item" class="more-item" role="menuitem" title="Reload the app" onclick="closeMoreMenu\(\); reloadApp\(\)">↻ Reload<\/button>/);
+test('the ⋯ menu and its Reload entry are gone (P4-11)', () => {
+  assert.ok(!html.includes('id="reload-app-item"') && !html.includes('id="more-wrap"'));
 });
 
-test('the top-bar button sits between Help and the ⋯ menu with title and aria-label', () => {
+test('the top-bar button sits right after Help, last in the header, with title and aria-label', () => {
   const lines = html.split('\n');
   const at = lineOf('help-btn');
   assert.match(lines[at + 1], /<button id="reload-btn" class="header-btn reload-btn" title="Reload the app" aria-label="Reload the app" onclick="reloadApp\(\)">↻<\/button>/);
-  assert.ok(lines[at + 2].includes('id="more-wrap"'));
+  assert.match(lines[at + 2], /^\s*<\/div>/, 'nothing after it in the header controls');
 });
 
 test('the CSS hides the top-bar button by default, shows it under html.app-installed and greys it while busy', () => {
@@ -52,7 +49,7 @@ test('the CSS hides the top-bar button by default, shows it under html.app-insta
   assert.ok(hide, 'hidden by default');
   assert.ok(!/html\.app-installed/.test(hide[1]));
   assert.match(html, /html\.app-installed [^{\n]*\.header-btn\.reload-btn\s*\{\s*display:\s*inline-flex;/);
-  assert.match(html, /\.reload-btn\[aria-busy="true"\], #reload-app-item\[aria-busy="true"\]\s*\{\s*opacity:\s*0\.5;\s*pointer-events:\s*none;/);
+  assert.match(html, /\.reload-btn\[aria-busy="true"\]\s*\{\s*opacity:\s*0\.5;\s*pointer-events:\s*none;/);
   // the narrow-screen rule `.main-header-top .header-btn { display: inline-flex }` must not win over the hide
   assert.match(hide[1], /\.header-controls \.header-btn\.reload-btn/);
 });
@@ -103,7 +100,7 @@ function reloadPage({ chats = {}, active, boxes = {}, call = null, starting = fa
   const gate = hold ? new Promise(r => { release = r; }) : null;
   const storage = fakeStorage();
   if (stored) lib.appReloadStashSave(storage, stored, Date.now() - 1000);
-  const els = { 'reload-btn': { setAttribute(k, v) { this[k] = v; } }, 'reload-app-item': { setAttribute(k, v) { this[k] = v; } } };
+  const els = { 'reload-btn': { setAttribute(k, v) { this[k] = v; } } };
   const document = {
     getElementById: (id) => els[id] || boxes[id] || null,
     location: { href: 'http://192.0.2.7:3000/' },
@@ -282,7 +279,7 @@ test('a group question that arises during the wait and is Cancelled: no location
   assert.strictEqual(p.log.reloads, 0);
   assert.strictEqual(p.pagehideCount(), 0);
   assert.strictEqual(p.storage._m.size, 0);
-  for (const id of ['reload-btn', 'reload-app-item']) {
+  for (const id of ['reload-btn']) {
     assert.strictEqual(p.els[id].disabled, false, `${id} enabled again`);
     assert.strictEqual(p.els[id]['aria-busy'], 'false');
   }
@@ -377,7 +374,7 @@ test('reloadApp without a question does not ask; two presses give one run', asyn
 test('reloadApp busy paint disables the button and the menu entry with aria-busy and toasts Reloading…', async () => {
   const p = reloadPage();
   p.reloadApp();
-  for (const id of ['reload-btn', 'reload-app-item']) {
+  for (const id of ['reload-btn']) {
     assert.strictEqual(p.els[id].disabled, true);
     assert.strictEqual(p.els[id]['aria-busy'], 'true');
   }

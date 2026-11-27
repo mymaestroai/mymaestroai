@@ -12,7 +12,6 @@ const app = read('app.js');
 const html = read('index.html');
 const mobile = read('mobile.js');
 const mhtml = read('mobile.html');
-const settings = read('agent-settings.html');
 
 test('both UIs follow approval_request / approval_resolved on /api/events and read approvals from the status snapshot', () => {
   for (const ev of ['approval_request', 'approval_resolved']) {
@@ -75,23 +74,17 @@ test('mobile: one bottom sheet for every screen, badge on the Agents tab, servic
   assert.match(mobile, /ap\.classList\.toggle\('on', approvals\.size > 0\)/);
   assert.ok(mobile.includes('sheet.show()'), 'non-modal: the rest of the app stays usable');
   assert.ok(mobile.includes("api('/api/approvals'"), 'pending list fetched on poll / foreground');
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v94'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v104'/);
 });
 
-test('agent settings: tool policy section reads /api/policy/<agent> and PATCHes policy (empty = role defaults)', () => {
-  assert.ok(settings.includes('fetch(`/api/policy/${encodeURIComponent(agentName)}`'));
-  assert.ok(settings.includes('body: JSON.stringify({ policy })'));
-  assert.ok(settings.includes("await patchPolicy({}, 'Back to role defaults')"), 'Reset to role defaults sends policy: {}');
-  for (const cls of ['write_outside', 'send', 'admin', 'destroy']) assert.ok(settings.includes(`'${cls}'`), cls);
-  assert.ok(settings.includes('id="policy-roots"'), 'extra writable folders textarea');
-  assert.ok(settings.includes('role default ('), 'select offers role default / allow / ask / deny');
-  assert.ok(/<b>ask<\/b> pauses it on an approval card \(desktop, mobile and push\)/.test(settings), 'one line explains ask');
-});
+// removed (P4-2): 'agent settings: tool policy section reads /api/policy/<agent> and PATCHes policy' pinned the old page's source; the card's Access rows
+// (OPT-0008..0013, 0017, 0018) read and PATCH {policy} - test/ui-agent-card-access.test.js. (The old page's line "ask pauses it on an approval card" is not on the card.)
 
 test('desktop: spend readout and caps come from /api/ledger', () => {
   assert.ok(app.includes("fetch('/api/ledger/today'"));
   assert.match(app, /stSaveFetch\('\/api\/ledger\/caps', \{ method: 'POST'/);
-  assert.ok(app.includes('JSON.stringify({ perAgentDailyUsd, hubDailyUsd })'));
+  // Save now sends only the caps the person changed (the `send` object), still in the one POST shared with the monthly cap.
+  assert.ok(app.includes('body: JSON.stringify(send)') && app.includes('send.monthlyUsd =') && app.includes('send.monthlyResetDay ='));
   assert.ok(html.includes('id="spend-today"'), 'sidebar readout');
   assert.ok(app.includes('`spent today ${usd(t.total)}`'));
   assert.match(app, /const show = !!t && typeof t\.paidTurns === 'number' && \(t\.total \|\| 0\) >= 0\.005/, 'hidden below half a cent of pay-per-use spend, and on an older hub answer');

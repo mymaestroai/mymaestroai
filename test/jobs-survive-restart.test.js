@@ -81,7 +81,7 @@ describe('the probe is retried after a failure, with a back-off', () => {
     const { runner } = mk({ spawnMode: 'auto', now: () => t, probeBackoffMs: 10, probe: () => answers.shift() || 'systemd' });
     assert.equal(runner.mode(), 'setsid'); t += 100;
     const src = read('lib/jobs.js');
-    assert.match(src, /mode: this\.mode\(\{ retry: true \}\)/, 'run() asks with retry');
+    assert.match(src, /const mode = this\.mode\(\{ retry: true \}\)/, 'run() asks with retry');
     runner.stop();
   });
 });

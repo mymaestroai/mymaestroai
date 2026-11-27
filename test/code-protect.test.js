@@ -120,8 +120,8 @@ test('work-practices: the section is the lead\'s, and only while own-code-guidan
   assert.strictEqual(wp.textFor({ agent: primary, isLead: false, ownCode: true }), '', 'not a non-lead primary');
   assert.strictEqual(wp.textFor({ agent: { category: 'worker' }, isLead: true, ownCode: true }), '');
   const sdk = fs.readFileSync(path.join(ROOT_DIR, 'lib', 'sdk-chat.js'), 'utf8');
-  assert.match(sdk, /ownCode = bc\.isOn\('own-code-guidance'\);/);
-  assert.match(sdk, /checkIns, suggestions, handOffs, partner, ownCode \}\)/);
+  assert.match(sdk, /ownCode = bc\.isOn\('own-code-guidance'\)[,;]/);
+  assert.match(sdk, /checkIns, suggestions, handOffs, partner, ownCode, parallel, kept \}\)/);
 });
 
 test('behaviour changes: both entries exist (leadMay false / true); new installs get them on, existing ones pending', () => {
@@ -294,6 +294,10 @@ test('review r1: a detection error inside the command reading refuses (no intern
   assert.strictEqual(cp.isProtectedPath(P('data', 'behaviour-reviews.json')), true);
   assert.strictEqual(cp.isProtectedPath(P('data', 'put-aside.json')), true);
   assert.strictEqual(cp.isProtectedPath(P('data', 'other.json')), false);
-  assert.ok(refused(dec(lead, 'Write', { file_path: P('data', 'behaviour-reviews.json') })));
-  assert.ok(refused(dec(lead, 'Bash', { command: `echo '{}' > ${P('data', 'behaviour-reviews.json')}` })));
+  // behaviour-reviews.json is also one of the always-protected settings files (lib/tool-policy touchesSettingsFile), judged
+  // first: refused for every role whether or not code protection is on. put-aside.json is refused by code protection alone.
+  const settingsRefused = (d) => d.decision === 'deny' && d.cls === 'settings_file';
+  assert.ok(refused(dec(lead, 'Write', { file_path: P('data', 'put-aside.json') })));
+  assert.ok(settingsRefused(dec(lead, 'Write', { file_path: P('data', 'behaviour-reviews.json') })));
+  assert.ok(settingsRefused(dec(lead, 'Bash', { command: `echo '{}' > ${P('data', 'behaviour-reviews.json')}` })));
 });

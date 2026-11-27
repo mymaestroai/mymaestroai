@@ -404,7 +404,10 @@ test('the routes: admin only, the password asked again for restore, undo and dow
   assert.match(block, /if \(!t \|\| t\.until < Date\.now\(\) \|\| t\.user !== req\.hubUser\.id\)/, 'a download link is short-lived, used once and tied to its admin');
   // the generic settings routes neither show nor change backups
   assert.match(server, /const s = \{ \.\.\.hubSettings\.getForUI\(\) \}; delete s\.backup;/);
-  assert.match(server, /if \(patch && typeof patch === 'object' && 'backup' in patch\) \{[^\n]*delete patch\.backup; \}/);
+  // (the drop moved to lib/settings-apply cleanSettingsPatch, which POST /api/settings calls: test the real function)
+  assert.match(server, /require\('\.\/lib\/settings-apply'\)\.cleanSettingsPatch\(patch,/);
+  { const p = { backup: { key: 'x' }, theme: 'a' }; const r = require('./helpers/isolated-settings-apply').callSettingsApply('cleanSettingsPatch', [p, {}]);   // in a throwaway install
+    assert.ok(!('backup' in r.patch) && r.patch.theme === 'a', 'a backup key in a settings patch is dropped'); }
   // the rotation ticket is used up only by a finish that worked
   const fin = server.slice(server.indexOf("pathname === '/api/backups/rotate/finish'"), server.indexOf("pathname === '/api/backups/rotate/finish'") + 1200);
   assert.ok(fin.indexOf('rotationTickets.delete') > fin.indexOf('await svc.finishRotation('));

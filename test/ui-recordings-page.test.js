@@ -70,44 +70,16 @@ test('recorded text is never put in with innerHTML: textContent only', () => {
 
 test('the menus show Recordings only when an agent has recordings.canDownload === true', () => {
   const idx = read('index.html'), mob = read('mobile.html'), app = read('app.js'), mjs = read('mobile.js');
-  assert.match(idx, /id="recordings-item" class="more-item" role="menuitem"[^>]*style="display:none"[^>]*location\.href = '\/recordings'/, 'hidden until shown');
+  assert.ok(!idx.includes('id="recordings-item"'), 'the ⋯ menu entry is gone');
+  assert.match(app, /stDoorHtml\('recordings', 'Recordings', '[^']+', "location\.href='\/recordings'", \{ hidden: !recordingsDoorShown\(\) \}\)/, 'a door in Voice and calls, hidden until shown');
+  assert.match(app, /function recordingsDoorShown\(\) \{ return AGENTS\.some\(a => a && a\.recordings && a\.recordings\.canDownload === true\); \}/);
   assert.match(mob, /<a id="menu-recordings" href="\/recordings\?from=mobile" hidden>/);
-  assert.match(app, /getElementById\('recordings-item'\); if \(ri\) ri\.style\.display = AGENTS\.some\(a => a && a\.recordings && a\.recordings\.canDownload === true\) \? '' : 'none'/);
+  assert.match(app, /getElementById\('st-door-recordings'\); if \(ri\) ri\.style\.display = recordingsDoorShown\(\) \? '' : 'none'/);
   assert.match(mjs, /\$\('menu-recordings'\); if \(ri\) ri\.hidden = !agents\.some\(a => a && a\.recordings && a\.recordings\.canDownload === true\)/);
-  // The desktop ⋯ menu entry sits with the other more-menu items; the phone's with the ⋮ menu.
-  assert.ok(idx.indexOf('id="recordings-item"') > idx.indexOf('id="more-menu"') && idx.indexOf('id="recordings-item"') < idx.indexOf('id="restart-hub-btn"'));
+  // The desktop door sits in the voice section (a member's Settings has it too); the phone's entry with the ⋮ menu.
+  assert.ok(app.indexOf("stDoorHtml('recordings'") > app.indexOf('function voiceSettingsHtml(data)') && app.indexOf("stDoorHtml('recordings'") < app.indexOf('function voicePaintSettings('));
   assert.ok(mob.indexOf('id="menu-recordings"') > mob.indexOf('<div id="menu">'));
 });
 
-test('agent settings: the Call recordings section saves the six fields and loads the accounts list', () => {
-  const as = read('agent-settings.html');
-  assert.ok(as.indexOf('id="recordings-section"') > as.indexOf('id="voice-section"') && as.indexOf('id="recordings-section"') < as.indexOf('id="compaction-section"'), 'under the voice section');
-  for (const t of ['Keep call recordings', 'Who can download', 'Consent line', "Also keep the agent's voice", 'Microphone for recordings',
-    'Processed (clearer on a speakerphone)', 'Unprocessed (best for a future voice model; use a headset or a quiet room)',
-    'Each call with this agent is recorded losslessly on this computer, encrypted. The agent can say a short line when a call starts (see Announce recording), and the call screen shows Recording.',
-    'Only the people ticked here can play, download or delete these recordings. Agents never can.',
-    "Recorded calls only start with speech recognition on this computer. Change the agent's speech recognition above."]) assert.ok(as.includes(t), t);
-  assert.match(as, /id="rec-consent" maxlength="300" placeholder="This conversation is being recorded\."/);
-  const body = as.slice(as.indexOf('  function recordingsFormValues()'), as.indexOf('  // One warning while keep is on'));
-  for (const k of ['keep:', 'allowed', 'consentLine:', 'keepReplies:', 'mic:', 'announce:']) assert.ok(body.includes(k), k);
-  const save = as.slice(as.indexOf('  async function saveRecordings()'));
-  assert.match(save, /method: 'PATCH'[\s\S]*JSON\.stringify\(\{ recordings: body \}\)/);
-  assert.match(as, /\['saveRecordings', 'recordings-status', byId\('rec-keep', 'rec-allowed', 'rec-consent', 'rec-replies', 'rec-mic', 'rec-announce'\)\]/, 'a wrapped save');
-  assert.match(as, /SAVES_ON_CHANGE = new Set\(\[[^\]]*'saveRecordings'[^\]]*\]\)/, 'saves on change');
-  assert.match(as, /apiFetch\('\/api\/users'\)/, 'the accounts list is loaded');
-  assert.match(as, /apiFetch\('\/api\/recordings'\)/, 'the storage line');
-  assert.match(as, /loadRecordings\(agent\);/);
-  // fix 9: only the owner of this Maestro sees the controls; any other admin sees one line.
-  assert.ok(as.includes('Only the owner of this Maestro can change call recordings.'));
-  assert.match(as, /id="rec-owner-note" style="display:none;[^"]*">Only the owner of this Maestro can change call recordings\.<\/div>\s*<div id="rec-controls" style="display:none;">/, 'both start hidden; the controls wrap the whole section body');
-  const load = as.slice(as.indexOf('  async function loadRecordings(agent)'), as.indexOf('  async function saveRecordings()'));
-  assert.match(load, /apiFetch\('\/api\/me'\)/);
-  assert.match(load, /me\.isOwner === true/);
-  const gate = load.slice(0, load.indexOf('const r = (agent && agent.recordings)'));
-  assert.match(gate, /rec-controls'\)\.style\.display = owner \? '' : 'none'/);
-  assert.match(gate, /rec-owner-note'\)\.style\.display = owner \? 'none' : 'block'/);
-  assert.match(gate, /if \(!owner\) return;/, 'nothing else is loaded for a non-owner (no accounts list, no storage line)');
-  assert.ok(as.indexOf('id="rec-controls"') < as.indexOf('id="rec-keep"') && as.indexOf('id="recordings-status"') < as.indexOf('<div class="section" id="compaction-section">'));
-  const section = as.slice(as.indexOf('  // ── Call recordings:'), as.indexOf('  // ── Voice (free local engines'));
-  assert.ok(section.length > 500 && !/innerHTML|insertAdjacentHTML/.test(section), 'account names are set as text');
-});
+// removed (P4-2): 'agent settings: the Call recordings section saves the six fields and loads the accounts list' pinned the old page's source (the owner-only gate included);
+// the card's Call recordings rows (OPT-0033, 0035-0038, with the owner-only gate and the accounts list) are tested in test/ui-agent-card-basics.test.js.

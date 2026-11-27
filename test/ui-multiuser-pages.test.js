@@ -10,7 +10,6 @@ const root = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(root, f), 'utf8');
 const login = read('login.html');
 const users = read('users.html');
-const settings = read('agent-settings.html');
 
 test('login.html: sign-in, two-factor, first-admin setup and invite acceptance all talk to /api/auth', () => {
   assert.ok(login.includes("fetch('/api/auth/status'"), 'reads the auth status to pick the mode');
@@ -71,16 +70,8 @@ test('users.html: Requests section lists pending agent requests and approves or 
   assert.ok(usersIdx < reqIdx && reqIdx < invIdx, 'Requests sits between the Users table and the Invite form');
 });
 
-test('agent-settings.html: owner select and shared-with checkboxes PATCH the agent and read /api/users', () => {
-  assert.ok(settings.includes('id="owner-section"') && settings.includes('id="agent-owner"') && settings.includes('id="agent-shared"'));
-  assert.ok(settings.includes("fetch('/api/users', { credentials: 'include' })"));
-  assert.ok(settings.includes('body: JSON.stringify({ owner })'), 'PATCH { owner }');
-  assert.ok(settings.includes('body: JSON.stringify({ sharedWith })'), 'PATCH { sharedWith }');
-  assert.ok(settings.includes("Infrastructure (no owner)"));
-  assert.ok(settings.includes("u.role === 'member'"), 'only members get a sharing checkbox');
-  assert.ok(settings.includes('loadOwnership(agent)'), 'owner/sharedWith come from the agent record the page already loads');
-  assert.ok(settings.includes('id="owner-status"') && settings.includes('id="shared-status"'), 'status lines like the other fields');
-});
+// removed (P4-2): 'agent-settings.html: owner select and shared-with checkboxes PATCH the agent and read /api/users' pinned the old page's source; the card's Owner and
+// Shared with rows (OPT-0006, OPT-0007) read /api/users and PATCH {owner} / {sharedWith} - test/ui-agent-card-basics.test.js (owner and sharing under More).
 
 test('vendor/qrcode.min.js ships with the pages', () => {
   const p = path.join(root, 'vendor', 'qrcode.min.js');
@@ -95,7 +86,9 @@ test('server: the Welcome page takes over "/" only while the hub has no accounts
   assert.ok(server.includes("} else if (pathname === '/setup' || pathname === '/setup-admin') {") && server.includes("res.writeHead(302, { Location: '/welcome' + qs }); return res.end();"));
   assert.ok(!fs.existsSync(path.join(__dirname, '..', 'setup.html')), 'the old provider wizard is gone');
   const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
-  assert.ok(app.includes("id = 'hub-setup-notice'") && app.includes('href="/welcome"'), 'the hub page tells an admin when no provider is configured');
+  assert.ok(!app.includes('hub-setup-notice'), 'the old no-provider banner is gone (P4-15)');
+  const review = require('../lib/ui-review.js').build({ setup: { setupNeeded: true } });
+  assert.deepStrictEqual(review.fix.map((p) => [p.id, p.title, p.fix.href]), [['provider', 'No AI provider is connected', '/welcome']], 'the hub page tells an admin when no provider is configured: a Fix now item with the Welcome link');
 });
 
 // destination() cut out of login.html and run with a stubbed location: only a same-site path is followed.

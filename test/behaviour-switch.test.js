@@ -57,7 +57,8 @@ test('manifest: member-worker-models is page-only, every other entry may be swit
   for (const e of m) assert.equal(typeof e.leadMay, 'boolean', `${e.id} has leadMay`);
   assert.equal(m.find((e) => e.id === 'member-worker-models').leadMay, false);
   // protect-own-code is a security setting: only the owner decides it, on the page (lib/code-protect).
-  assert.deepEqual(m.filter((e) => !e.leadMay).map((e) => e.id), ['member-worker-models', 'protect-own-code']);
+  // research-own-work starts runs that spend the plan allowance or budget without a yes, so (like a spending limit) only the owner switches it, on the page.
+  assert.deepEqual(m.filter((e) => !e.leadMay).map((e) => e.id), ['member-worker-models', 'protect-own-code', 'research-own-work']);
 });
 
 test('a page-only entry is refused before any question, and nothing is written', async (t) => {
@@ -213,9 +214,11 @@ test('sdk-chat: behaviour_change is offered only with connector_access (the lead
   const gated = sdk.split('...(connectorAccessOffered(agentName, consultationDepth)').slice(1).map((s) => s.slice(0, 1600));
   assert.equal(gated.length, 2);
   for (const g of gated) assert.match(g.split(': []),')[0], /behaviourSwitchLib\.TOOL\.name/);
-  assert.equal((sdk.match(/behaviourSwitchLib\.TOOL\.name/g) || []).length, 3, 'the gateway list once, the SDK list twice (name and extras)');
+  assert.equal((sdk.match(/behaviourSwitchLib\.TOOL\.name/g) || []).length, 6, 'the owner-turn gate: the gateway list once, the SDK list twice (name and extras); the hub review turn (recommend only): the same again');
   const body = sdk.match(/async function runBehaviourSwitch\([\s\S]*?\n\}/)[0];
-  assert.match(body, /^async function runBehaviourSwitch\(agentName, sseRes, args, consultationDepth, signal\) \{\n  if \(!connectorAccessOffered\(agentName, consultationDepth\)\) return CONNECTOR_ACCESS_NOT_OFFERED;/);
+  assert.match(body, /^async function runBehaviourSwitch\(agentName, sseRes, args, consultationDepth, signal\) \{\n  const review = connectorAccessOffered\(agentName, consultationDepth\) \? null : behaviourReviewTurn\(agentName, consultationDepth\); if \(!review && !connectorAccessOffered\(agentName, consultationDepth\)\) return CONNECTOR_ACCESS_NOT_OFFERED;[^\n]*\n  if \(inTeamSetupTurn\(agentName\)\) return NOT_IN_SETUP_TURN;/);
+  // outside the owner's turn only the hub's own review turn gets the tool (list and recommend, no question: it switches nothing)
+  assert.match(body, /if \(review\) return behaviourSwitchLib\.runTool\(behaviourSwitchLib\.getBehaviourSwitch\(\), args, agentName, null, null, review\);/);
   assert.match(body, /runAskUser\(agentName, sseRes, \{ question, options: \[yesLabel, 'Leave as is'\], header: 'Changes to how agents behave', adminOnly: true \}/);
   assert.match(body, /const stillAllowed = \(\) => connectorAccessOffered\(agentName, consultationDepth\) && !\(signal && signal\.aborted\);/);
 });
@@ -224,7 +227,7 @@ test("the /changes page says the lead can switch a change at the owner's word, m
   const page = fs.readFileSync(path.join(ROOT, 'changes.html'), 'utf8');
   assert.match(page, /or by telling your lead agent in chat \(it asks you to confirm\)\. Changes about security or spending limits can only be switched here\./);
   assert.doesNotMatch(page, /Nothing else can switch them on/);
-  assert.match(page, /if \(c\.leadMay !== true\) el\.appendChild\(para\('Who can switch it', 'Only you, on this page\.'\)\);/);
+  assert.match(page, /if \(c\.leadMay !== true\) el\.appendChild\(para\('Who can switch it', 'Only you: here or on the card in your lead\\'s chat\.'\)\);/);
   assert.match(page, /c\.by === 'lead' && c\.agent \? ' \(by ' \+ c\.agent \+ ' at your request\)'/);
 });
 

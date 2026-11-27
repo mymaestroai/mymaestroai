@@ -102,8 +102,8 @@ test('tierFallback: only a refusal because of the tier, before output, once', ()
 // ── the agent setting ──
 test('agents: tier is accepted (validated), standard removes it, a bad value is refused, the order of allowedFields keeps its tail', async () => {
   const src = read('lib/agents.js');
-  const m = src.match(/const allowedFields = \[([^\]]*)\]/);
-  assert.ok(m, 'allowedFields found');
+  const m = src.match(/const (?:allowedFields|AGENT_PATCH_FIELDS) = \[([^\]]*)\]/);
+  assert.ok(m, 'the allowed fields list found');
   const list = m[1].split(',').map((x) => x.trim().replace(/'/g, ''));
   assert.strictEqual(list[list.indexOf('effort') + 1], 'tier', 'right after effort');
   assert.deepStrictEqual(list.slice(-3), ['voice', 'callDisplay', 'voiceDefaults'], 'the tail stays');
@@ -127,32 +127,13 @@ test('agents: tier is accepted (validated), standard removes it, a bad value is 
 
 test('members cannot change the tier: not in MEMBER_EDITABLE; the list API and the page carry the options', () => {
   const server = read('server.js');
-  const m = server.match(/const MEMBER_EDITABLE = new Set\(\[([^\]]*)\]\)/);
+  const m = read('lib/settings-apply.js').match(/const MEMBER_EDITABLE_AGENT_FIELDS = new Set\(\[([^\]]*)\]\)/);   // the member guard moved from server.js into lib/settings-apply
   assert.ok(m);
   assert.ok(!/tier/.test(m[1]), 'tier is not member-editable');
   assert.match(server, /tierOptions: require\('\.\/lib\/tier'\)\.tiersFor\(a\.model\), tierLabels: require\('\.\/lib\/tier'\)\.labelsFor\(a\.model\)/);
-  const page = read('agent-settings.html');
-  assert.match(page, /<select id="tier-mode" onchange="saveTier\(\)"/);
-  assert.match(page, /JSON\.stringify\(\{ tier: v \}\)/);
-  assert.match(page, /\['saveTier', 'tier-status', byId\('tier-mode'\)\]/);
-  assert.match(page, /SAVES_ON_CHANGE = new Set\([^)]*'saveTier'/);
-  assert.match(page, /opts\.length > 1/, 'hidden when only Standard is offered');
-  assert.match(page, /opts\.includes\(agent\?\.tier\) \? agent\.tier : 'standard'/, 'an unsupported saved tier shows as Standard');
-  // the help line under the picker, per provider (loadTier run in a sandbox with a stand-in document)
-  const start = page.indexOf('function loadTier(agent) {');
-  let depth = 0, end = page.indexOf('{', start);
-  for (let i = end; i < page.length; i++) { if (page[i] === '{') depth++; else if (page[i] === '}' && --depth === 0) { end = i + 1; break; } }
-  const helpFor = (agent) => {
-    const els = { 'tier-mode': { textContent: '', value: '', appendChild() {} }, 'tier-row': { style: {} }, 'tier-help': { style: {}, textContent: '' } };
-    const ctx = { document: { getElementById: (id) => els[id], createElement: () => ({}) } };
-    require('vm').runInNewContext(page.slice(start, end) + '\nloadTier(agent);', { ...ctx, agent });
-    return els['tier-help'].textContent;
-  };
-  const three = ['standard', 'fast', 'economy'];
-  assert.match(helpFor({ model: GEMINI, tierOptions: three }), /Gemini may often run Economy requests at Standard when it is busy\.$/);
-  assert.ok(!/Gemini/.test(helpFor({ model: OPENAI, tierOptions: three })), 'not for OpenAI');
-  assert.ok(!/Gemini/.test(helpFor({ model: ROUTER, tierOptions: three })), 'not for OpenRouter');
-  assert.match(helpFor({ model: CODEX, tierOptions: ['standard', 'fast'] }), /ChatGPT plan/);
+  // ported (P4-2): the old page's picker, its "hidden when only Standard", "unsupported saved tier reads as Standard" and per-provider help line are the card's
+  // Speed and price row (OPT-0058) now; they are pinned in test/ui-agent-card-basics.test.js.
+  assert.match(read('lib/ui-agent-card-basics.js'), /ctx\.patch\(\{ tier: value \}\)/);
   for (const f of ['lib/ui-simple.js', 'simple.html']) { try { assert.ok(!/tier-mode|saveTier|service_tier/.test(read(f)), f + ' has no tier'); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
 });
 
@@ -421,7 +402,8 @@ test('member cap: Standard for a member turn or a member agent origin, computed 
   assert.ok(iCap > 0 && iCap < chat.indexOf('if (codexCli.isCodexCliModel(agentModel)) {\n    // The gateway cannot call a subscription model'), 'computed before the routing branches');
   assert.match(chat, /await streamViaCodex\(agent, finalMessage, imagePaths, res, \{[^]*?memberTurn,[^]*?memberOrigin,\n      tier: turnTier,/, 'the Codex path gets it');
   assert.match(chat, /await streamViaGateway\(agent, finalMessage, imagePaths, res, \{[^]*?effort: turnEffortAsked,\n      tier: turnTier,/, 'the gateway path gets it');
-  assert.match(chat, /effort: turnEffort, tier: tierNow \}/, 'the tool loop passes it to chatCompletionStream');
+  // (turnStartedAt follows tier: the monthly spending cap compares a turn's start with the moment the cap was reached)
+  assert.match(chat, /effort: turnEffort, tier: tierNow(?:, turnStartedAt: ledgerStartedAt)? \}/, 'the tool loop passes it to chatCompletionStream');
   assert.match(chat, /let codexServiceTier = \(options\.memberTurn \|\| options\.memberOrigin\) \? null :/, 'Codex defends in depth');
   assert.match(chat, /let tierNow = options\.tier \? tierLib\.normalize\(options\.tier\) : 'standard'/, 'a call with no tier (tiger-team and other internal calls) is Standard');
   assert.ok(!/simpleTurn[^\n]*tier|tier[^\n]*simpleTurn/.test(chat), 'Simple turns keep the agent tier (only members are capped)');

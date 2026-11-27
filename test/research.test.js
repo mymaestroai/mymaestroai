@@ -626,10 +626,15 @@ test('runner: runs are saved; one under way at a restart is reported as cut shor
   assert.equal(b.runner.get(r.id), null);
   assert.ok(b.runner.get(r2.id));
   release();
-  // a store that can't be read or written never stops a run
-  const c = makeRunner({ store: { load() { throw new Error('bad'); }, save() { throw new Error('full'); } } });
+  // a store that can't be read never stops a run; one that can't be written does not start it (the run would be lost at a restart)
+  const c = makeRunner({ store: { load() { throw new Error('bad'); }, save() {} } });
   const r3 = c.runner.start({ agent: 'a3', question: 'Q?', subQuestions: SUBS });
   await until(() => c.runner.get(r3.id).state === 'delivered');
+  const d = makeRunner({ store: { load() { return []; }, save() { throw new Error('full'); } } });
+  const r4 = d.runner.start({ agent: 'a4', question: 'Q?', subQuestions: SUBS });
+  assert.equal(r4.ok, false);
+  assert.match(r4.error, /^Could not save the research run, so it was not started/);
+  assert.deepEqual(d.runner.list(), []);
 });
 
 // ── review r1: worker outcomes, the deadline, the saved report ──

@@ -21,10 +21,11 @@ const body = (src, head) => {
   return head + (m < 0 ? rest : rest.slice(0, m));
 };
 
-test('Settings has a Security group after Status with the st-security-section', () => {
-  assert.match(app, /\{ id: 'security', title: '🔐 Security', sections: \['st-security-section'\] \}/);
-  assert.ok(app.indexOf("id: 'status'") < app.indexOf("id: 'security'"));
-  assert.ok(app.indexOf("id: 'security'") < app.indexOf("id: 'backups'"));
+test('Settings keeps the st-security-section (two-factor and share links) in People and safety', () => {
+  const G = require('../lib/ui-settings-groups.js');
+  assert.deepStrictEqual(G.groupOfSection('st-security-section'), { group: 'safety', more: false });
+  assert.ok(G.GROUPS.findIndex((g) => g.id === 'review') < G.GROUPS.findIndex((g) => g.id === 'safety'));
+  assert.ok(G.GROUPS.findIndex((g) => g.id === 'safety') < G.GROUPS.findIndex((g) => g.id === 'upkeep'));
   assert.ok(app.includes('id="st-security-section"'));
   assert.ok(app.includes('Require two-factor sign-in for admins'));
   assert.ok(app.includes('Opening My Maestro directly to your network still needs an admin with two-factor. Members choose for themselves.'));

@@ -231,8 +231,8 @@ test('desktop sidebar 160 (narrow container, icons hidden): main name 26, member
   const wDot = kids + 1 + inb('.teams-kids .teams-row.rank-worker', 'padding-left'), wName = wDot + 6 + inb('.teams-kids .teams-row.rank-worker .teams-dot', 'margin-right');
   assert.deepStrictEqual([mainName, mDot, mName, card, lDot, lName, wDot, wName], [26, 26, 38, 26, 30, 40, 40, 50]);
   assert.deepStrictEqual([wrap - 1, kids - 1], [14, 33], 'joining lines at 26 and 45');
-  assert.match(blk, /\.teams-row \.agent-menu-btn|display: none !important/, 'icons hidden');
-  assert.match(ihtml, /\.teams-row \.agent-menu-btn \{ width: 16px;/, 'the ⋯ is 16 px wide at every width');
+  assert.match(blk, /display: none !important/, 'icons hidden');
+  assert.doesNotMatch(ihtml, /\.teams-row \.agent-menu-btn/, 'no ⋯ rule on the Teams rows any more');
   assert.match(ihtml, /#teams-list \{ padding: 0 2px; \}/, 'the list content box is 4px narrower than the tab padding: card 12..228 at 240, 12..148 at 160');
   assert.doesNotMatch(ihtml, /\.teams-fold\b/, 'no fold-arrow column in the CSS');
 });

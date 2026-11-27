@@ -155,7 +155,7 @@ test('capsView lists cap and defaultCap for each provider key, in the order give
 
 test('Settings page: admin-only Workers at once block in the Agents group, saved through POST /api/settings', () => {
   const app = read('app.js');
-  assert.match(app, /sections: \['st-defaults-section', 'st-workers-section'/);
+  assert.deepStrictEqual(require('../lib/ui-settings-groups.js').groupOfSection('st-workers-section'), { group: 'agents', more: false });
   assert.match(app, /if \(isHubAdmin\(\)\) \{\s*html \+= `<div class="st-section" id="st-workers-section"><h4>Workers at once<\/h4>/);
   assert.ok(app.includes('How many workers and consults may run at once on this service. If the service pushes back, My Maestro drops to one at a time and climbs back up.'));
   assert.ok(app.includes("fetch('/api/hub/status'") && app.includes('if (wao !== undefined) patch.workersAtOnce = wao;'));
@@ -164,8 +164,10 @@ test('Settings page: admin-only Workers at once block in the Agents group, saved
 
 test('wiring: settings POST validates and applies live; boot starts from the saved value; hub status lists caps', () => {
   const server = read('server.js'), sdk = read('lib/sdk-chat.js');
-  assert.ok(server.includes("patch.workersAtOnce = require('./lib/provider-pacing').cleanWorkersAtOnce(patch.workersAtOnce)"));
-  assert.ok(server.includes("getPacing().setCaps(hubSettings.getSetting('workersAtOnce'))"));
+  const applySrc = read('lib/settings-apply.js');   // the cleaner and the live apply moved from server.js into lib/settings-apply
+  assert.ok(applySrc.includes("patch.workersAtOnce = require('./provider-pacing').cleanWorkersAtOnce(patch.workersAtOnce)"));
+  assert.ok(applySrc.includes(".setCaps(hubSettings.getSetting('workersAtOnce'))"));
+  assert.ok(server.includes("require('./lib/settings-apply').afterSettingsWrite(patch, { providersChanged, getPacing, runDiscovery })"));
   assert.ok(server.includes("capsView(hubSettings.getSetting('workersAtOnce'), capList)"));
   assert.ok(sdk.includes("getSetting('workersAtOnce')") && sdk.includes('providerPacing.resolveCaps(savedCaps)'));
   assert.ok(!/PROVIDER_LIMITS|ProviderLimiter/.test(read('lib/temporal-workers.js')), 'one source of truth for caps');

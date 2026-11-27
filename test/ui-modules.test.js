@@ -116,9 +116,8 @@ test('phone: viewport meta, stacked layout, 40 px tap targets', () => {
 test('the hub links to it: account menu for admins, a Settings box, the phone ⋮ menu for admins', () => {
   assert.match(index, /id="account-modules" href="\/modules"[^>]*>Data connectors<\/a>/);
   assert.match(app, /modulesItem\.style\.display = me\.isAdmin \? '' : 'none';/);
-  assert.match(app, /<div class="st-section" id="st-modules-section"><h4>Data connectors<\/h4>/);
-  assert.match(app, /Connect outside services such as Google Drive and Oura, with a guided setup\./);
-  assert.match(app, /onclick="location\.href='\/modules'">Open Data connectors<\/button>/);
+  assert.match(app, /<div class="st-section" id="st-modules-section"><h4>Connectors, computers and wallets<\/h4>/);
+  assert.match(app, /stDoorHtml\('modules', 'Data connectors', 'Outside services such as Google Drive and Oura, each with a guided setup\.', "location\.href='\/modules'"\)/);
   assert.match(mobileHtml, /<a id="menu-connectors" href="\/modules" hidden>&#x1F50C; Data connectors<\/a>/);
   assert.match(mobileJs, /\$\('menu-connectors'\)\.hidden = !hubMe\.isAdmin;/);
 });

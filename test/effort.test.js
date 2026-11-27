@@ -54,27 +54,26 @@ test('wired: Claude client query option, gateway option, Codex; agent field vali
   const chat = read('lib/sdk-chat.js');
   assert.match(chat, /const sdkEffort = options && options\.effort \? effortLib\.forTurn\(`claude-sdk\/\$\{sdkModel\}`, options\.effort, await agentEffort\(agentName\)\) : effortLib\.forModel\(`claude-sdk\/\$\{sdkModel\}`, await agentEffort\(agentName\)\);/);
   assert.match(chat, /\.\.\.\(sdkEffort \? \{ effort: sdkEffort \} : \{\}\),/);
-  assert.match(chat, /agent: agentName, effort: turnEffort, tier: tierNow \}/);
+  assert.match(chat, /agent: agentName, effort: turnEffort, tier: tierNow(?:, turnStartedAt: ledgerStartedAt)? \}/);   // turnStartedAt: the monthly spending cap compares it with the moment the cap was reached
   assert.match(chat, /ephemeral: !!ephemeral, effort: codexEffort, reasoningSummary: showReasoning\(\) \? 'auto' : null, serviceTier: codexServiceTier \}\);/);
   const agents = read('lib/agents.js');
   assert.match(agents, /effort: require\('\.\/effort'\)\.normalize\(a\.effort\)/);
   assert.match(agents, /'tools', 'effort'(, 'tier')?(, 'teamGuidance', 'teamRole')?(, 'modelPinned')?(, 'voice')?(, 'callDisplay')?(, 'voiceDefaults')?\];/);   // tier (speed and price), the team-guidance fields, the voice build and the call display add fields after effort
   assert.match(agents, /effort must be default, low, medium, high, xhigh, max or ultra/);
   const server = read('server.js');
-  assert.match(server, /const MEMBER_EDITABLE = new Set\(\['blurb', 'maxContextMessages', 'maxOutputTokens', 'contextBudget', 'compaction', 'minimalContext'\]\);/, 'effort is not member-editable');
+  assert.match(read('lib/settings-apply.js'), /const MEMBER_EDITABLE_AGENT_FIELDS = new Set\(\['blurb', 'maxContextMessages', 'maxOutputTokens', 'contextBudget', 'compaction', 'minimalContext'\]\);/, 'effort is not member-editable (the guard moved from server.js to lib/settings-apply)');
   assert.match(server, /autoModel: !!a\.autoModel, effort: a\.effort \|\| 'default', changed:/);
 });
 
-test('pickers: desktop header next to the model (disabled for members), phone header, agent settings page', () => {
-  const app = read('app.js'), idx = read('index.html'), mob = read('mobile.js'), mh = read('mobile.html'), as = read('agent-settings.html');
-  assert.match(app, /esc\(billingDisplay\(chat\.model, true\)\)\}<\/option><\/select> \$\{effortPickHtml\(chat, chatId\)\}<span class="plan-badge"/, 'effort picker right after the model (then the plan usage badge)');
+test('pickers: desktop header next to the model (disabled for members), phone header (the agent card has the Thinking effort row)', () => {
+  const app = read('app.js'), idx = read('index.html'), mob = read('mobile.js'), mh = read('mobile.html');
+  assert.match(app, /esc\(billingDisplay\(chat\.model, true\)\)\}<\/option><\/select> \$\{effortPickHtml\(chat, chatId\)\}<button type="button" class="plan-badge"/, 'effort picker right after the model (then the plan usage badge)');
   assert.match(app, /\$\{isHubAdmin\(\) \? '' : ' disabled'\}/);
   assert.match(app, /method: 'PATCH', headers: \{ 'Content-Type': 'application\/json' \}, credentials: 'include', body: JSON\.stringify\(\{ effort: level \}\)/);
   assert.match(idx, /\.chat-actions \.effort-pick \{ max-width: 150px;/);
   assert.match(mh, /<select id="chat-effort-pick" aria-label="Reasoning effort"><\/select>/);
   assert.match(mob, /sel\.disabled = !isAdmin\(\);/);
   assert.match(mob, /\$\('chat-effort-pick'\)\?\.addEventListener\('change', changeEffortFromPick\);/);
-  assert.match(as, /<select id="effort-mode" onchange="saveEffort\(\)"/);
 });
 
 test('OpenAI: an effort level with tools goes to /responses (chat/completions refuses the pair); otherwise the endpoint is kept', () => {

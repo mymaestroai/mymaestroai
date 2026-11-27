@@ -51,7 +51,9 @@ test('scheduleReview: one task for the lead with the right prompt, and every pen
   assert.match(p, /Switch nothing in this turn: you switch a change only when the owner asks you to in their own message, with the behaviour_change tool/);
   assert.match(p, /Never claim you switched one when you did not/);
   assert.match(p, /Call for_owner once for this reply/);
-  assert.match(p, /\[Decide\]\(\/changes#<id>\)/);
+  assert.match(p, /action "recommend"/);
+  assert.match(p, /the card in this chat/);
+  assert.doesNotMatch(p, /\[Decide\]|\/changes/);
   assert.match(p, /\(id: team-guidance\)/); assert.match(p, /\(id: worker-proposals\)/);
   assert.doesNotMatch(p, /\(id: starter-team\)/); assert.doesNotMatch(p, /\(id: ask-lead-for-workers\)/);
   // Review r1 (GPT-6 B4): a review never invites a proposal while worker-proposals waits; it says to skip decided ones.
@@ -138,7 +140,9 @@ test('reviewPrompt: under 24000 characters with huge facts, entry text is never 
   assert.match(p, /and \d+ more/);
   assert.match(p, /Switch nothing in this turn/);
   for (const e of entries) assert.ok(p.includes(`(id: ${e.id})`));
-  assert.match(p, /\[Decide\]\(\/changes#<id>\)/);
+  assert.match(p, /action "recommend"/);
+  assert.match(p, /the card in this chat/);
+  assert.doesNotMatch(p, /\[Decide\]|\/changes/);
   // a plain string of facts is cut to fit too
   assert.ok(review.reviewPrompt({ entries, facts: 'x'.repeat(40000) }).length <= 24000);
   // one entry, no worker-proposals line

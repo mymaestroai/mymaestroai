@@ -54,7 +54,7 @@ test('Settings has a Messaging channels section whose button opens the comms pan
   const app = read('app.js');
   // menu split (gear = what you set, ⋯ = what you do): the ⋯ menu's #comms-btn moved into Settings → Tools and data → #st-comms-section
   assert.doesNotMatch(src, /id="comms-btn"/);
-  assert.match(app, /id="st-comms-section"><h4>Messaging channels<\/h4>[\s\S]*?<button class="st-test-btn" onclick="openCommsPanel\(\)">/);
+  assert.match(app, /id="st-comms-section"><h4>Messaging channels<\/h4>[\s\S]*?stDoorHtml\('comms', 'Messaging channels', '[^']+', 'openCommsPanel\(\)'\)/);
   assert.match(src, /<script src="comms-panel\.js"><\/script>/);
 });
 

@@ -15,7 +15,7 @@ const defined = (css) => new Set([...css.matchAll(/^\s*(--[a-z0-9-]+)\s*:/gm)].m
 
 // page file, its variable prefix, and colours that stay literal in every style (with why)
 const PAGES = [
-  ['agent-settings.html', '--as-', []],
+  // agent-settings.html is a redirect page now (P4-2): it has no colours of its own (the link uses the system colour), so it is not listed
   ['recordings.html', '--rc-', ['rgba(0,0,0,.6)']],   // the dialog backdrop dims the page in every style
   ['tiger-team.html', '--tt-', ['rgba(0,0,0,.4)', 'rgba(0,0,0,.6)', 'rgba(0,0,0,.015)']],   // shadows and the scan-line texture
   ['remote-desktop.html', '--rd-', ['#000']],   // the remote computer's screen stays black

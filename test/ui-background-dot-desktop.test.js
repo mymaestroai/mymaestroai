@@ -40,7 +40,7 @@ function el(cls = '') {
 function row() { const btn = el('agent-btn'); const info = el('agent-info'); btn.appendChild(info); const dot = el('agent-status live-idle'); btn.appendChild(dot); return { btn, info, dot }; }
 
 function paint(status, name = 'hazel', { busy = false, question = false } = {}) {
-  const body = `${['bgCountOf', 'bgPaintRow'].map(extract).join('\n')}\nreturn { bgCountOf, bgPaintRow };`;
+  const body = `${['agentStateWords', 'bgCountOf', 'bgPaintRow'].map(extract).join('\n')}\nreturn { bgCountOf, bgPaintRow };`;
   const api = new Function('agentStatus', 'AgentDot', 'document', body)(status, AgentDot, { createElement: () => el() });
   const r = row();
   api.bgPaintRow(name, r.dot, r.btn, busy, question);
@@ -102,7 +102,7 @@ test('replying or asking wins over background; background 0 shows no ring and no
   // it was background, now it is not: ring and line go
   const p = paint({ hazel: { background: 2 } });
   const status = { hazel: { background: 0 } };
-  const api = new Function('agentStatus', 'AgentDot', 'document', `${['bgCountOf', 'bgPaintRow'].map(extract).join('\n')}\nreturn { bgPaintRow };`)(status, AgentDot, { createElement: () => el() });
+  const api = new Function('agentStatus', 'AgentDot', 'document', `${['agentStateWords', 'bgCountOf', 'bgPaintRow'].map(extract).join('\n')}\nreturn { bgPaintRow };`)(status, AgentDot, { createElement: () => el() });
   api.bgPaintRow('hazel', p.dot, p.btn, false, false);
   assert.ok(!p.dot.classList.contains('bg-work'));
   assert.strictEqual(p.info.querySelector('agent-bg-line'), null);
@@ -186,12 +186,12 @@ test('header: background only -> the blue part alone, not the orange .on look', 
 });
 
 // ── the click, the panel's Stop calls ──
-test('a click on the ring or the blue line opens that agent\'s chat with the panel open', () => {
+test('a click on the ring or the blue line opens that agent\'s chat (its panel starts collapsed)', () => {
   const calls = [];
   const btn = { dataset: { model: 'sonnet' } };
   const body = `${extract('bgOpenChat')}\nreturn bgOpenChat;`;
   new Function('HandOffCard', 'document', 'startSoloChat', body)({ open: (n) => calls.push(['open', n]) }, { getElementById: (id) => (id === 'agent-btn-hazel' ? btn : null) }, (n, m) => calls.push(['chat', n, m]))('hazel');
-  assert.deepStrictEqual(calls, [['open', 'hazel'], ['chat', 'hazel', 'sonnet']]);
+  assert.deepStrictEqual(calls, [['chat', 'hazel', 'sonnet']], 'no expansion is asked for');
   // changed with the Teams view: the same listener also takes the Teams rows' ring and line, and finds the row of either kind
   assert.ok(/closest\('\.agent-btn \.agent-status\.bg-work, \.agent-btn \.agent-bg-line, \.teams-row \.teams-dot\.bg-work, \.teams-row \.teams-bg-line'\)[\s\S]{0,200}closest\('\.agent-btn, \.teams-row'\)[\s\S]{0,300}bgOpenChat\(name\);\s*\}, true\);/.test(src), 'one capturing listener for the ring and the line, in All Agents and in Teams');
 });

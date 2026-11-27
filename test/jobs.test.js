@@ -228,6 +228,15 @@ describe('run_job: hub restarts', () => {
     finally { await removeWhenJobsGone(a.dataDir, a.runner, b.runner); }
   });
 
+  it('a pending reply report keeps its pacer id across a restart', () => {
+    const a = rig();
+    a.runner.pending.push({ kind: 'report', jobId: 'J', agent: 'trader', message: 'm', attempts: 0, notBefore: 0, idSuffix: 'reply' });
+    a.runner.pending.push({ kind: 'report', jobId: 'K', agent: 'trader', message: 'm', attempts: 0, notBefore: 0 });
+    a.runner._save();
+    const b = rig({ dataDir: a.dataDir });
+    assert.deepEqual(b.runner.pendingIds(), ['job:J:report:reply', 'job:K:report']);
+  });
+
   it('a wake-up turn cut by a restart still reaches the master with a notice', async () => {
     const a = rig(); a.state.reply = null; a.runner.start();   // the owner is woken but its reply never comes (hub dies mid-turn)
     const j = await a.runner.run({ owner: 'auditor', name: 'cut', command: 'echo x', reportTo: 'trader' });

@@ -45,7 +45,7 @@ test('phone page: the chat scroller is vertical only; bubbles and their contents
   assert.match(rule(mhtml, '    #messages'), /min-width: 0;/);
   assert.match(rule(mhtml, '    .msg'), /min-width: 0;/);
   assert.match(mhtml, /\.msg\.assistant pre, \.msg\.assistant table, \.msg\.assistant \.visual \{ max-width: 100%; \}/);
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v94';/, 'service worker cache bumped');
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v104';/, 'service worker cache bumped');
 });
 
 test('phone page: table cells wrap to the screen and keep whole words; code and links in a cell may break', () => {
@@ -65,7 +65,7 @@ test('phone (desktop page, ≤768px): the ☰ has its own row; icons on row 1, o
   assert.match(phone, /\.main-header-top \{ flex-wrap: wrap;[^}]*min-width: 0;/);
   assert.match(phone, /\.main-header-top \.header-controls \{ order: 1; flex: 1 0 100%; min-height: 36px; justify-content: flex-end; padding-left: 46px;/, 'icons clear of the ☰');
   assert.match(phone, /\.main-header-top \.header-btn \{ min-width: 36px; min-height: 36px;/, 'tap targets ≥ 36px');
-  assert.match(phone, /\.main-header-top #more-btn \{ min-width: 36px; \}/, '⋯ too (its own rule is 32px)');
+  assert.doesNotMatch(phone, /#more-btn/, 'no ⋯ button rule any more');
   assert.match(phone, /\.main-header-top \.active-chats \{ order: 2; flex: 1 0 100%; min-width: 0; max-width: 100%;/, 'agents on their own row');
   assert.match(html, /@media \(max-width: 1024px\) \{[\s\S]*?\.active-chats \{\s*display: flex; flex-wrap: nowrap; gap: 6px;\s*overflow-x: auto;/, 'the row scrolls sideways (existing rule)');
 });

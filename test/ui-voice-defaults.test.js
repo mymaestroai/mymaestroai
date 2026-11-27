@@ -184,12 +184,6 @@ test('the choices "Very long (4 s)" and "Very long (8 s)" are offered on both pa
   assert.ok(mob.includes("'Very long (4 s)'") && mob.includes("'Very long (8 s)'"), 'phone');
 });
 
-test('agent settings page: the Voice defaults row, its three choices, the custom controls and the sentence', () => {
-  const page = read('agent-settings.html');
-  assert.ok(page.includes('id="voice-defaults"'));
-  for (const s of ['>None<', 'Patient listener (waits 4 s before replying, 8 s for you to go on, harder to interrupt, speaks a little slower)', '>Custom<',
-    'id="vd-pause"', 'id="vd-wait"', 'id="vd-sens"', 'id="vd-speed"', 'Very long (4 s)', 'Very long (8 s)',
-    'Devices follow these unless the person changed that setting on that device.']) assert.ok(page.includes(s), s);
-  assert.match(page, /body: JSON\.stringify\(\{ voiceDefaults: body \}\)/, 'saved through the existing PATCH');
-  assert.match(page, /\['saveVoiceDefaults', 'voice-defaults-status'/);
-});
+// removed (P4-2): 'agent settings page: the Voice defaults row, its three choices, the custom controls and the sentence' pinned the old page's markup; the card's
+// Call timing rows (OPT-0028 the preset, 0029-0032 the four numbers) offer None / Patient / Custom and the very long choices, saved through PATCH {voiceDefaults}
+// (test/ui-agent-card-basics.test.js: 'Call timing: Patient saves the preset, Custom the four numbers' and 'R3-4: the pause and wait rows ... lib/ui-voice lists').

@@ -558,7 +558,6 @@
     .teams-row.rank-worker .name { height: 14px; font-size: 11px; line-height: 14px; font-weight: 500; color: var(--text-dim); }
     .teams-kids .teams-row.rank-worker { padding-left: 3px; }   /* a leader's workers: icon 84, name 106 */
     #teams-list .teams-row.rank-worker .teams-dot.bg-work:not(.live-busy):not(.live-question) { border-width: 1.5px; }
-    .teams-row .agent-menu-btn { width: 16px; margin-left: auto; margin-right: 0; }
     /* A narrow sidebar (dragged down towards its 160px minimum): names get the room, icons go, the nesting stays readable. The container is the list's content box (sidebar - 25px). */
     #teams-list { container-type: inline-size; }
     @container (max-width: 186px) {   /* the default 240px sidebar gives the list about 215px: full rows; only a sidebar dragged narrower gets this */
@@ -667,7 +666,7 @@
     .security-modal .sec-secret { word-break: break-all; padding: 6px 8px; background: var(--bg-input); border-radius: 5px; font-size: 0.78rem; user-select: all; }
     .security-modal .sec-codes { margin: 0; padding: 8px 10px; background: var(--bg-input); border-radius: 5px; font-size: 0.85rem; columns: 2; user-select: all; }
     /* Members never see admin surfaces (the server refuses them too) */
-    body.member-view .more-menu .more-advanced, body.member-view #more-badge, body.member-view .agent-btn .actions, body.member-view .agent-menu-btn, body.member-view .agent-build-line, body.member-view .build-team-btn { display: none !important; }
+    body.member-view .agent-btn .actions, body.member-view .agent-build-line, body.member-view .build-team-btn { display: none !important; }
 
     /* (Hardware toggle CSS removed) */
 
@@ -799,15 +798,7 @@
     .agent-btn .name { display: flex; align-items: center; min-width: 0; }
     .agent-btn .name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
     .agent-btn .name .lead-badge { flex: none; }
-    .agent-btn:has(.agent-menu-btn) .agent-info { padding-right: 18px; }
-    .agent-menu-btn {
-      flex: none; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
-      width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: none;
-      color: var(--text-dim); font: inherit; font-size: 1rem; line-height: 1; cursor: pointer;
-    }
-    .agent-menu-btn:hover, .agent-menu-btn[aria-expanded="true"] { color: var(--text); background: var(--border-strong); }
-    .agent-menu-btn:focus-visible, .build-team-link:focus-visible, .build-team-btn:focus-visible, .agent-menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-    .agent-btn .agent-menu-btn { position: absolute; bottom: 6px; right: 6px; }
+    .build-team-link:focus-visible, .build-team-btn:focus-visible, .agent-btn .name-text[data-card-agent]:focus-visible, .teams-row .name-text[data-card-agent]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
     .agent-build-line { display: block; font-size: 0.65rem; line-height: 1.3; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .agent-btn .model { line-height: 1.3; }   /* the build line takes the model line's place on a no-team main: the same line height keeps every All Agents row one height */
     .agent-btn .agent-build-line .build-team-link { white-space: nowrap; }
@@ -819,16 +810,8 @@
     .build-team-btn { align-self: flex-start; margin-top: 4px; padding: 3px 10px; border: 1px solid var(--accent); border-radius: 6px; background: transparent; color: var(--accent); font: inherit; font-size: 0.7rem; font-weight: 600; cursor: pointer; }
     .build-team-btn:hover:not(:disabled) { background: var(--accent); color: var(--on-color-text); }
     .build-team-btn:disabled { border-color: var(--border-strong); opacity: 0.7; cursor: default; }
-    .agent-row-menu {
-      position: fixed; z-index: 10000; min-width: 150px; max-width: calc(100vw - 8px); display: flex; flex-direction: column; gap: 2px; padding: 4px;
-      background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 30px var(--shadow-color-pop); color: var(--text);
-    }
-    .agent-menu-item { padding: 7px 12px; border: 0; border-radius: 6px; background: none; color: var(--text); font: inherit; font-size: 0.8rem; text-align: left; cursor: pointer; white-space: nowrap; }
-    .agent-menu-item:hover:not(:disabled), .agent-menu-item:focus-visible { background: var(--agent-btn-hover-bg); }
-    .agent-menu-item:disabled { color: var(--text-dim); cursor: default; }
-    .agent-menu-sub { display: block; font-size: 0.68rem; color: var(--text-dim); }
     #agent-active-group .agent-build-line { display: none; }
-    html.mm-simple .agent-menu-btn, html.mm-simple .agent-build-line, html.mm-simple .build-team-btn { display: none !important; }   /* Simple shows no controls */
+    html.mm-simple .agent-build-line, html.mm-simple .build-team-btn { display: none !important; }   /* Simple shows no controls */
     .agent-btn .add-btn { background: var(--purple); }
     .agent-btn .sum-btn { background: var(--blue); }
     .agent-btn .agent-status {
@@ -1136,50 +1119,16 @@
     #hub-toast.on { display: block; }
     @keyframes pulse { 0%,100% { opacity: 0.5; } 50% { opacity: 0.8; } }
 
-    /* "⋯" menu: the rarely used header actions and (behind the Advanced flag) the tuning controls */
-    .more-wrap { position: relative; display: flex; align-items: center; }
-    #more-btn { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; line-height: 1; min-width: 32px; justify-content: center; }
-    #more-btn[aria-expanded="true"] { background: var(--line-tint); color: var(--text); }
-    #more-btn .more-badge {
-      display: none; font-size: 0.6rem; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase;
-      padding: 1px 5px; border-radius: 8px; background: var(--more-btn-more-badge-bg); color: var(--accent-hover);
-      border: 1px solid var(--more-btn-more-badge-border); line-height: 1.3;
-    }
-    #more-btn.advanced .more-badge { display: inline-block; }
-    .more-menu {
-      display: none; position: absolute; top: calc(100% + 6px); right: 0; z-index: 1500;
-      min-width: 260px; max-width: calc(100vw - 16px);
-      background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
-      box-shadow: 0 10px 30px var(--shadow-color-pop); padding: 6px;
-      flex-direction: column; gap: 2px; color: var(--text);
-    }
-    .more-menu.open { display: flex; }
-    .more-menu .more-item {
-      display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px;
-      padding: 6px 10px; border: 0; border-radius: 6px; background: transparent;
-      color: var(--text); font: inherit; font-size: 0.82rem; text-align: left; cursor: pointer; white-space: nowrap;
-    }
-    .more-menu .more-item:hover, .more-menu .more-item:focus-visible { background: var(--hover-tint-strong); outline: none; }
-    .more-menu .more-item:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
-    .more-menu .more-item.restarting { opacity: 0.5; pointer-events: none; animation: pulse 1s infinite; }
-    .more-menu .more-item input[type="checkbox"] { width: 14px; height: 14px; min-height: 0; margin: 0; accent-color: var(--accent); cursor: pointer; }
-    .more-menu .more-sep { height: 1px; background: var(--border); margin: 4px 2px; }
-    .more-menu .more-advanced { display: none; flex-direction: column; gap: 2px; }
-    .more-menu.advanced .more-advanced { display: flex; }
-    .more-menu .more-section-title { font-size: 0.65rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; padding: 4px 10px 2px; }
-    .more-menu .more-row { display: flex; flex-direction: column; gap: 3px; min-height: 32px; padding: 5px 10px; border-radius: 6px; }
-    .more-menu .more-row:hover { background: var(--hover-tint); }
-    .more-menu .more-row .toggle-switch { font-size: 0.8rem; }
-    .more-menu .more-row .toggle-label { font-family: inherit; font-size: 0.8rem; color: var(--text); }
-    .more-menu .more-row .max-tokens-control { justify-content: space-between; gap: 10px; font-size: 0.8rem; }
-    .more-menu .more-row .max-tokens-control select { font-size: 0.75rem; padding: 3px 6px; background: var(--bg-input); color: var(--text); }
-    .more-menu .more-row #team-guidance-select { font-size: 0.75rem; opacity: 1; background: var(--bg-input) !important; color: var(--text) !important; border-color: var(--border) !important; padding: 3px 6px !important; }
-    .more-menu .more-row #sdk-workers-select { font-size: 0.75rem; opacity: 1; background: var(--bg-input) !important; color: var(--text) !important; border-color: var(--border) !important; padding: 3px 6px !important; }
+    /* A button in Settings that is working (Restart, Dream): dimmed and pulsing until it finishes */
+    .st-test-btn.restarting { opacity: 0.5; pointer-events: none; animation: pulse 1s infinite; }
+    /* A door row in Settings: the other page's name and what is on the other side, then Open */
+    .st-door { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+    .st-door-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .st-door-title { font-weight: 600; }
+    .st-door-sub { font-size: 0.8rem; color: var(--text-dim); }
     .header-controls .header-btn.reload-btn { display: none; }   /* only in the installed app, which has no browser reload button; the selector also beats the narrow-screen .main-header-top .header-btn rule */
     html.app-installed .header-controls .header-btn.reload-btn { display: inline-flex; align-items: center; justify-content: center; }
-    .reload-btn[aria-busy="true"], #reload-app-item[aria-busy="true"] { opacity: 0.5; pointer-events: none; }
-    .more-menu .more-row .toggle-switch[style] { gap: 10px !important; justify-content: space-between; }
-    .more-menu .more-hint { font-size: 0.7rem; color: var(--text-dim); line-height: 1.3; white-space: normal; }
+    .reload-btn[aria-busy="true"] { opacity: 0.5; pointer-events: none; }
 
     .toggle-switch {
       display: flex; align-items: center; gap: 8px; cursor: pointer;
@@ -1409,6 +1358,12 @@
       background: var(--system-notice-notice-failed-bg);
       border: 1px solid var(--system-notice-notice-failed-border);
       color: var(--system-notice-notice-failed-text);
+    }
+    .system-notice.notice-past {
+      background: transparent;
+      border-color: var(--border);
+      color: var(--auto-time-text);
+      font-weight: 400;
     }
     /* A line that has done its job folds away, then leaves (lib/ui-retire.js retireSoon) */
     .retiring {
@@ -1642,6 +1597,10 @@
     .voice-callbar .vcb-hang { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; background: var(--call-bg); border: 1px solid var(--mic-rec); color: var(--on-color-text); border-radius: 6px; padding: 5px 12px; cursor: pointer; }
     .voice-callbar .vcb-disp { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
     .voice-callbar .vcb-disp select { background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; font-size: 13px; }
+    /* Call display pickers: Linux WebKit paints a closed select white on white unless colour, background and colour-scheme are explicit (also the option rows) */
+    .voice-pop select[data-vp="display"], .voice-callbar select[data-vcb="display"], select.ucd-display { color: var(--text); background-color: var(--bg-input); color-scheme: dark; }
+    html.mm-simple.mm-light .voice-pop select[data-vp="display"], html.mm-simple.mm-light .voice-callbar select[data-vcb="display"], html.mm-simple.mm-light select.ucd-display { color-scheme: light; }
+    .voice-pop select[data-vp="display"] option, .voice-callbar select[data-vcb="display"] option, select.ucd-display option { color: var(--text); background-color: var(--bg-input); }
     .voice-callbar .vcb-focus-hint { color: var(--text-dim); font-size: 0.8rem; }
     .voice-callbar .vcb-focus-hint[hidden] { display: none; }
     .voice-callbar .vcb-hang:hover { background: var(--call-bg-hover); }
@@ -1660,6 +1619,14 @@
     .input-area .voice-extra { position: relative; display: inline-flex; gap: 6px; align-items: center; }
     .input-area .voice-mode-chip { background: var(--bg-input); border: 1px solid var(--border); color: var(--text-dim); border-radius: 999px; padding: 4px 10px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; cursor: pointer; }
     .input-area .voice-mode-chip:hover { background: var(--bg-input); border-color: var(--accent); color: var(--text); }
+    /* This agent's voice chip (press: its own voice or the shared one) and the "All settings" dots beside it */
+    .input-area .voice-agent-chip-wrap { display: inline-flex; gap: 2px; align-items: center; }
+    .input-area .voice-agent-chip-wrap[hidden] { display: none; }
+    .input-area .voice-agent-chip, .input-area .voice-agent-card { background: var(--bg-input); border: 1px solid var(--border); color: var(--text-dim); border-radius: 999px; padding: 4px 10px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; cursor: pointer; }
+    .input-area .voice-agent-chip[aria-pressed="true"] { border-color: var(--accent); color: var(--text); }
+    .input-area .voice-agent-chip:hover, .input-area .voice-agent-card:hover { border-color: var(--accent); color: var(--text); }
+    .chat-actions .agent-name > .agent-name-text { cursor: pointer; }   /* the name opens the agent card */
+    .chat-actions .agent-name > .agent-name-text:hover { text-decoration: underline; }
     .input-area .voice-set-btn { background: var(--bg-input); border: 1px solid var(--border); color: var(--text); padding: 8px 9px; }
     .input-area .voice-set-btn:hover, .input-area .voice-set-btn[aria-expanded="true"] { background: var(--bg-input); border-color: var(--accent); }
     .input-area .voice-set-btn svg { display: block; width: 18px; height: 18px; }
@@ -2312,23 +2279,61 @@
     }
     .chat-actions .agent-name {
       margin-left: auto; color: var(--accent); font-weight: 500; display: inline-flex; align-items: center; gap: 6px;
+      /* No room: the group wraps inside itself (badge drops to a second line) instead of pushing the bar past the window */
+      flex-wrap: wrap; min-width: 0; max-width: 100%;
     }
+    .chat-actions .agent-name-text { min-width: 8ch; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .cyber-tag.billing-api { background: var(--cyber-tag-billing-api-bg); color: var(--status-high); border-color: var(--status-high); }
     .chat-actions .model-pick {
       background: transparent; color: var(--accent); border: 1px solid var(--border); border-radius: 5px;
       padding: 5px 6px; font-size: 0.85rem; max-width: 320px; cursor: pointer;
+      min-width: 7rem; flex: 0 1 auto; text-overflow: ellipsis;
     }
     .chat-actions .model-pick:hover { border-color: var(--accent); }
-    .chat-actions .effort-pick { max-width: 150px; margin-left: 4px; }
+    .chat-actions .effort-pick { max-width: 150px; margin-left: 4px; min-width: 0; }
     .chat-actions .effort-pick:disabled { cursor: default; opacity: .75; }
     .chat-actions .effort-pick[hidden] { display: none; }
     /* Claude plan usage next to the model (lib/plan-usage), for agents on the Claude subscription */
-    .chat-actions .plan-badge { font-size: 0.78rem; color: var(--text-dim); border: 1px solid var(--border); border-radius: 5px; padding: 5px 7px; margin-left: 4px; cursor: pointer; white-space: nowrap; font-family: var(--font-mono); }
+    .chat-actions .plan-badge { background: transparent; line-height: inherit; font-size: 0.78rem; color: var(--text-dim); border: 1px solid var(--border); border-radius: 5px; padding: 5px 7px; margin-left: 4px; cursor: pointer; white-space: nowrap; font-family: var(--font-mono); }
+    .chat-actions .plan-badge:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
     .chat-actions .plan-badge[hidden] { display: none; }
     .chat-actions .plan-badge:hover { border-color: var(--accent); }
+    /* it can be pressed: a ▾ like the model and effort pickers beside it */
+    .chat-actions .plan-badge[aria-haspopup]::after { content: '\25BE'; margin-left: 5px; color: var(--accent); }
     .chat-actions .plan-badge.warn { color: var(--status-warn); border-color: var(--chat-actions-plan-badge-warn-border); }
     .chat-actions .plan-badge.hot { color: var(--status-high); border-color: var(--chat-actions-plan-badge-hot-border); }
     .chat-actions .plan-badge.refused { color: var(--status-hot); border-color: var(--wm-stop-border); }
+    /* the popup under the Claude usage badge: what the badge shows */
+    .plan-chooser { position: fixed; z-index: 1000; min-width: 260px; max-width: calc(100vw - 16px); background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 20px var(--shadow-color-pop); padding: 4px; font-size: 0.82rem; }
+    .plan-chooser .pc-list { display: flex; flex-direction: column; }
+    .plan-chooser .pc-row { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 7px 8px; border-radius: 5px; color: var(--text); cursor: pointer; white-space: nowrap; box-sizing: border-box; }
+    .plan-chooser .pc-row.current { color: var(--text); }
+    .plan-chooser .pc-row:hover { border-color: var(--accent); color: var(--text); background: var(--bg-input); }
+    .plan-chooser .pc-row:focus-visible, .plan-chooser .pc-subs:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+    .plan-chooser .pc-check { flex: none; width: 1em; color: var(--accent); }
+    .plan-chooser .pc-subs { display: block; width: 100%; margin-top: 4px; padding: 7px 8px; background: transparent; color: var(--accent); border: 0; border-top: 1px solid var(--border); border-radius: 0 0 5px 5px; font: inherit; text-align: left; cursor: pointer; }
+    /* The ⓘ help beside a setting (lib/ui-settings-help.js): a small round button after the label, a panel beside it (a bottom sheet in the phone frame and on narrow screens), and the light highlight of a row found by another word */
+    .st-info { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 18px; height: 18px; margin-left: 6px; padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; background: transparent; color: var(--text-dim); font: inherit; font-size: 0.78rem; line-height: 1; cursor: pointer; vertical-align: middle; }
+    [hidden] + .st-info, [style*="display:none"] + .st-info, [style*="display: none"] + .st-info { display: none; }   /* an ⓘ after a control that is not shown is not shown either */
+    .st-info:hover { color: var(--text); border-color: var(--text-dim); }
+    .st-info:focus-visible, .st-help-x:focus-visible, .st-help-ask:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+    html.mm-settings-only .st-info { width: 32px; height: 32px; box-sizing: border-box; margin: -9px 0 -9px 4px; font-size: 1.05rem; }
+    html.mm-settings-only .st-modal button.st-info, html.mm-simple .simple-modal button.st-info { min-height: 0; padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; background: transparent; }   /* outranks the dialogs' own "button" rules (a 40 px minimum, no border), so the ⓘ stays a round outline */
+    :not(.st-row) > label.st-has-info { display: inline-block; }   /* a label followed by its ⓘ shares its line (the script adds the class only then) */
+    html.mm-settings-only .st-row > label:has(+ .st-info) { flex: 1 1 calc(100% - 44px) !important; }
+    .st-help-panel { position: fixed; z-index: 10050; width: 360px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; box-sizing: border-box; padding: 14px 16px; background: var(--bg-card); color: var(--text); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: 0 8px 28px var(--shadow-color-pop); font-size: 0.82rem; line-height: 1.45; }
+    .st-help-panel:focus { outline: none; }
+    .st-help-head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 4px; }
+    .st-help-title { flex: 1; font-size: 1rem; font-weight: 600; color: var(--text); }
+    .st-help-today { color: var(--text-dim); font-size: 0.72rem; font-weight: 400; }
+    .st-help-x { flex: none; width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 50%; background: transparent; color: var(--text); font-size: 1.15rem; line-height: 1; cursor: pointer; }
+    .st-help-h { margin-top: 10px; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
+    .st-help-p { margin: 2px 0 0; color: var(--text); }
+    .st-help-ask { margin-top: 14px; padding: 8px 14px; border: 0; border-radius: 6px; background: var(--accent); color: var(--on-accent); font: inherit; font-weight: 600; cursor: pointer; }
+    .st-help-scrim { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 10049; background: var(--overlay-bg); }
+    .st-help-sheet { left: 0; right: 0; bottom: 0; top: auto; width: auto; max-width: none; max-height: 70vh; border-radius: 14px 14px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px)); font-size: 0.95rem; }
+    .st-help-sheet .st-help-ask { display: block; width: 100%; padding: 12px 14px; }
+    .st-word-hit { background: var(--hover-tint-strong); border-radius: 6px; }
     /* Settings -> Subscriptions: one bar per usage window */
     #st-subs-body .subs-block { margin: 10px 0 4px; }
     #st-subs-body .subs-head { font-weight: 600; margin-bottom: 4px; }
@@ -2521,6 +2526,93 @@
     .question-hint { font-size: 0.8rem; color: var(--text-dim); }
     #question-submit { padding: 9px 18px; border-radius: 8px; border: none; background: var(--accent); color: var(--on-color-text); font-weight: 600; cursor: pointer; }
     #question-submit:disabled { opacity: 0.45; cursor: not-allowed; }
+    /* The confirm card for a change the lead wants to make (fixed: the change as rows, Confirm and Cancel, no typed answer) */
+    .question-fixed .question-rows { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0 0 6px; }
+    .question-fixed dt { color: var(--text-dim); font-size: 0.85rem; }
+    .question-fixed dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+    .question-fixed dd.question-row-note { grid-column: 1 / -1; color: var(--text-dim); font-size: 0.85rem; }
+    #question-cancel { padding: 9px 18px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--text); font-weight: 500; cursor: pointer; }
+    #question-cancel:hover { border-color: var(--text-dim); background: var(--bg-input); }
+    /* The strip in the lead's chat: what the lead changed in the last 24 h, each with Undo */
+    .change-strip { display: flex; flex-direction: column; gap: 4px; position: relative; max-width: var(--chat-max-width); width: 100%; margin: 0 auto; padding: 6px calc(var(--chat-pad-x) + 28px) 0 var(--chat-pad-x); box-sizing: border-box; font-size: 13px; color: var(--text-dim); }
+    .change-strip[hidden] { display: none; }
+    .change-strip .change-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .change-strip .change-text { color: var(--text); overflow-wrap: anywhere; }
+    .change-strip .change-undo { padding: 2px 10px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text); font: inherit; cursor: pointer; }
+    .change-strip .change-undo:hover { border-color: var(--text-dim); background: var(--bg-input); }
+    .change-strip .change-msg:empty { display: none; }
+    .change-strip .change-x { position: absolute; top: 4px; right: var(--chat-pad-x); width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-dim); font-size: 16px; line-height: 1; cursor: pointer; }
+    .change-strip .change-x:hover { background: var(--hover-tint-strong); color: var(--text); }
+    html.mm-simple .change-strip .change-text { color: var(--sm-text); }
+    html.mm-simple .change-strip, html.mm-simple .change-strip .change-x { color: var(--sm-sec); }
+    html.mm-simple .question-fixed dt { color: var(--sm-sec); }
+    html.mm-simple .question-fixed dd { color: var(--sm-text); }
+    html.mm-simple #question-cancel { background: transparent; color: var(--sm-text); border: 1px solid var(--sm-border); border-radius: 18px; }
+    /* Door into a setting (#settings-for=): the row is lit for 2 seconds; Recent changes in Settings */
+    .st-door-hit { background: var(--hover-tint-strong); border-radius: 6px; }
+    /* The agent card (lib/ui-agent-card.js): a panel on the right over the chat; a full-screen sheet in a narrow window */
+    .ac-panel { position: fixed; top: var(--banner-h, 0px); right: 0; bottom: 0; z-index: 1100; width: min(560px, calc(100vw - 240px)); box-sizing: border-box; overflow-y: auto; padding: 0 16px 24px; background: var(--bg-dark); color: var(--text); border-left: 1px solid var(--border-strong); box-shadow: 0 0 28px var(--shadow-color-pop); font-size: 0.86rem; line-height: 1.45; }
+    .ac-panel:focus { outline: none; }
+    .ac-panel.ac-sheet { left: 0; width: auto; z-index: 1500; border-left: 0; }
+    .ac-header { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 12px; padding: 16px 0 12px; background: var(--bg-dark); }
+    .ac-icon { flex: none; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; }
+    .ac-dot { border-radius: 50%; background: var(--accent); }
+    .ac-titles { flex: 1; min-width: 0; }
+    .ac-title { margin: 0; font-size: 1.1rem; font-weight: 700; overflow-wrap: anywhere; }
+    .ac-role { color: var(--text-dim); font-size: 0.8rem; }
+    .ac-x { flex: none; width: 36px; height: 36px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-card); color: var(--text); font-size: 1.3rem; line-height: 1; cursor: pointer; }
+    .ac-x:focus-visible, .ac-sec-head:focus-visible, .ac-more-head:focus-visible, .ac-reset:focus-visible, .ac-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .ac-sec { margin-bottom: 10px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; }
+    .ac-sec-head { display: flex; align-items: baseline; gap: 10px; width: 100%; min-height: 44px; box-sizing: border-box; padding: 12px 14px; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+    .ac-sec-title { font-weight: 700; flex: none; }
+    .ac-sec-sum { margin-left: auto; min-width: 0; color: var(--text-dim); font-size: 0.78rem; text-align: right; overflow-wrap: anywhere; }
+    .ac-shield { margin-left: 6px; color: var(--accent); }
+    .ac-sec-body { border-top: 1px solid var(--border); padding: 4px 14px 10px; }
+    .ac-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+    .ac-row:last-child { border-bottom: 0; }
+    .ac-main { flex: 1 1 auto; min-width: 0; }
+    .ac-label { font-weight: 600; overflow-wrap: anywhere; }
+    .ac-desc, .ac-note, .ac-default { color: var(--text-dim); font-size: 0.8rem; margin-top: 2px; }
+    .ac-note .ac-link { color: var(--accent); }
+    .ac-err { color: var(--error); font-size: 0.8rem; margin-top: 4px; }
+    .ac-ctl { flex: none; max-width: 55%; }
+    .ac-select, .ac-input { max-width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-input); color: var(--text); font: inherit; }
+    .ac-select:disabled, .ac-input:disabled, .ac-action:disabled, .ac-reset:disabled, .ac-seg-b:disabled { opacity: 0.55; cursor: default; }
+    .ac-value { color: var(--text-dim); }
+    .ac-seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 6px; overflow: hidden; }
+    .ac-seg-b { padding: 6px 12px; border: 0; background: var(--bg-input); color: var(--text); font: inherit; cursor: pointer; }
+    .ac-seg-b.on { background: var(--accent); color: var(--on-accent); }
+    .ac-action, .ac-reset, .ac-more-head { border: 1px solid var(--border-strong); border-radius: 6px; background: transparent; color: var(--text); font: inherit; cursor: pointer; }
+    .ac-action { padding: 6px 12px; }
+    .ac-reset { margin-top: 6px; padding: 4px 10px; font-size: 0.8rem; }
+    .ac-bottom { margin-top: 24px; }
+    .ac-bottom .ac-remove { border-color: var(--error); color: var(--error); }
+    .ac-row.ac-has-editor { flex-wrap: wrap; }
+    .ac-row.ac-editor-open .ac-ctl { flex: 1 1 100%; width: 100%; max-width: none; }
+    .ac-editor { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+    .ac-editor-tools, .ac-editor-bar, .ac-offer { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .ac-textarea { width: 100%; box-sizing: border-box; min-height: 16em; font-family: var(--font-mono); font-size: 0.85rem; background: var(--bg-input); color: var(--text); border: 1px solid var(--border-strong); border-radius: 6px; padding: 8px; }
+    .ac-action.ac-delete { border-color: var(--error); color: var(--error); }
+    .ac-checks { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+    .ac-check { display: inline-flex; align-items: center; gap: 6px; }
+    .ac-more-head { display: block; width: 100%; min-height: 36px; margin-top: 8px; padding: 8px 10px; border-style: dashed; color: var(--text-dim); font-size: 0.8rem; text-align: left; overflow-wrap: anywhere; }
+    .ac-row.st-door-hit { background: var(--hover-tint-strong); }
+    .ac-foot { margin: 12px 0 0; color: var(--text-dim); font-size: 0.8rem; }
+    .ac-folders { display: flex; flex-wrap: wrap; gap: 8px 24px; text-align: left; }
+    .ac-folder-group { min-width: 160px; }
+    .ac-folder-title { color: var(--text-dim); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+    .ac-folder { display: block; margin: 2px 0; font-size: 0.85rem; cursor: pointer; overflow-wrap: anywhere; }
+    .ac-folder input { margin-right: 6px; vertical-align: middle; }
+    .ac-area { display: block; width: 100%; min-width: 220px; min-height: 60px; resize: vertical; font-family: var(--font-mono); font-size: 0.85rem; }
+    .ac-blocked { text-align: left; font-size: 0.8rem; }
+    .ac-blocked-item { margin: 0 0 6px; }
+    .ac-blocked-when { color: var(--text-dim); }
+    .ac-blocked-what { font-family: var(--font-mono); overflow-wrap: anywhere; }
+    .st-recent-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
+    .st-recent-what { font-weight: 600; color: var(--text); flex: 1 1 100%; overflow-wrap: anywhere; }
+    .st-recent-change { color: var(--text); overflow-wrap: anywhere; flex: 1 1 auto; min-width: 0; }
+    .st-recent-meta, .st-recent-msg { color: var(--text-dim); }
+    .st-recent-more { margin-top: 8px; }
     /* Build team plan card: one tick row per plan item (label bold, detail small), above the buttons */
     .question-checklist { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; max-height: 40vh; overflow-y: auto; }
     .question-check { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); cursor: pointer; }
@@ -2768,22 +2860,93 @@
     }
     .st-search input:focus { outline: none; border-color: var(--accent); }
     #st-search-none { font-size: 0.78rem; color: var(--text-dim); }
-    details.st-group { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
-    details.st-group > summary {
-      list-style: none; cursor: pointer; display: flex; align-items: baseline; gap: 10px;
-      padding: 10px 12px; user-select: none;
+    /* Settings in eight groups (lib/ui-settings-groups.js): a list of groups on the left, the open group on the right. The phone frame keeps one column. */
+    .st-modal:has(.st-panes) { max-width: 1040px; width: min(96vw, 1040px); }
+    .st-panes { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 16px; align-items: start; }
+    .st-glist { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 0; }   /* eight rows of a title and a short summary fit 1024 x 768 without scrolling the list */
+    .st-gbtn {
+      display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 6px 10px; text-align: left; cursor: pointer;
+      background: transparent; color: var(--text); border: 1px solid transparent; border-radius: 8px; font: inherit;
     }
-    details.st-group > summary::-webkit-details-marker { display: none; }
-    details.st-group > summary::before { content: '▸'; color: var(--text-dim); flex: 0 0 0.8em; transition: transform 0.15s; }
-    details.st-group[open] > summary::before { transform: rotate(90deg); }
-    details.st-group > summary:hover .st-group-title { color: var(--accent); }
-    .st-group-title { flex: 0 0 auto; font-weight: 600; font-size: 0.9rem; color: var(--text); }
+    .st-gbtn:hover { background: var(--hover-tint); }
+    .st-gbtn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+    .st-gbtn[aria-current="true"] { background: var(--hover-tint-strong); border-color: var(--border-strong); }
+    .st-gicon { flex: 0 0 1.4em; text-align: center; font-size: 1.05rem; line-height: 1.3; }
+    .st-gtext { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+    .st-group-title { font-weight: 600; font-size: 0.88rem; color: var(--text); }
+    .st-gbtn:hover .st-group-title { color: var(--accent); }
     .st-group-sum {
-      flex: 1; min-width: 0; font-size: 0.75rem; color: var(--text-dim);
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      min-width: 0; font-size: 0.72rem; line-height: 1.3; color: var(--text-dim);
+      white-space: normal; overflow-wrap: anywhere;   /* the live summary wraps: no cut "pus…" */
     }
+    .st-group-sum:empty { display: none; }
     .st-group-sum.st-sum-crit { color: var(--error); font-weight: 600; }
-    .st-group-body { padding: 12px 14px 0; border-top: 1px solid var(--border); }
+    .st-group-sum.st-sum-warn { color: var(--warning); font-weight: 600; }
+    /* For your review (lib/ui-review.js): the list at the top of the first group and the count on the gear. Only problems take a warning colour. */
+    #st-review-list h4 { margin: 10px 0 6px; font-size: 0.85rem; color: var(--text-dim); }
+    .rv-row { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; padding: 8px 10px; margin-bottom: 6px; border: 1px solid var(--border); border-left: 4px solid var(--border-strong); border-radius: 6px; }
+    .rv-row.rv-critical, .rv-row.rv-fix { border-left-color: var(--error); }
+    .rv-row.rv-warn, .rv-row.rv-worth { border-left-color: var(--warning); }
+    .rv-row.rv-suggest { border-left-color: var(--border-strong); }
+    #st-review-list h4.rv-h { color: var(--text); font-size: 0.92rem; margin: 12px 0 6px; }
+    .rv-block-fix h4.rv-h { color: var(--error); }
+    .rv-fold { background: none; border: 0; padding: 6px 0; margin: 8px 0 4px; color: var(--text-dim); font: inherit; font-weight: 600; font-size: 0.88rem; cursor: pointer; }
+    .rv-fold-body[hidden] { display: none; }
+    .rv-banner-fix { margin-left: 6px; }
+    .st-group-sum .st-sum-first { color: var(--error); font-weight: 600; }
+    .rv-main { flex: 1 1 220px; min-width: 0; }
+    .rv-title { color: var(--text); font-weight: 600; font-size: 0.88rem; }
+    .rv-text, .rv-result, .rv-note { color: var(--text-dim); font-size: 0.8rem; line-height: 1.35; margin-top: 2px; }
+    .rv-acts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .rv-calm { color: var(--text-dim); font-size: 0.88rem; padding: 8px 0; }
+    #settings-btn { position: relative; }
+    .rv-badge { position: absolute; top: -6px; right: -6px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 8px; font-size: 10px; line-height: 16px; font-weight: 700; text-align: center; pointer-events: none; }
+    .rv-badge.rv-critical { background: var(--banner-critical-bg); color: var(--on-color-text); }
+    .rv-badge.rv-warn { background: var(--banner-warn-bg); color: var(--on-color-text); }
+    .rv-badge.rv-info { background: var(--accent); color: var(--on-accent); }
+    .st-gpane { min-width: 0; }
+    .st-group { border: 1px solid var(--border); border-radius: 8px; padding: 4px 14px 12px; margin-bottom: 8px; }
+    .st-group[hidden] { display: none; }
+    .st-ghead { display: none; margin: 8px 0 4px; font-size: 0.95rem; color: var(--text); }
+    #st-groups.st-searching .st-ghead { display: block; }
+    #st-groups.st-searching .st-gpane { display: flex; flex-direction: column; }   /* a search lists a group whose title matches first (app.js stSearch sets each group's order) */
+    #st-groups .st-row-off { display: none !important; }   /* in another group, a search shows only the matching rows of a section */
+    .st-more { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px; }
+    .st-more[hidden], .st-more-body[hidden] { display: none; }
+    .st-more-btn { background: transparent; border: 0; padding: 4px 0; color: var(--accent); cursor: pointer; font: inherit; font-size: 0.85rem; text-align: left; }
+    .st-more-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+    #st-groups.st-searching .st-more-btn { display: none; }
+    #st-groups.st-searching .st-more-body[hidden] { display: block; }
+    .st-moved > h4 { font-size: 0.85rem; }
+    @media (max-width: 720px) { .st-panes { display: block; } .st-glist { position: static; margin-bottom: 12px; } }
+    /* The label column of a row in the two-pane dialog is about 200 px (the rows drew 100 px labels that broke to four lines), and the ⓘ stays on its label's line. The phone frame and a narrow window keep their one column. */
+    @media (min-width: 721px) {
+      html:not(.mm-settings-only) .st-modal:has(.st-panes) .st-row:not(.cx-form .st-row) > label:not(:has(input)):not([style*="flex-basis:auto"]):not([style*="flex:"]) { flex: 0 0 200px !important; min-width: 0; overflow-wrap: break-word; }
+      html:not(.mm-settings-only) .st-modal:has(.st-panes) .st-section > .st-hint, html:not(.mm-settings-only) .st-modal:has(.st-panes) .st-moved > .st-hint { margin-left: 208px; }
+      .st-modal:has(.st-panes) .st-row > .st-info { align-self: center; margin-left: 0; }
+      .st-modal:has(.st-panes) .st-row > label + .st-info { margin-left: -4px; }
+      .st-modal:has(.st-panes) .st-section > .st-info { margin: 0 0 0 6px; }
+    }
+    /* The phone (the Settings frame, or a window under 721 px; app.js sets data-page there only): the list of groups as full-width rows, or one group as a page under a "‹ Settings" header. */
+    /* A member's Settings has one group: the group alone, no list of groups and no search (app.js groupSettings sets st-single). */
+    #st-groups.st-single .st-glist, #st-groups.st-single .st-search { display: none; }
+    #st-groups.st-single .st-panes { display: block; }
+    .st-modal:has(#st-groups.st-single) { max-width: 640px; width: min(96vw, 640px); }
+    .st-phone-head { display: none; }
+    #st-groups[data-page="group"] .st-phone-head { display: flex; align-items: center; gap: 10px; min-height: 56px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+    .st-phone-back { min-height: 44px; padding: 0 12px 0 0; background: transparent; border: 0; color: var(--accent); cursor: pointer; font: inherit; font-size: 1rem; }
+    .st-phone-back:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+    .st-phone-title { font-weight: 600; font-size: 1.05rem; color: var(--text); }
+    .st-phone-title::before { content: "\00b7\00a0"; color: var(--text-dim); font-weight: 400; }   /* "‹ Settings · Models and money" */
+    /* A group page is only its header: the dialog's own "Settings" title and sentence are hidden there, and Save shows only on a page that has something it writes (app.js stPhoneSaveMark). */
+    .st-modal:has(#st-groups[data-page="group"]) > h3, .st-modal:has(#st-groups[data-page="group"]) > .st-sub { display: none; }
+    .st-modal[data-save-here="no"] .st-actions .st-save-main { display: none; }
+    #st-groups[data-page="group"] .st-search, #st-groups[data-page="group"] #st-quick-links, #st-groups[data-page="group"] .st-glist { display: none; }
+    #st-groups[data-page="list"] .st-gpane, #st-groups[data-page="list"].st-searching .st-glist { display: none; }
+    #st-groups[data-page="list"].st-searching .st-gpane { display: flex; }
+    #st-groups[data-page] .st-gbtn { min-height: 56px; align-items: center; width: 100%; }
+    #st-groups[data-page].st-searching .st-ghead { cursor: pointer; color: var(--accent); }
+    #st-groups[data-page].st-searching .st-ghead::after { content: " ›"; }
     .st-section.st-match > h4 { color: var(--accent); border-bottom-color: var(--accent); }
     /* Data connectors box (Settings) */
     .cx-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.8rem; }
@@ -2834,7 +2997,7 @@
     .qs-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
     .qs-dot.unread { background: var(--accent); }
     .qs-dot.busy { background: var(--warning); }
-    .qs-dot.live-question { width: 14px; height: 14px; background: var(--blue); color: var(--on-color-text); font-size: 9px; line-height: 14px; font-weight: 700; text-align: center; }   /* the sidebar's "?" marker */
+    .qs-dot.live-question { width: 14px; height: 14px; background: var(--blue); color: var(--on-color-text); font-size: 9px; line-height: 14px; font-weight: 700; text-align: center; animation: pulse 1.6s infinite; }   /* the sidebar's "?" marker, pulsing as the sidebar's does (both stop for reduced motion, below) */
     .qs-dot.bg-work { box-sizing: border-box; background: transparent; border: 2px solid var(--blue); }   /* the sidebar's ring */
     .qs-status { padding: 14px 18px; color: var(--text-dim); font-size: 0.9rem; }
     .qs-status:empty { display: none; }
@@ -2990,8 +3153,9 @@
     .handoff-cards .ho-ended .ho-pill, .handoff-cards .ho-ended .ho-status { flex: none; }
     /* the strip: one compact line that expands into the cards */
     .handoff-cards { gap: 4px; }
-    .handoff-cards .ho-strip { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; white-space: nowrap; overflow: hidden; box-sizing: border-box; padding: 6px 10px; font: inherit; font-size: 13px; text-align: left; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: border-color .3s, background-color .3s; }
-    .handoff-cards .ho-sum { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .handoff-cards .ho-strip { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; box-sizing: border-box; padding: 6px 10px; font: inherit; font-size: 13px; text-align: left; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: border-color .3s, background-color .3s; }
+    .handoff-cards .ho-sum { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
+    .handoff-cards .ho-next { white-space: nowrap; overflow-wrap: normal; }
     .handoff-cards .ho-chev { flex: none; width: 7px; height: 7px; border-right: 2px solid var(--text-dim); border-bottom: 2px solid var(--text-dim); transform: rotate(45deg); margin-top: -3px; transition: transform .15s; }
     .handoff-cards .ho-strip[aria-expanded="true"] .ho-chev { transform: rotate(-135deg); margin-top: 3px; }
     .handoff-cards .ho-list { display: flex; flex-direction: column; gap: 4px; }
@@ -3031,6 +3195,20 @@
     #agents-working.bg-on { display: inline-block; background: color-mix(in srgb, var(--bg-work-ring) 14%, transparent); color: var(--bg-work-ring); }
     #agents-working.filtering .aw-bg { color: inherit; }
     .research-lines .research-line { cursor: default; white-space: normal; overflow-wrap: anywhere; overflow: visible; min-height: 0; }
+    /* The notice for research an agent started on its own: a card with the words and two real buttons (Stop, Make it thorough) */
+    .research-lines .research-notice { display: flex; flex-direction: column; gap: 2px; }
+    .research-lines .research-head { display: flex; align-items: flex-start; gap: 8px; }
+    .research-lines .research-head .ho-title { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+    /* collapsed: the title is at most two lines; opened it has no research-title-clamp class and shows whole */
+    .research-lines .research-head .ho-title.research-title-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+    .research-lines .research-q { white-space: normal; overflow-wrap: anywhere; color: var(--text); }
+    .research-lines .research-why, .research-lines .research-cost { color: var(--text-dim); font-size: 13px; overflow-wrap: anywhere; }
+    .research-lines .research-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+    .research-lines .research-notice button { font: inherit; font-size: 13px; line-height: 1.2; padding: 6px 14px; border-radius: 6px; background: transparent; cursor: pointer; text-decoration: none; color: var(--text); border: 1px solid var(--border-strong, var(--border)); }
+    .research-lines .research-notice .research-toggle, .research-lines .research-notice .research-x { flex: none; padding: 6px 9px; border-color: transparent; color: var(--text-dim); }
+    .research-lines .research-notice button.wo-stop { flex: none; color: var(--handoff-cards-ho-pill-ho-failed-border); border-color: var(--handoff-cards-ho-pill-ho-failed-border); }
+    .research-lines .research-notice button:hover:not(:disabled) { background: color-mix(in srgb, currentColor 12%, transparent); }
+    .research-lines .research-notice button:disabled { opacity: .5; cursor: default; }
     /* The hand-off Status sheet (lib/ui-hand-off-card.js openStatus): a centred panel; its body reads like a chat message */
     .ho-sheet { padding: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-secondary, var(--bg-input)); color: var(--text); width: min(720px, calc(100vw - 32px)); max-width: 720px; max-height: 80vh; overflow: hidden; box-sizing: border-box; }
     .ho-sheet[open] { display: flex; flex-direction: column; }
@@ -3125,8 +3303,6 @@
         display: flex; align-items: center;
       }
       .header-controls { gap: 8px; }
-      .more-menu { right: 0; left: auto; width: min(320px, calc(100vw - 16px)); max-width: calc(100vw - 16px); }
-      .more-menu .more-item { min-height: 36px; white-space: normal; }
       .worker-tabs-bar { margin-top: 4px; padding: 3px 0 4px 0; }
       .worker-tabs-bar .chat-tab { font-size: 0.7rem; padding: 2px 6px; }
       .active-chats {
@@ -3139,13 +3315,15 @@
       .active-chats::-webkit-scrollbar-track { background: transparent; }
       .active-chats::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
       .chat-tab { flex: 0 0 auto; padding: 6px 10px; font-size: 0.8rem; white-space: nowrap; }
+      /* Narrow windows: the bar wraps instead of scrolling sideways, so nothing sits out of sight past the right edge;
+         the agent's name, model, effort and usage take their own line and wrap inside it when that line is full. */
       .chat-actions {
         padding: 4px 8px; gap: 4px; font-size: 0.7rem;
-        overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch;
+        overflow-x: visible; flex-wrap: wrap;
         flex-shrink: 0;
       }
       .chat-actions button { padding: 3px 6px; font-size: 0.7rem; flex-shrink: 0; }
-      .chat-actions .agent-name { font-size: 0.7rem; flex-shrink: 0; }
+      .chat-actions .agent-name { font-size: 0.7rem; flex: 1 1 100%; min-width: 0; margin-left: 0; justify-content: flex-start; }
 
       .status-bar { padding: 4px 10px; font-size: 0.75rem; }
       .thinking-panel { max-height: 80px; }
@@ -3182,7 +3360,6 @@
       .main-header-top { flex-wrap: wrap; row-gap: 6px; min-width: 0; }
       .main-header-top .header-controls { order: 1; flex: 1 0 100%; min-height: 36px; justify-content: flex-end; padding-left: 46px; flex-wrap: nowrap; }
       .main-header-top .header-btn { min-width: 36px; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; }
-      .main-header-top #more-btn { min-width: 36px; }   /* its own rule says 32px */
       .main-header-top .active-chats { order: 2; flex: 1 0 100%; min-width: 0; max-width: 100%; scrollbar-width: none; }
       .main-header-top .active-chats::-webkit-scrollbar { display: none; }
       .main-header-top .active-chats:empty { display: none; }
@@ -3232,7 +3409,9 @@
       /* fields take the row (their desktop widths are inline); a hint beside one moves under it */
       html.mm-settings-only .st-row > input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), html.mm-settings-only .st-row > select { flex: 1 1 200px !important; width: auto !important; max-width: 100% !important; }
       html.mm-settings-only .st-modal button { min-height: 40px; }
-      html.mm-settings-only details.st-group > summary { min-height: 48px; }
+      html.mm-settings-only .st-panes { display: block; }
+      html.mm-settings-only .st-glist { position: static; margin-bottom: 12px; }
+      html.mm-settings-only .st-gbtn { min-height: 48px; }
       html.mm-settings-only .st-modal table { display: block; max-width: 100%; overflow-x: auto; }
     }
 </style>
@@ -3465,7 +3644,9 @@
     html.mm-simple .simple-modal .sm-x { width: 32px; height: 32px; border-radius: 8px; color: var(--sm-muted, var(--simple-muted-text)); font-size: 18px; }
     html.mm-simple .simple-modal .sm-set { padding: 16px 0; border-top: 1px solid var(--sm-border, var(--simple-border)); }
     html.mm-simple .simple-modal .sm-set:first-of-type { border-top: 0; }
+    html.mm-simple .simple-modal .sm-gh { margin: 18px 0 0; font-size: 15px; font-weight: 600; color: var(--sm-text, var(--text)); }
     html.mm-simple .simple-modal .sm-lab { display: block; font-size: 13px; color: var(--sm-muted, var(--simple-muted-text)); margin-bottom: 8px; font-weight: 500; }
+    html.mm-simple .simple-modal .sm-lab.sm-warn { color: var(--status-warn); }
     html.mm-simple .simple-modal .sm-seg { display: flex; background: var(--sm-side, var(--simple-side-bg)); border: 1px solid var(--sm-border, var(--simple-border)); border-radius: 12px; padding: 3px; gap: 3px; }
     html.mm-simple .simple-modal .sm-seg button { flex: 1; height: 36px; border-radius: 9px; font-size: 14px; color: var(--sm-sec, var(--auto-head-text)); }
     html.mm-simple .simple-modal .sm-seg button.on { background: var(--sm-raised, var(--simple-raised-bg)); color: var(--sm-text, var(--on-color-text)); font-weight: 600; box-shadow: 0 1px 4px var(--shadow-color-simple-soft); outline: 1px solid var(--brand-violet); }
@@ -3585,6 +3766,12 @@
     html.mm-simple .mode-toggle[aria-checked="true"] .mt-track { background: var(--brand-violet); }
 
     @media (max-width: 760px) { html.mm-simple .sidebar { width: 240px !important; min-width: 240px; } }
+  </style>
+  <style>   /* after the Simple block, so these win over its same-specificity rules */
+    /* the waiting dot (sidebar, Simple sidebar, teams, quick switcher) stops pulsing for people who ask for less motion; its "?" stays */
+    @media (prefers-reduced-motion: reduce) {
+      .teams-dot.live-question, .agent-btn .agent-status.live-question, html.mm-simple #agent-list .agent-btn .agent-status.live-question, .qs-dot.live-question { animation: none; }
+    }
   </style>
 </head>
 <body>
@@ -3773,7 +3960,7 @@
       <div class="active-chats" id="chat-tabs"></div>
       <div class="header-controls">
         <div class="workers-wrap" id="workers-wrap">
-          <button id="workers-btn" class="header-btn workers-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="workers-menu" title="Workers: what is working now, and the history of past workers" onclick="toggleWorkersMenu()"><span class="wb-dot" aria-hidden="true"></span><span class="wb-label">Workers</span> <span class="wb-caret" aria-hidden="true">▾</span></button>
+          <button id="workers-btn" class="header-btn workers-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="workers-menu" title="Workers: what is working now, and the history of past workers" onclick="toggleWorkersMenu()"><span class="wb-dot" aria-hidden="true"></span><span class="wb-label"><span class="wb-noun">Workers</span><span class="wb-counts"></span></span> <span class="wb-caret" aria-hidden="true">▾</span></button>
           <div class="workers-menu" id="workers-menu" role="menu" hidden></div>
         </div>
         <button id="files-btn" class="header-btn" title="Files: upload, download and browse the files your agents can read" onclick="openFilesPanel()">📁 Files</button>
@@ -3781,23 +3968,6 @@
         <button id="settings-btn" class="header-btn" title="Settings" onclick="openSettings()">⚙️</button>
         <button id="help-btn" class="header-btn" title="Help: how-tos, the phone app, and what to do when something's wrong" aria-label="Help" onclick="openHelpPanel()">?</button>
         <button id="reload-btn" class="header-btn reload-btn" title="Reload the app" aria-label="Reload the app" onclick="reloadApp()">↻</button>
-        <div class="more-wrap" id="more-wrap">
-          <button id="more-btn" class="header-btn" aria-label="More" title="More options" aria-haspopup="menu" aria-expanded="false" aria-controls="more-menu" onclick="toggleMoreMenu()">⋯</button>
-          <div id="more-menu" class="more-menu" role="menu" aria-label="More options">
-            <button id="about-btn" class="more-item" role="menuitem" title="Version, channel, commit and update status of this hub" onclick="closeMoreMenu(); openAboutDialog()">ℹ️ About My Maestro AI</button>
-            <button id="reload-app-item" class="more-item" role="menuitem" title="Reload the app" onclick="closeMoreMenu(); reloadApp()">↻ Reload</button>
-            <button id="more-modules-item" class="more-item" role="menuitem" title="Data connectors" onclick="closeMoreMenu(); location.href = '/modules'">🔌 Data connectors</button>
-            <button id="more-remote-item" class="more-item" role="menuitem" title="Open a computer's desktop" style="display:none" onclick="closeMoreMenu(); location.href = '/modules#remote-computers'">💻 Remote computers</button>
-            <button id="recordings-item" class="more-item" role="menuitem" title="Call recordings you may open" style="display:none" onclick="closeMoreMenu(); location.href = '/recordings'">🎙 Recordings</button>
-            <button class="more-item" role="menuitem" id="more-voice-item" title="Voice conversations: on or off, voices and microphone" onclick="closeMoreMenu(); openVoiceSettings()">🎙 Voice</button>
-            <button id="wallet-btn" class="more-item" role="menuitem" title="Trading wallets (on-chain)" onclick="closeMoreMenu(); openWalletPanel()">👛 Wallets</button>
-            <button id="dream-btn" class="more-item" role="menuitem" title="Agent Dreaming — consolidate learnings" onclick="closeMoreMenu(); startDream()">💤 Dream (consolidate learnings)</button>
-            <button id="git-sync-btn" class="more-item" role="menuitem" title="Update from GitHub" onclick="closeMoreMenu(); openGitSync()">⬇️ Update from GitHub</button>
-            <button id="restart-hub-btn" class="more-item" role="menuitem" title="Restart My Maestro AI" onclick="closeMoreMenu(); restartHub()">🔄 Restart hub</button>
-            <div class="more-sep" role="separator"></div>
-            <button id="more-moved-item" class="more-item more-moved" role="menuitem" title="Open Settings" onclick="closeMoreMenu(); openSettingsAt('st-notify-agent')">Notifications, channels and tuning are now in Settings</button>
-          </div>
-        </div>
       </div>
       </div><!-- /main-header-top -->
       <div class="worker-tabs-bar" id="worker-tabs">
@@ -3838,13 +4008,22 @@
   <script src="/ui-claude-signin.js"></script>
   <script src="/ui-code-copy.js"></script>
   <script src="/ui-team-card.js"></script>
+  <script src="/ui-feature-card.js"></script>
   <script src="/ui-simple.js"></script>
+  <script src="/ui-settings-help.js"></script>
+  <script src="/ui-settings-groups.js"></script>
+  <script src="/ui-review.js"></script>
+  <script src="/ui-agent-card.js"></script>
+  <script src="/ui-agent-card-basics.js"></script>
+  <script src="/ui-agent-card-more.js"></script>
+  <script src="/ui-agent-card-access.js"></script>
   <script defer src="/ui-model-offer-groups.js"></script>
   <script src="/ui-teams.js"></script>
   <script src="/password-eye.js"></script>
   <script>document.addEventListener('DOMContentLoaded', function () { PasswordEye.watch(); });</script>
   <script src="app.js"></script>
   <script src="comms-panel.js"></script>
+  <script>try { window.hubAgentCard.cardDoorStart(); } catch (e) { /* the card is optional: the page runs without it */ }</script>
   <!-- Image Modal -->
   <div id="image-modal" class="image-modal" onclick="closeImageModal()">
     <span class="close-modal">&times;</span>

@@ -104,7 +104,7 @@ test('sdk-chat: hook in SDK query options, gate in the gateway pre-step, Codex b
   assert.ok(sdk.includes("getSetting('approvalTimeoutMinutes', 60)"), 'approval window configurable, default an hour');
   assert.ok(sdk.includes("const verdict = await gate.check({ agentName, tool: toolName, input: parsedArgs, cwd: (handlers && handlers.__cwd) || process.cwd(), boxed: !!(handlers && handlers.__boxed), origin: options.origin || null"), 'gateway pre-step, same working directory as the hands (review F23), and the turn\'s boxed flag (security R2)');
   assert.ok(!sdk.includes("const confirmEnabled = global.__confirmToolsEnabled ?? confirmTools;"), 'old confirm_tools prompt removed');
-  assert.ok(sdk.includes("beforeCall: (name, args) => readOnlyHelper && name === 'Bash' ? { allowed: true } : gate.check({ agentName, tool: name, input: args"), 'Codex bridge gated');
+  assert.ok(sdk.includes("beforeCall: (name, args) => { noteToolForSettings(agentName, name); return readOnlyHelper && name === 'Bash' ? { allowed: true } : gate.check({ agentName, tool: name, input: args"), 'Codex bridge gated');
   assert.ok(sdk.includes("onServerRequest: (method, params) => gate.codexServerRequest("), 'Codex approvals handled');
   assert.ok(sdk.includes("approvalPolicy: codexCli.approvalPolicyFor()"));
   assert.strictEqual((sdk.match(/ledger\.record\(\{/g) || []).length, 3, 'SDK, Codex and gateway turns are recorded');
@@ -127,7 +127,7 @@ test('server routes, status_snapshot approvals, push notice, agents.json policy 
   assert.deepStrictEqual(snap.approvals, [{ id: 'ap_1', agent: 'gp', cls: 'send' }]);
   assert.ok(read('lib/push.js').includes("ev.type === 'approval_request'"));
   const agents = read('lib/agents.js');
-  assert.match(agents, /const allowedFields = \[[^\]]*'policy'/);
+  assert.match(agents, /const (?:allowedFields|AGENT_PATCH_FIELDS) = \[[^\]]*'policy'/);
   assert.ok(agents.includes("} else if (key === 'policy') {"));
 });
 
@@ -196,7 +196,7 @@ test('gate: per-class cards (settings.approvalClasses) raise a card for the list
   assert.strictEqual(audit[2].agent, 'gp');
   // wiring: sdk-chat passes the setting, server.js sanitises it, the Settings page offers the checkboxes
   assert.ok(sdk.includes("approvalClasses: () => { try { const a = require('./settings').getSetting('approvalClasses', []);"));
-  assert.ok(read('server.js').includes("patch.approvalClasses = Array.isArray(patch.approvalClasses)"));
+  assert.ok(read('lib/settings-apply.js').includes("patch.approvalClasses = Array.isArray(patch.approvalClasses)"));   // the route's cleaners moved from server.js to lib/settings-apply
   assert.ok(read('app.js').includes('id="st-approval-classes"') && read('app.js').includes('async function saveApprovalClasses()'));
   assert.deepStrictEqual(L('policy-gate').APPROVAL_CLASSES.slice(0, 3), ['sudo', 'destroy', 'money']);
 });

@@ -50,12 +50,18 @@ test('junk is cleaned: invalid values dropped, numbers clamped, unknown keys and
   assert.deepStrictEqual(onDisk('biographer').voiceDefaults, { continueWait: 8000, interruptSensitivity: 100 });
 });
 
-test('nothing valid removes the field, and so do an empty object and null', async () => {
-  for (const empty of [{}, null, [], 'patient', 7, { endPause: 1 }]) {
+test('an empty object and null remove the field; a value with nothing valid in it is refused and nothing changes', async () => {
+  for (const empty of [{}, null]) {
     seed([base({ voiceDefaults: { preset: 'patient', ...PATIENT } })]);
     assert.deepStrictEqual(await agentsLib.updateAgentField('biographer', { voiceDefaults: empty }), { success: true }, JSON.stringify(empty));
     assert.ok(!('voiceDefaults' in onDisk('biographer')), 'removed by ' + JSON.stringify(empty));
     assert.strictEqual((await listed('biographer')).voiceDefaults, undefined);
+  }
+  for (const bad of [[], 'patient', 7, { endPause: 1 }]) {
+    seed([base({ voiceDefaults: { preset: 'patient', ...PATIENT } })]);
+    const r = await agentsLib.updateAgentField('biographer', { voiceDefaults: bad });
+    assert.strictEqual(r.success, false, JSON.stringify(bad));
+    assert.deepStrictEqual(onDisk('biographer').voiceDefaults, { preset: 'patient', ...PATIENT }, 'unchanged by ' + JSON.stringify(bad));
   }
 });
 
@@ -76,19 +82,13 @@ test('other agents and other fields are untouched', async () => {
 // ── the server boundary: only an admin may set it (server.js, run on the real source) ──
 test('a member cannot PATCH voiceDefaults: the server guard refuses it; an admin and the hub itself pass', () => {
   const src = fs.readFileSync(path.join(REAL, 'server.js'), 'utf8');
-  const start = src.indexOf("if (!req.hubService && !access.isAdmin(req.hubUser)) {\n        const MEMBER_EDITABLE");
-  assert.ok(start > 0, 'the member guard is in server.js');
-  const open = src.indexOf('{', start);
-  let depth = 0, end = open;
-  for (let i = open; i < src.length; i++) { if (src[i] === '{') depth++; else if (src[i] === '}') { depth--; if (!depth) { end = i; break; } } }
-  const guard = src.slice(start, end + 1);
-  assert.doesNotMatch(guard, /voiceDefaults/, 'voiceDefaults is not in the member allowlist');
+  // The member guard moved from server.js into lib/settings-apply agentFieldAllowed (the lead's settings tool uses it too): run the real function.
+  const sa = require(path.join(INST, 'lib', 'settings-apply.js'));
+  assert.ok(!sa.MEMBER_EDITABLE_AGENT_FIELDS.has('voiceDefaults'), 'voiceDefaults is not in the member allowlist');
+  assert.match(src, /settingsApply\.agentFieldAllowed\(body,/, 'the PATCH route asks agentFieldAllowed');
   const run = (user, body, hubService = false) => {
-    let sent = null;
-    const jsonResponse = (res, code, obj) => { sent = { code, obj }; return 'sent'; };
-    const fn = vm.runInNewContext(`(function (req, body, access, jsonResponse, res) { ${guard}\n return 'continued'; })`, {});
-    const out = fn({ hubService, hubUser: user }, body, require(path.join(INST, 'lib', 'access.js')), jsonResponse, {});
-    return { out, sent };
+    const g = sa.agentFieldAllowed(body, { service: hubService, token: false, user, isAdmin: require(path.join(INST, 'lib', 'access.js')).isAdmin(user), isOwner: false, pendingTotp: false, ownSession: false });
+    return g.ok ? { out: 'continued', sent: null } : { out: 'sent', sent: { code: g.status, obj: { error: g.error } } };
   };
   const member = { id: 'u2', role: 'member' }, admin = { id: 'u1', role: 'admin' };
   const refused = run(member, { voiceDefaults: { preset: 'patient' } });

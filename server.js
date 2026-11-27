@@ -48,7 +48,7 @@ const {
   deleteAgent, renameAgent, getAvailableModels, setAgentModel, setAgentDisplay, setAgentIcon, EDITABLE_FILES,
 } = require('./lib/agents');
 const {
-  handleChatStream, handleChat, handleAskResponse, handleInterjection, handleAlert, ensureAlertSecret, resolveToolConfirm, stopAgentTurn, haltHub, resumeHub, getAgentStatuses, getJobRunner, getScheduledTasks, getPacing, getApprovals, getLedger, getAllowances, getEffectivePolicy, getAgentRequests, getCompaction,
+  handleChatStream, handleChat, handleAskResponse, handleInterjection, handleAlert, ensureAlertSecret, resolveToolConfirm, stopAgentTurn, haltHub, resumeHub, stopStatus, getAgentStatuses, getJobRunner, getScheduledTasks, getPacing, getApprovals, getLedger, getAllowances, getEffectivePolicy, getAgentRequests, getCompaction,
   cancelWorker, loadConversationLog, clearConversationLog,
   clearConversation, flushActiveResponses, runTigerTeam, runRoundtable,
   continueTigerTeam, resumeTigerTeam, getTigerTeamState, reconstituteTigerTeam, stopTigerTeam, listTigerTeams,
@@ -120,7 +120,8 @@ function isSetupNeeded() {
 
 // ── Persistent Settings ──────────────────────────────────────────────────
 const hubSettings = require('./lib/settings');
-const hubAuth = require('./lib/auth').getAuth();          // accounts, sessions, TOTP, invites (lib/auth)
+require('./lib/mem-limit').setSettingsReader(hubSettings.getSetting);   // the memory limit (jobs, agents' commands) reads its setting through this; without it the limit is automatic
+const hubAuth = require('./lib/auth').startAuthOrExit();   // accounts, sessions, TOTP, invites (lib/auth); an unreadable .env prints one line and exits
 const admin2fa = require('./lib/admin-2fa').createAdmin2fa({   // "Require two-factor sign-in for admins" (lib/admin-2fa)
   getSetting: hubSettings.getSetting, updateSettings: hubSettings.updateSettings, auth: hubAuth,
   notify: (p) => require('./lib/push').getPush().notify(p, { adminsOnly: true, kind: 'security' }), log: (m) => console.log(m),   // a security notice (the person's Security and access setting)
@@ -139,16 +140,7 @@ const access = require('./lib/access');                   // route classes + age
 const temporalWorkersLib = require('./lib/temporal-workers');
 
 function loadSettings() { /* handled by lib/settings.js at require time */ }
-function saveSettings() {
-  hubSettings.updateSettings({
-    cavemanMode: !!global.__cavemanMode,
-    prescanTools: !!global.__prescanToolsEnabled,
-    confirmTools: !!global.__confirmToolsEnabled,
-    lazyTools: global.__lazyToolsEnabled !== false,
-    maxCompletionTokens: global.__maxCompletionTokens || 32000,
-    maxContextMessages: global.__maxContextMessages || 40,
-  });
-}
+// (the six one-value routes save through setGlobalSetting in lib/settings-apply: each writes only its own key)
 
 // ── Crash Handlers ──────────────────────────────────────────────────────
 
@@ -292,6 +284,13 @@ function readBodyRaw(req) {
 /** The agent a non-JSON request names: ?agent=<name> or the X-Agent header (audio upload to /api/voice/stt). */
 function agentFromQuery(req) {
   try { return new URL(req.url, 'http://x').searchParams.get('agent') || String(req.headers['x-agent'] || '') || null; } catch { return null; }
+}
+
+// The monthly spending cap's figures for the Settings page: this month's pay-per-use total against the cap, the window as ISO times.
+function monthlyView(l) {
+  const m = l.monthlySpend();
+  return { total: m.total, unpriced: m.unpriced, turns: m.turns, cap: m.cap, pct: m.pct == null ? null : Math.round(m.pct), over: m.over, resetDay: m.resetDay, zone: m.zone,
+    since: new Date(m.start).toISOString(), until: new Date(m.end).toISOString() };
 }
 
 function jsonResponse(res, code, data) {
@@ -513,6 +512,13 @@ async function handleHttpRequest(req, res) {
   req.hubUser = ident && (ident.kind === 'user' || ident.kind === 'legacy') ? ident.user : null;
   req.hubPendingTotp = !!(ident && ident.kind === 'user' && ident.pendingTotp);
   req.hubIdentKind = ident ? ident.kind : null;
+  // The settings journal (lib/settings-journal) names who made a change: the signed-in person, or the hub's own service. The body
+  // listeners are bound too (an http request's 'data' and 'end' callbacks otherwise run outside this request's context).
+  {
+    const sj = require('./lib/settings-journal');
+    sj.enterActor(req.hubUser && !req.hubPendingTotp ? { kind: 'person', user: req.hubUser.id } : req.hubToken ? { kind: 'person', user: `token:${req.hubToken.id || req.hubToken.name || ''}` } : { kind: 'hub' });
+    sj.bindRequest(req);
+  }
   if (ident && ident.kind === 'bad-token' && route.kind !== 'public') return jsonResponse(res, 401, { error: 'unauthorized', detail: ident.reason });
   if (route.kind === 'api') {
     // OpenAI-compatible endpoints (/v1/*): an API token with the openai-api scope, a signed-in admin, or the hub itself.
@@ -703,6 +709,10 @@ async function handleHttpRequest(req, res) {
       let cadence = 'weekly'; try { cadence = require('./lib/settings').getSetting('workerProposals', 'weekly') === 'off' ? 'off' : 'weekly'; } catch { /* default */ }
       return jsonResponse(res, 200, { ok: true, changes, workerProposals: cadence, ...(changes.some((c) => c.unreadable) ? { unreadable: true } : {}) });
     }
+    // The one card for features that arrive switched off (lib/feature-card): admin only, like the list above (lib/access: not public, not a session route).
+    if (pathname === '/api/behaviour-changes/card' && req.method === 'GET') {
+      return jsonResponse(res, 200, require('./lib/feature-card').cardState({ isOwner: !!(req.hubUser && !req.hubService && !req.hubPendingTotp && hubAuth.isOwner(req.hubUser)) }));
+    }
     // How often the lead looks at how the install is used (worker-proposals): saves the setting, then makes the weekly task match.
     if (pathname === '/api/behaviour-changes/worker-proposals/cadence' && req.method === 'POST') {
       // Only the owner decides: a signed-in admin's own browser session (never the hub's service identity, a token or an agent).
@@ -722,17 +732,38 @@ async function handleHttpRequest(req, res) {
         // Only the owner decides: a signed-in admin's own browser session (never the hub's service identity, a token or an agent).
         if (!require('./lib/access').isAdminSession(req)) return jsonResponse(res, 403, { ok: false, error: 'Sign in with an admin account in your browser to decide this.' });
         const b = (await authJson()) || {};
-        if (b.decision !== 'on' && b.decision !== 'off') return jsonResponse(res, 400, { ok: false, error: 'decision must be "on" or "off"' });
+        if (b.decision !== 'on' && b.decision !== 'off' && b.decision !== 'snooze' && b.decision !== 'seen' && b.decision !== 'reopen') return jsonResponse(res, 400, { ok: false, error: 'decision must be "on", "off", "snooze", "seen" or "reopen"' });
         const bc = require('./lib/behaviour-changes');
         if (!bc.manifest().some((e) => e.id === m[1])) return jsonResponse(res, 404, { ok: false, error: 'no such change' });
+        // A change the lead may not switch (spending, security) is the install's owner's alone; any other admin's own session still decides the rest.
+        const refused = bc.ownerRefusal(m[1], { isOwner: !!(req.hubUser && !req.hubService && !req.hubPendingTotp && hubAuth.isOwner(req.hubUser)) });
+        if (refused) return jsonResponse(res, 403, { ok: false, error: refused });
+        // expect: the state the page drew this row from; checked inside the write lock, a stale second device gets 409 'already decided'.
+        const expect = b.expect === 'pending' || b.expect === 'on' || b.expect === 'off' ? b.expect : undefined;
+        // rev: the row's revision (bc.revOf: phrase plus write counter) the page drew it from; compared inside the lock, so a stale device never undoes a fresh snooze.
+        const expectRev = typeof b.rev === 'string' && b.rev.length <= 80 ? b.rev : undefined;
+        if (b.decision === 'reopen' && expectRev === undefined) return jsonResponse(res, 400, { ok: false, error: 'rev is needed to undo' });
+        const who = req.hubUser && req.hubUser.id;
         try {
-          await bc.decide(m[1], b.decision, { user: req.hubUser && req.hubUser.id });
-          console.log(`[behaviour] ${m[1]} turned ${b.decision} by ${(req.hubUser && req.hubUser.id) || 'unknown'}`);
+          // Run as the person who pressed: the change journal (Recent changes, Restore) names them.
+          // done: the entry as written inside the lock, so the rev answered is this press's own, never a later device's
+          const done = await require('./lib/settings-journal').withActor({ kind: 'person', user: who }, async () => {
+            if (b.decision === 'snooze') return bc.snooze(m[1], { user: who, expect, expectRev });
+            if (b.decision === 'reopen') return bc.reopen(m[1], { user: who, expectRev });
+            if (b.decision === 'seen') return bc.markSeen(m[1], { user: who, expect, expectRev });
+            return bc.decide(m[1], b.decision, { user: who, expect, expectRev });
+          });
+          const doneRev = done && typeof done.rev === 'string' ? done.rev : bc.revOf(done);
+          console.log(`[behaviour] ${m[1]} ${b.decision === 'on' || b.decision === 'off' ? `turned ${b.decision}` : b.decision === 'snooze' ? 'snoozed for a week' : b.decision === 'reopen' ? 'put back to waiting' : 'notice seen'} by ${who || 'unknown'}`);
           if (m[1] === 'worker-proposals') {
             try { await require('./lib/behaviour-review').syncProposalsTask(); } catch (e) { console.warn('[behaviour] could not update the weekly team review:', e.message); }
           }
-          return jsonResponse(res, 200, { ok: true, change: bc.list().find((c) => c.id === m[1]) });
-        } catch (e) { return jsonResponse(res, 409, { ok: false, error: e && e.message ? e.message : String(e) }); }
+          return jsonResponse(res, 200, { ok: true, change: bc.list().find((c) => c.id === m[1]), rev: doneRev });
+        } catch (e) {
+          const msg = e && e.message ? e.message : String(e);
+          if (msg === 'already decided') return jsonResponse(res, 409, { ok: false, error: 'already decided' });
+          return jsonResponse(res, 409, { ok: false, error: msg });
+        }
       }
     }
     if (pathname === '/api/team/card/answer' && req.method === 'POST') {
@@ -853,7 +884,7 @@ async function handleHttpRequest(req, res) {
       // This person's look (Simple mode): the saved choice, else by role (a member starts in Simple, an admin in Advanced).
       out.uiMode = (u && u.uiMode) || (isAdmin ? 'advanced' : 'simple');
       out.theme = (u && u.theme) || 'auto';
-      { const rec = req.hubUser ? hubAuth.getUser(req.hubUser.id) : null; if (rec && rec.look) out.look = rec.look; }   // this person's default look (the pages call HubLooks.rememberDefault); absent for accounts made before looks existed
+      { const rec = req.hubUser ? hubAuth.getUser(req.hubUser.id) : null; if (rec && rec.look) out.look = rec.look; if (rec && rec.planBadge) out.planBadge = rec.planBadge; }   // this person's default look (the pages call HubLooks.rememberDefault); absent for accounts made before looks existed
       return jsonResponse(res, 200, out);
     }
     // This person's page mode and theme: { uiMode?: 'simple'|'advanced', theme?: 'light'|'dark'|'auto' }. A signed-in
@@ -862,9 +893,9 @@ async function handleHttpRequest(req, res) {
       if (!req.hubUser || req.hubService || req.hubToken || req.hubPendingTotp) return jsonResponse(res, 401, { error: 'Sign in first' });
       let body = {};
       try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'Bad request' }); }
-      const r = hubAuth.setPrefs(req.hubUser.id, { uiMode: body.uiMode, theme: body.theme });
+      const r = hubAuth.setPrefs(req.hubUser.id, { uiMode: body.uiMode, theme: body.theme, planBadge: body.planBadge });
       if (!r.ok) return jsonResponse(res, 400, { error: r.error });
-      return jsonResponse(res, 200, { ok: true, uiMode: r.user.uiMode || (access.isAdmin(req.hubUser) ? 'advanced' : 'simple'), theme: r.user.theme || 'auto' });
+      return jsonResponse(res, 200, { ok: true, uiMode: r.user.uiMode || (access.isAdmin(req.hubUser) ? 'advanced' : 'simple'), theme: r.user.theme || 'auto', planBadge: (hubAuth.getUser(req.hubUser.id) || {}).planBadge || null });
     }
     // This person's deep research choice (lib/research-prefs): ask | always | never, theirs only. on: the behaviour change
     // 'deep-research' is on. A signed-in person's own session ('owner' on an install with no accounts); never a token or the hub.
@@ -1327,7 +1358,7 @@ async function handleHttpRequest(req, res) {
     }
     if (pathname === '/api/ledger/today' && req.method === 'GET') {
       const l = getLedger();
-      return jsonResponse(res, 200, { ...l.today(), caps: l.caps(), credits: l.credits() });
+      return jsonResponse(res, 200, { ...l.today(), caps: l.caps(), credits: l.credits(), monthly: monthlyView(l) });
     }
     // Monthly API credit per provider (e.g. the API credit with a Claude Max plan): { provider, monthlyUsd, resetDay }.
     if (pathname === '/api/ledger/credits' && req.method === 'POST') {
@@ -1350,8 +1381,23 @@ async function handleHttpRequest(req, res) {
       let body = {};
       try { body = JSON.parse((await readBody(req)) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'invalid JSON' }); }
       const num = (v) => { if (v === null || v === undefined || v === '') return null; const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
-      hubSettings.updateSettings({ ledger: { perAgentDailyUsd: num(body.perAgentDailyUsd), hubDailyUsd: num(body.hubDailyUsd) } });
-      return jsonResponse(res, 200, { caps: getLedger().caps() });
+      // The monthly cap (settings.ledger.monthlyUsd / monthlyResetDay): sent together with the daily caps or on its own.
+      const hasMonthly = body.monthlyUsd !== undefined || body.monthlyResetDay !== undefined;
+      // A key that is not in the request leaves that stored cap as it is; only an explicit blank or 0 clears one.
+      const before = hubSettings.getSetting('ledger', {}) || {};
+      let monthly = { monthlyUsd: before.monthlyUsd ?? null, monthlyResetDay: before.monthlyResetDay ?? 1 };
+      if (hasMonthly) {
+        try { monthly = require('./lib/ledger').cleanMonthly({ monthlyUsd: body.monthlyUsd !== undefined ? body.monthlyUsd : monthly.monthlyUsd, monthlyResetDay: body.monthlyResetDay !== undefined ? body.monthlyResetDay : monthly.monthlyResetDay }); }
+        catch (e) { return jsonResponse(res, 400, { error: e.message }); }
+      }
+      hubSettings.updateSettings({ ledger: {
+        perAgentDailyUsd: body.perAgentDailyUsd !== undefined ? num(body.perAgentDailyUsd) : num(before.perAgentDailyUsd),
+        hubDailyUsd: body.hubDailyUsd !== undefined ? num(body.hubDailyUsd) : num(before.hubDailyUsd),
+        monthlyUsd: monthly.monthlyUsd, monthlyResetDay: monthly.monthlyResetDay } });
+      return jsonResponse(res, 200, { caps: getLedger().caps(), monthly: monthlyView(getLedger()) });
+    }
+    if (pathname === '/api/ledger/month' && req.method === 'GET') {
+      return jsonResponse(res, 200, monthlyView(getLedger()));
     }
     if (pathname === '/api/hub/pacing/reset' && req.method === 'POST') {
       let body = {};
@@ -1369,11 +1415,16 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/hub/halt' && req.method === 'POST') {
       let body = {};
       try { body = JSON.parse((await readBody(req)) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'invalid JSON' }); }
-      const r = haltHub(typeof body.reason === 'string' ? body.reason : null);
+      const r = haltHub(typeof body.reason === 'string' ? body.reason : null, { by: req.hubUser ? (req.hubUser.name || req.hubUser.login || req.hubUser.id) : null });
       return jsonResponse(res, 200, r);
     }
     if (pathname === '/api/hub/resume' && req.method === 'POST') {
       return jsonResponse(res, 200, resumeHub());
+    }
+    // What the last Stop all agents stopped, what is still finishing, what waits, what was kept (admins).
+    if (pathname === '/api/hub/stop-status' && req.method === 'GET') {
+      if (!access.isAdmin(req.hubUser || { role: 'admin' })) return jsonResponse(res, 403, { error: 'admin_only' });
+      return jsonResponse(res, 200, stopStatus());
     }
 
     if (pathname === '/api/agents/reload' && req.method === 'POST') {
@@ -1545,6 +1596,12 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/agents/rename' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
       const result = await renameAgent(body.oldName, body.newName);
+      if (result.success) {
+        // The agent card (open on the old name) listens for this and closes; the pages reload their lists. The event names only the OLD
+        // name (renamed:true, never the new one: a listener that could see the old agent must not learn the new name from it). The person
+        // who renamed reopens the card on the new name from the response of their own request.
+        try { require('./lib/hub-events').events.publish('agent_updated', { agent: String(body.oldName), oldName: String(body.oldName), renamed: true, changed: ['name'] }); } catch { /* events are best effort */ }
+      }
       return jsonResponse(res, result.success ? 200 : 400, result);
     }
 
@@ -1708,58 +1765,27 @@ async function handleHttpRequest(req, res) {
     if (/^\/api\/agents\/([^/]+)$/.test(pathname) && req.method === 'PATCH') {
       const name = decodeURIComponent(pathname.split('/')[3]);
       const body = JSON.parse(await readBody(req));
-      // A member may tune their own agent's conversation settings, never its permissions, folders, sandbox, tools,
-      // owner or sharing: those are admin decisions (member grants: Users page, Settings page, agent settings page).
-      // Call recordings are switched and shared by a signed-in admin only: never a member (not in MEMBER_EDITABLE below) and never the hub's own service calls (agents' tools).
-      // Only the owner (the earliest admin) does: who may download a family's recordings is not any admin's call.
+      // Who may change which field (recordings: the owner; envKeep and reportsTo: a signed-in admin; the command lockbox: an admin's own browser
+      // session; a member only their own conversation settings, never permissions, folders, sandbox, tools, owner or sharing) lives in
+      // lib/settings-apply agentFieldAllowed: the lead's settings tool is held to the same guards. The value check stays in updateAgentField.
       const recordingsChange = !!body && typeof body === 'object' && 'recordings' in body;
-      if (recordingsChange && (req.hubService || req.hubToken || !req.hubUser || !hubAuth.isOwner(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'only the owner can change: recordings' });
-      // Which environment variables an agent's commands keep is a signed-in admin's call: never a member, and never the hub's own service calls (an agent could widen itself).
-      if (body && typeof body === 'object' && 'envKeep' in body && (req.hubService || req.hubToken || !req.hubUser || !access.isAdmin(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'only an admin can change: envKeep' });
-      // Who an agent reports to is an admin's call (or the lead's team tool): never the hub's own service calls (an agent's tools).
-      if (body && typeof body === 'object' && 'reportsTo' in body && (req.hubService || req.hubToken || !req.hubUser || !access.isAdmin(req.hubUser) || req.hubPendingTotp)) return jsonResponse(res, 403, { error: 'reportsTo is set by an admin or through the team tool' });
-      // The command lockbox changes what an agent's commands may touch: a signed-in admin's own browser session only (never a member, a token, the hub's own service or an agent).
-      if (!!body && typeof body === 'object' && ('lockbox' in body || 'lockboxEnv' in body) && !require('./lib/lockbox/settings').isAdminSession(req)) return jsonResponse(res, 403, { error: 'Sign in with an admin account in your browser to change the command lockbox.' });
+      const settingsApply = require('./lib/settings-apply');
+      const allowed = settingsApply.agentFieldAllowed(body, { service: !!req.hubService, token: !!req.hubToken, user: req.hubUser, isAdmin: access.isAdmin(req.hubUser),
+        isOwner: !!req.hubUser && hubAuth.isOwner(req.hubUser), pendingTotp: !!req.hubPendingTotp, ownSession: require('./lib/lockbox/settings').isAdminSession(req) });
+      if (!allowed.ok) return jsonResponse(res, allowed.status, { error: allowed.error });
       const recSettings = require('./lib/recordings/settings');
       const allowedBefore = recordingsChange ? recSettings.recordingsOf((await getAgents()).find(a => a.name === name)).allowed : [];
-      if (!req.hubService && !access.isAdmin(req.hubUser)) {
-        const MEMBER_EDITABLE = new Set(['blurb', 'maxContextMessages', 'maxOutputTokens', 'contextBudget', 'compaction', 'minimalContext']);
-        const refused = Object.keys(body || {}).filter(k => !MEMBER_EDITABLE.has(k));
-        if (refused.length) return jsonResponse(res, 403, { error: `only an admin can change: ${refused.join(', ')}` });
-      }
       const { updateAgentField } = require('./lib/agents');
       // Voice: a cloud engine for an agent kept on this computer needs the owner (the earliest admin), not just any admin.
-      const result = await updateAgentField(name, body, { isOwner: !req.hubService && !!req.hubUser && hubAuth.isOwner(req.hubUser), userId: req.hubUser ? String(req.hubUser.id) : '',
-        // Changes to the call-recordings setting are audited (agent.recordings): who, which agent, keep on/off, the allowed ids, the mic.
-        audit: (action, detail) => hubAuth.audit(req.hubUser ? String(req.hubUser.id) : null, action, detail, hubAuth.clientIp(req)),
-        // A lockbox change is told to the admins in plain words (a security notice), like the admin 2-factor rule.
-        userName: req.hubUser ? String(req.hubUser.name || req.hubUser.login || req.hubUser.id || '') : '',
-        notifyAdmins: (text) => require('./lib/push').getPush().notify({ title: 'Command lockbox changed', body: text, tag: 'lockbox-change' }, { adminsOnly: true, kind: 'security' }),
-        // Reporting lines cleared because the team no longer fits are a team notice, not a security one (own title and tag).
-        notifyTeam: (text) => require('./lib/push').getPush().notify({ title: 'Team changed', body: text, tag: 'team-change' }, { adminsOnly: true, kind: 'other' }) });
-      if (!result.success && result.status) return jsonResponse(res, result.status, { error: result.error });
-      // Handing a head agent to a member: it introduces itself in its (still empty) chat.
-      if (result.success && body && body.owner) { const u = hubAuth.getUser(String(body.owner)); if (u && u.role === 'member') require('./lib/teams').greetIfFresh(name, u).catch(() => {}); }
-      // A change of who may download this agent's recordings is told to everybody on the old and the new list.
-      if (result.success && recordingsChange) {
-        try {
-          const rec = (await getAgents()).find(a => a.name === name);
-          const allowedAfter = recSettings.recordingsOf(rec).allowed;
-          if (allowedBefore.length !== allowedAfter.length || allowedBefore.some(id => !allowedAfter.includes(id))) {
-            await require('./lib/push').getPush().notifyUsers({
-              title: 'Recording access changed',
-              body: `${(rec && rec.display) || name}: the list of people who can download its recordings was changed.`,
-              tag: `rec-access-${name}`,
-            }, [...new Set([...allowedBefore, ...allowedAfter])], { kind: 'security' });
-          }
-        } catch {}
-      }
+      // The audit line (recordings) and the lockbox and team notices are built in lib/settings-apply agentWriteContext.
+      const result = await updateAgentField(name, body, settingsApply.agentWriteContext({ isOwner: !req.hubService && !!req.hubUser && hubAuth.isOwner(req.hubUser), user: req.hubUser, ip: hubAuth.clientIp(req) }));
+      if (!result.success && result.status) return jsonResponse(res, result.status, result.status === 409 ? { ok: false, error: result.error } : { error: result.error });
+      // The steps after a saved change are one shared function (lib/settings-apply afterAgentChange), also run by the lead's tool and by Restore:
+      // a head agent handed to a member introduces itself; a change of who may download the recordings is told to the old and the new list;
+      // folders, sandbox mode or hands changed: the container is rebuilt on the agent's next turn (removed when the sandbox was switched off).
+      // Open pages are told here (publishAgentUpdate, just below).
+      if (result.success) await settingsApply.afterAgentChange(name, body, { allowedBefore: recordingsChange ? allowedBefore : null, publish: false });
       if (result.success) await publishAgentUpdate(name, Object.keys(body || {}));
-      // Folders, sandbox mode or hands changed: the container is rebuilt with the new mounts on the agent's next turn
-      // (and removed when the sandbox was switched off). The session volume stays.
-      if (result.success && body && ['policy', 'sandbox', 'tools'].some(k => k in body)) {
-        try { const rec = (await getAgents()).find(a => a.name === name); if (rec) require('./lib/sandbox').getSandbox().remove(rec).catch(() => {}); } catch {}
-      }
       return jsonResponse(res, result.success ? 200 : 400, result);
     }
 
@@ -1875,6 +1901,7 @@ async function handleHttpRequest(req, res) {
     // Operator interjection - inject a message into a running agent turn
     if (pathname === '/api/chat/interject' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
+      if (req.hubToken) require('./lib/sdk-chat').__settingsTool.noteTokenInterjection(body && body.agent);   // a program's token is text from outside: the running turn can no longer change settings at once
       const result = handleInterjection(body);
       return jsonResponse(res, result.success ? 200 : 400, result);
     }
@@ -1890,12 +1917,10 @@ async function handleHttpRequest(req, res) {
     // Global max_completion_tokens setting
     if (pathname === '/api/max_completion_tokens' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
-      const val = parseInt(body.value, 10);
-      if (!val || val < 256 || val > 128000) {
-        return jsonResponse(res, 400, { error: 'value must be between 256 and 128000' });
+      const set = require('./lib/settings-apply').setGlobalSetting('maxCompletionTokens', body.value);   // checks the value, sets the global, saves only this key
+      if (!set.ok) {
+        return jsonResponse(res, 400, { error: set.error });
       }
-      global.__maxCompletionTokens = val;
-      saveSettings();
       return jsonResponse(res, 200, { value: global.__maxCompletionTokens });
     }
     if (pathname === '/api/max_completion_tokens' && req.method === 'GET') {
@@ -2096,6 +2121,13 @@ async function handleHttpRequest(req, res) {
       if (id) { try { return jsonResponse(res, 200, runner.status(id, null, { tailLines: Number(params.get('tail') || 40) })); } catch (e) { return jsonResponse(res, 404, { error: e.message }); } }
       return jsonResponse(res, 200, { mode: runner.mode(), jobs: runner.list(null) });
     }
+    // An admin marks a job "keep running when all agents are stopped" (or clears it).
+    if (pathname === '/api/jobs/keep' && req.method === 'POST') {
+      if (!access.isAdmin(req.hubUser || { role: 'admin' })) return jsonResponse(res, 403, { error: 'admin_only' });
+      let body = {};
+      try { body = JSON.parse((await readBody(req)) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'invalid JSON' }); }
+      try { return jsonResponse(res, 200, getJobRunner().setKeep(body.id, body.keep === true)); } catch (e) { return jsonResponse(res, 404, { error: e.message }); }
+    }
     if (pathname === '/api/jobs/cancel' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
       try { return jsonResponse(res, 200, getJobRunner().cancel(body.id, null)); } catch (e) { return jsonResponse(res, 404, { error: e.message }); }
@@ -2145,12 +2177,10 @@ async function handleHttpRequest(req, res) {
     // Context messages setting
     if (pathname === '/api/max_context_messages' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
-      const val = parseInt(body.value, 10);
-      if (!val || val < 5 || val > 200) {
-        return jsonResponse(res, 400, { error: 'value must be between 5 and 200' });
+      const set = require('./lib/settings-apply').setGlobalSetting('maxContextMessages', body.value);
+      if (!set.ok) {
+        return jsonResponse(res, 400, { error: set.error });
       }
-      global.__maxContextMessages = val;
-      saveSettings();
       return jsonResponse(res, 200, { value: global.__maxContextMessages });
     }
     if (pathname === '/api/max_context_messages' && req.method === 'GET') {
@@ -2160,8 +2190,7 @@ async function handleHttpRequest(req, res) {
     // Caveman mode toggle — ultra-terse responses
     if (pathname === '/api/caveman_mode' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
-      global.__cavemanMode = !!body.enabled;
-      saveSettings();
+      require('./lib/settings-apply').setGlobalSetting('cavemanMode', body.enabled);
       return jsonResponse(res, 200, { enabled: global.__cavemanMode });
     }
     if (pathname === '/api/caveman_mode' && req.method === 'GET') {
@@ -2171,8 +2200,7 @@ async function handleHttpRequest(req, res) {
     // Pre-scan toggle — use cheap model to filter tools per prompt
     if (pathname === '/api/prescan_tools' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
-      global.__prescanToolsEnabled = !!body.enabled;
-      saveSettings();
+      require('./lib/settings-apply').setGlobalSetting('prescanTools', body.enabled);
       return jsonResponse(res, 200, { enabled: global.__prescanToolsEnabled });
     }
     if (pathname === '/api/prescan_tools' && req.method === 'GET') {
@@ -2182,8 +2210,7 @@ async function handleHttpRequest(req, res) {
     // Global confirm-tools toggle — frontend can update mid-stream
     if (pathname === '/api/confirm_tools_toggle' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
-      global.__confirmToolsEnabled = !!body.enabled;
-      saveSettings();
+      require('./lib/settings-apply').setGlobalSetting('confirmTools', body.enabled);
       return jsonResponse(res, 200, { enabled: global.__confirmToolsEnabled });
     }
     if (pathname === '/api/confirm_tools_toggle' && req.method === 'GET') {
@@ -2193,8 +2220,7 @@ async function handleHttpRequest(req, res) {
     // Lazy tools toggle
     if (pathname === '/api/lazy_tools' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
-      global.__lazyToolsEnabled = !!body.enabled;
-      saveSettings();
+      require('./lib/settings-apply').setGlobalSetting('lazyTools', body.enabled);
       return jsonResponse(res, 200, { enabled: global.__lazyToolsEnabled });
     }
     if (pathname === '/api/lazy_tools' && req.method === 'GET') {
@@ -2662,7 +2688,7 @@ async function handleHttpRequest(req, res) {
       const allAgents = await getAgents();
       const isAdmin = access.isAdmin(req.hubUser);
       const visible = (name) => isAdmin || access.canAccessAgent(req.hubUser, name, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) });
-      return require('./lib/hub-events').events.subscribe(req, res, { isAdmin, visibleAgent: visible, redact: isAdmin ? null : (ev) => access.redactTeamTurn(ev), statusView: (m) => isAdmin ? m : access.statusForViewer(req.hubUser, m, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) }), filter: (ev) => ev.type === 'background' ? require('./lib/background-work').backgroundEventVisible(req.hubUser, ev, { agents: require('./lib/agents').getAgentsSync(), resolveVirtual: (n) => temporalWorkersLib.getVirtual(n), access }) : visible(ev.agent) });
+      return require('./lib/hub-events').events.subscribe(req, res, { isAdmin, visibleAgent: visible, redact: isAdmin ? null : (ev) => access.redactTeamTurn(ev), statusView: (m) => isAdmin ? m : access.statusForViewer(req.hubUser, m, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) }), filter: (ev) => ev.type === 'background' ? require('./lib/background-work').backgroundEventVisible(req.hubUser, ev, { agents: require('./lib/agents').getAgentsSync(), resolveVirtual: (n) => temporalWorkersLib.getVirtual(n), access }) : visible(ev.agent), eventFilter: (ev) => require('./lib/sdk-chat').researchEventVisible(ev, req.hubUser, isAdmin) });
     }
 
     // ── Worker Routes ───────────────────────────────────────────────
@@ -2710,6 +2736,38 @@ async function handleHttpRequest(req, res) {
       let runs = [];
       try { const fn = require('./lib/sdk-chat').researchStatusFor; if (typeof fn === 'function') runs = fn(name); } catch { runs = []; }
       return jsonResponse(res, 200, { runs: Array.isArray(runs) ? runs : [] });
+    }
+    // Stop a deep research run, or make an agent-started quick run thorough (lib/sdk-chat researchStop / researchUpgrade). Signed-in
+    // by a person (the hub's own service calls are refused: 403); a run that does not exist and a run on an agent the person may
+    // not use both answer the same 404. { ok, run } / { ok, run, newId }.
+    if ((pathname === '/api/research/stop' || pathname === '/api/research/upgrade') && req.method === 'POST') {
+      if (req.hubPendingTotp) return jsonResponse(res, 401, { error: 'Sign in first' });
+      if (!req.hubUser) return jsonResponse(res, 403, { error: 'Sign in first.' });
+      let body = {};
+      try { body = JSON.parse(await readBody(req) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'Bad request' }); }
+      const id = typeof body.id === 'string' ? body.id.trim() : '';
+      if (!/^dr-[0-9a-f]{8}$/.test(id)) return jsonResponse(res, 400, { error: 'id must be the id of a research run' });
+      const sdkChat = require('./lib/sdk-chat');
+      const runAgent = sdkChat.researchRunAgent(id);
+      if (!runAgent) return jsonResponse(res, 404, { error: 'No such research run.' });
+      const allAgents = await getAgents();
+      if (!access.isAdmin(req.hubUser) && !access.canAccessAgent(req.hubUser, runAgent, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) })) return jsonResponse(res, 404, { error: 'No such research run.' });
+      const by = req.hubUser.id != null ? String(req.hubUser.id).slice(0, 64) : 'person';
+      const out = pathname === '/api/research/stop' ? sdkChat.researchStop(id, by) : sdkChat.researchUpgrade(id, by);
+      if (!out.ok) return jsonResponse(res, out.status === 404 ? 404 : out.status === 409 ? 409 : 500, { error: out.error });
+      return jsonResponse(res, 200, pathname === '/api/research/stop' ? { ok: true, run: out.run } : { ok: true, run: out.run, newId: out.newId });
+    }
+    // The daily limits on runs agents start without a person's yes, and today's count (admin only: the default class of this path).
+    if (pathname === '/api/research/caps' && req.method === 'GET') {
+      const sdkChat = require('./lib/sdk-chat');
+      let out;
+      try { out = sdkChat.researchCapsToday(); } catch {
+        // the day's count can't be read: say so, never zeros
+        let caps = { perAgent: 3, install: 10 };
+        try { caps = sdkChat.researchAgentCaps(); } catch { /* the defaults */ }
+        out = { caps, today: null, error: 'Could not read today\'s count.' };
+      }
+      return jsonResponse(res, 200, out);
     }
 
     // ── Session/History Routes ──────────────────────────────────────
@@ -2966,6 +3024,47 @@ async function handleHttpRequest(req, res) {
       return jsonResponse(res, 200, s);
     }
 
+    // The settings records (templates/settings-records.json): every option's help and who may change it. Signed-in people;
+    // members get only the records a member may see, and never the facts note or storage key (lib/settings-records).
+    if (pathname === '/api/settings-records' && req.method === 'GET') {
+      const isAdmin = access.isAdmin(req.hubUser) || !hubAuth.hasUsers();   // a hub without accounts has one person: the owner
+      try { return jsonResponse(res, 200, require('./lib/settings-records').routeBody(req.hubUser || null, { isAdmin })); }
+      catch (e) { console.warn('[settings-records]', e.message); return jsonResponse(res, 500, { error: 'settings records unavailable' }); }
+    }
+
+    // The settings journal (lib/settings-journal): every change to settings, agents and preferences, newest first. Admins see all of it;
+    // a member sees only their own preferences and the agents they own. Secrets are never in it (a key shows as set / replaced / removed).
+    if (pathname === '/api/settings-journal' && req.method === 'GET') {
+      const sj = require('./lib/settings-journal');
+      const isAdmin = access.isAdmin(req.hubUser) || !hubAuth.hasUsers();
+      const me = req.hubUser && req.hubUser.id;
+      if (!isAdmin && !me) return jsonResponse(res, 403, { error: 'admin_only' });
+      const q = new URL(req.url, 'http://x').searchParams;
+      // ?by=lead&since=<ms>: only what the lead's settings tool changed (who.kind "lead"), at or after since: the chat's change strip.
+      const byLead = q.get('by') === 'lead';
+      const since = /^\d{1,16}$/.test(q.get('since') || '') ? Number(q.get('since')) : 0;
+      const filter = byLead || since ? ((e) => (!byLead || (e.who && e.who.kind === 'lead')) && e.at >= since) : null;
+      const allAgents = require('./lib/agents').getAgentsSync();
+      const raw = sj.listFor({ user: me || null, isAdmin, agents: isAdmin ? [] : allAgents, limit: q.get('limit') || 50, before: q.get('before') || null, filter });
+      // Each entry as the pages show it: name (the record's name or the key), agentName (display name), before and after as display text
+      // (secrets masked), undoUntil (at + 24 h), putBack (a later restore undid it).
+      const put = sj.restoredIds(raw.length ? raw[raw.length - 1].at : 0);
+      const entries = raw.map((e) => ({ ...sj.viewEntry(e, allAgents), putBack: put.has(e.id) }));
+      return jsonResponse(res, 200, { ok: true, entries, next: raw.length ? raw[raw.length - 1].id : null });
+    }
+    // Put one value back: an admin (any entry that still holds its new value; a change that touches a protection only from the admin's
+    // own browser session), or a member for their own preferences and for everyday settings of agents they own.
+    {
+      const rm = pathname.match(/^\/api\/settings-journal\/(sj-[0-9a-f]{10})\/restore$/);
+      if (rm && req.method === 'POST') {
+        const sj = require('./lib/settings-journal');
+        const isAdmin = access.isAdmin(req.hubUser) || (!hubAuth.hasUsers() && !req.hubToken);
+        const me = req.hubUser && req.hubUser.id;
+        const r = sj.restoreFor(rm[1], { user: me || null, isAdmin, isAdminSession: access.isAdminSession(req), isOwner: !!(req.hubUser && !req.hubService && !req.hubPendingTotp && hubAuth.isOwner(req.hubUser)), agents: isAdmin ? [] : require('./lib/agents').getAgentsSync() });
+        return jsonResponse(res, r.ok ? 200 : (r.status || 400), r);
+      }
+    }
+
     // "Require two-factor sign-in for admins": a signed-in admin's own browser session only (no token, no service, no half-signed-in session).
     if (pathname === '/api/security/admin-2fa' && req.method === 'POST') {
       if (!(req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser))) return jsonResponse(res, 403, { error: 'admin_only' });
@@ -2980,108 +3079,18 @@ async function handleHttpRequest(req, res) {
       req.on('end', () => {
         try {
           const patch = JSON.parse(body, (k, v) => (k === '__proto__' || k === 'constructor' || k === 'prototype') ? undefined : v);   // never a key that reaches a prototype
-          // The wallet-agent list is not a UI setting: widening it hands signing tools to another agent. Owner edits data/settings.json by hand.
-          // Backups (key, folders) change only through /api/backups/*, which asks for the password and two-factor code again.
-          if (patch && typeof patch === 'object' && 'backup' in patch) { console.warn('[settings] ignored backup in /api/settings patch (use Settings → Backups)'); delete patch.backup; }
-          if (patch && typeof patch === 'object' && 'walletAgents' in patch) { console.warn('[settings] ignored walletAgents in /api/settings patch (edit data/settings.json directly)'); delete patch.walletAgents; }
-          // The owner's receiving address decides where wallet value may go: not a UI setting either (review F10). HUB_WALLET_OWNER in .env, or data/settings.json by hand.
-          if (patch && typeof patch === 'object' && 'walletOwner' in patch) { console.warn('[settings] ignored walletOwner in /api/settings patch (set HUB_WALLET_OWNER or edit data/settings.json directly)'); delete patch.walletOwner; }
-          // The admin two-factor rule changes only through /api/security/admin-2fa, which asks for the password (and code) again.
-          if (patch && typeof patch === 'object' && 'requireAdmin2fa' in patch) { console.warn('[settings] ignored requireAdmin2fa in /api/settings patch (use Settings → Security)'); delete patch.requireAdmin2fa; }
-          // receiverAliases makes paths public (lib/modules/receivers): set only by hand in data/settings.json.
-          if (patch && typeof patch === 'object' && 'receiverAliases' in patch) { console.warn('[settings] ignored receiverAliases in /api/settings patch (edit data/settings.json directly)'); delete patch.receiverAliases; }
-          // The command lockbox hub default (off | watch | enforce): a signed-in admin's own browser session only; a change is audited and told to the admins.
-          const lockboxCheck = require('./lib/lockbox/settings').checkDefaultPatch(patch, req, (k) => hubSettings.getSetting(k));
-          if (!lockboxCheck.ok) return jsonResponse(res, lockboxCheck.status, { error: lockboxCheck.error });
-          const lockboxChange = lockboxCheck.change;
-          // Hub default for every member agent: grantable classes and valid decisions only (lib/tool-policy).
-          if (patch && patch.memberPolicy !== undefined) patch.memberPolicy = require('./lib/tool-policy').sanitizeGrants({ policy: patch.memberPolicy }).policy || {};
-          // Per-class approval cards: known class names only (lib/policy-gate APPROVAL_CLASSES).
-          if (patch && patch.approvalClasses !== undefined) { const ok = require('./lib/policy-gate').APPROVAL_CLASSES; patch.approvalClasses = Array.isArray(patch.approvalClasses) ? [...new Set(patch.approvalClasses.map(String).filter(c => ok.includes(c)))] : []; }
-          // The look a new member starts with: one of the registry's ids (lib/ui-looks); anything else is refused.
-          if (patch && typeof patch === 'object' && patch.lookDefaultForNewMembers !== undefined && !require('./lib/ui-looks').byId(patch.lookDefaultForNewMembers)) return jsonResponse(res, 400, { error: 'lookDefaultForNewMembers must be one of: ' + require('./lib/ui-looks').LOOKS.map(l => l.id).join(', ') });
-          // Claude plan: warning levels, and the optional automatic switch (merged onto the stored policy, so its map survives).
-          if (patch && patch.planWarn !== undefined) patch.planWarn = require('./lib/plan-usage').cleanWarn(patch.planWarn);
-          if (patch && patch.notify !== undefined) patch.notify = require('./lib/push').cleanNotifySettings(patch.notify);
-          if (patch && patch.openrouter !== undefined) patch.openrouter = require('./lib/openrouter').cleanOpenRouterSettings(patch.openrouter);
-          if (patch && patch.planFallback !== undefined) patch.planFallback = require('./lib/plan-usage').cleanPolicy(patch.planFallback, hubSettings.getSetting('planFallback'));
-          // The reasoning panel (lib/sdk-chat showReasoning): on unless turned off.
-          // Share links: enabled, defaultHours, maxHours (hard maximum 168), merged onto the stored value (lib/share-links cleanSettings).
-          if (patch && patch.shareLinks !== undefined) patch.shareLinks = require('./lib/share-links').cleanSettings(patch.shareLinks, hubSettings.getSetting('shareLinks'));
-          if (patch && patch.showReasoning !== undefined) patch.showReasoning = patch.showReasoning !== false;
-          if (patch && patch.modelOffers !== undefined) patch.modelOffers = patch.modelOffers !== false;
-          // Deep research (lib/research): how often a person who chose Never is reminded that it is off, in days 0..365 (0 = never).
-          if (patch && patch.researchReminderDays !== undefined) {
-            const d = Number(patch.researchReminderDays);
-            if (!Number.isInteger(d) || d < 0 || d > 365) return jsonResponse(res, 400, { error: 'researchReminderDays must be a whole number of days from 0 to 365' });
-            patch.researchReminderDays = d;
-          }
-          // Thorough deep research caps (admin): known fields only, each in its range (lib/research-thorough); merged onto the stored value.
-          if (patch && patch.researchThorough !== undefined) {
-            const v = patch.researchThorough;
-            if (!v || typeof v !== 'object' || Array.isArray(v)) return jsonResponse(res, 400, { error: 'researchThorough must be an object' });
-            const ranges = { maxSources: [1, 40], readersAtOnce: [1, 12], reviewRounds: [0, 5], timeLimitMinutes: [10, 240],
-              leadSteps: [5, 300], leadWallMinutes: [10, 1440], leadReaderCalls: [1, 400], leadReviewRounds: [0, 50], leadTopicSearches: [0, 20], leadSourcesPerSub: [0, 20], leadTopNewPerSub: [0, 10], leadPdfMaxMB: [4, 64], leadReaderTextMax: [20000, 2000000], leadReaderTopTextMax: [20000, 2000000] };
-            const modelKeys = ['leadModel', 'leadReaderModel', 'leadReaderTopModel'];
-            const known = [...Object.keys(ranges), 'pdf', 'readerModel', 'engine', ...modelKeys];
-            const merged = { ...(hubSettings.getSetting('researchThorough') || {}) };
-            for (const [k, val] of Object.entries(v)) {
-              if (!known.includes(k)) return jsonResponse(res, 400, { error: `researchThorough.${k} is not a setting` });
-              if (ranges[k]) {
-                const [lo, hi] = ranges[k];
-                const n = typeof val === 'string' && /^\s*-?\d+\s*$/.test(val) ? Number(val) : val;
-                if (typeof n !== 'number' || !Number.isInteger(n) || n < lo || n > hi) return jsonResponse(res, 400, { error: `researchThorough.${k} must be a whole number from ${lo} to ${hi}` });
-                merged[k] = n;
-              } else if (k === 'pdf') {
-                if (typeof val !== 'boolean') return jsonResponse(res, 400, { error: 'researchThorough.pdf must be true or false' });
-                merged[k] = val;
-              } else if (k === 'engine') {
-                if (val !== 'lead' && val !== 'pipeline') return jsonResponse(res, 400, { error: "researchThorough.engine must be 'lead' or 'pipeline'" });
-                merged[k] = val;
-              } else if (modelKeys.includes(k)) {
-                if (typeof val !== 'string' || !(val === 'auto' || (val.length >= 1 && val.length <= 120 && /^[A-Za-z0-9._:/@[\]-]+$/.test(val)))) return jsonResponse(res, 400, { error: `researchThorough.${k} must be 'auto' or a model id` });
-                merged[k] = val;
-              } else {
-                if (val !== 'own' && val !== 'helper') return jsonResponse(res, 400, { error: "researchThorough.readerModel must be 'own' or 'helper'" });
-                merged[k] = val;
-              }
-            }
-            patch.researchThorough = merged;
-          }
-          // Which search the research helpers use: their usual one (default) or also the hub's (a test option).
-          if (patch && patch.researchHelperSearch !== undefined && patch.researchHelperSearch !== 'default' && patch.researchHelperSearch !== 'both') return jsonResponse(res, 400, { error: "researchHelperSearch must be 'default' or 'both'" });
-          // Subscription usage (lib/codex-usage, Settings → Subscriptions): on unless turned off.
-          if (patch && patch.subscriptionUsage !== undefined) patch.subscriptionUsage = patch.subscriptionUsage !== false;
-          if (patch && patch.componentUpdates !== undefined) patch.componentUpdates = { codex: ['auto', 'notify', 'off'].includes(patch.componentUpdates && patch.componentUpdates.codex) ? patch.componentUpdates.codex : 'auto' };
-          if (patch && patch.walletLockedNotice !== undefined) patch.walletLockedNotice = patch.walletLockedNotice !== false;
-          // Workers allowed at once per AI service: integers 1..32 only (lib/provider-pacing); applied to the running hub below.
-          if (patch && patch.workersAtOnce !== undefined) patch.workersAtOnce = require('./lib/provider-pacing').cleanWorkersAtOnce(patch.workersAtOnce);
-          // Long waits on workers (lib/long-waits): minutes 0..240 (0 = off, junk = the default 10); the lead notice is on unless false.
-          if (patch && patch.handOffWaitMinutes !== undefined) patch.handOffWaitMinutes = require('./lib/long-waits').cleanMinutes(patch.handOffWaitMinutes);
-          if (patch && patch.buildPartnerNotice !== undefined) patch.buildPartnerNotice = patch.buildPartnerNotice !== false;
-          // Sidebar sections that are off until switched on: true only for a real true.
-          if (patch && patch.sidebarTigerTeam !== undefined) patch.sidebarTigerTeam = patch.sidebarTigerTeam === true;
-          if (patch && patch.sidebarGuide !== undefined) patch.sidebarGuide = patch.sidebarGuide === true;
-          if (patch && patch.sidebarTeams !== undefined) patch.sidebarTeams = patch.sidebarTeams !== false;   // the Teams tab is on unless switched off
-          // Voice: known keys only, merged onto the stored value (lib/voice/manifest cleanVoiceSettings). "enabled" changes
-          // only through /api/voice/enable and /disable, which also install the engines and stop or resume the worker.
-          if (patch && patch.voice !== undefined) {
-            const storedVoice = hubSettings.getSetting('voice');
-            // updateSettings replaces the whole voice object, so an unset switch must stay absent from it (cleanVoicePatch).
-            patch.voice = require('./lib/voice/manifest').cleanVoicePatch(patch.voice, storedVoice);
-          }
+          // The guards and per-key cleaners of this route live in lib/settings-apply (cleanSettingsPatch): the lead's settings tool uses the same ones.
+          const cleaned = require('./lib/settings-apply').cleanSettingsPatch(patch, { ownSession: access.isAdminSession(req), who: req.hubUser ? (req.hubUser.name || req.hubUser.login || req.hubUser.id) : '', getSetting: (k) => hubSettings.getSetting(k) });
+          if (cleaned.errors.length) return jsonResponse(res, cleaned.status, { error: cleaned.errors[0] });
+          const lockboxChange = cleaned.lockboxChange;
           const providersChanged = !!(patch && patch.providers);
           hubSettings.updateSettings(patch);
           if (lockboxChange) {
             try { hubAuth.audit(String(req.hubUser.id), 'settings.lockboxDefault', lockboxChange, hubAuth.clientIp(req)); } catch {}
             try { Promise.resolve(require('./lib/push').getPush().notify({ title: 'Command lockbox changed', body: lockboxChange, tag: 'lockbox-change' }, { adminsOnly: true, kind: 'security' })).catch(() => {}); } catch {}
           }
-          if (patch && patch.workersAtOnce !== undefined) getPacing().setCaps(hubSettings.getSetting('workersAtOnce'));
-          // A new key or URL changes which models exist — rediscover now
-          // rather than waiting for the 6-hour cycle.
-          if (providersChanged) {
-            runDiscovery({ again: true }).catch(e => console.error('[settings] Rediscovery failed:', e.message));
-          }
+          // The new worker caps reach the running hub; a new key or URL changes which models exist, so rediscover now rather than waiting for the 6-hour cycle.
+          require('./lib/settings-apply').afterSettingsWrite(patch, { providersChanged, getPacing, runDiscovery });
           return jsonResponse(res, 200, { ok: true });
         } catch (e) {
           return jsonResponse(res, 400, { error: e.message });
@@ -3139,6 +3148,8 @@ async function handleHttpRequest(req, res) {
           }
 
           if (provider === 'perplexity') {
+            const capText = require('./lib/spend-gate').refusal({ provider: 'perplexity', model: 'perplexity/sonar' });   // monthly spending cap: this test sends a paid request
+            if (capText) return jsonResponse(res, 200, { ok: false, error: capText });
             const r = await fetch('https://api.perplexity.ai/chat/completions', {
               method: 'POST',
               headers: { 'Authorization': `Bearer ${testKey}`, 'Content-Type': 'application/json' },
@@ -3188,7 +3199,7 @@ async function handleHttpRequest(req, res) {
       try {
         // { channel: 'stable' | 'experimental' } switches branches first (the Update dialog asks every time).
         let body = {}; try { body = JSON.parse((await readBody(req)) || '{}') || {}; } catch {}
-        return jsonResponse(res, 200, await runUpdate({ channel: body && body.channel ? String(body.channel) : null }));
+        return jsonResponse(res, 200, await require('./lib/settings-journal').withActor({ kind: 'update', user: req.hubUser && req.hubUser.id, why: 'hub update' }, () => runUpdate({ channel: body && body.channel ? String(body.channel) : null })));   // anything the update writes to settings is journaled as "update"
       } catch (e) {
         return jsonResponse(res, 500, { success: false, error: e.message });
       }
@@ -3199,7 +3210,7 @@ async function handleHttpRequest(req, res) {
       const { runPutAsideUpdate } = require('./lib/git-sync');
       try {
         let body = {}; try { body = JSON.parse((await readBody(req)) || '{}') || {}; } catch {}
-        return jsonResponse(res, 200, await runPutAsideUpdate({ channel: body && body.channel ? String(body.channel) : null }));
+        return jsonResponse(res, 200, await require('./lib/settings-journal').withActor({ kind: 'update', user: req.hubUser && req.hubUser.id, why: 'hub update' }, () => runPutAsideUpdate({ channel: body && body.channel ? String(body.channel) : null })));
       } catch (e) {
         return jsonResponse(res, 500, { success: false, error: e.message });
       }
@@ -4130,6 +4141,22 @@ server.listen(PORT, HOST, () => {
   // Only now: this process holds the port, so no older hub on it is still writing; and first, before any turn can
   // write (lib/transcript splitCombined; the old file is kept as transcript.db.pre-split).
   try { require('./lib/transcript').getTranscript().migrate(); } catch (e) { console.error('[transcript] split not run:', e.message); }
+  // Once a minute: a stamp watch of the protected files that have no per-key change journal (accounts, connectors, modules, local models,
+  // research / voice / push preferences, behaviour reviews, wallet files). A change the hub did not make is journaled as an outside edit
+  // (file level, no values) and told to the admins in the batched notice (lib/settings-journal startWatch). The hub's own writes stay quiet.
+  try {
+    const sjw = require('./lib/settings-journal');
+    const dataW = path.join(__dirname, 'data');
+    // An account folder moved with HUB_AUTH_DIR (a relative value as lib/auth reads it) holds users.json and the wallet files: the watch
+    // covers it too, once: the same folder by two paths (a link) is watched one time. Its entries go to the install's journal.
+    // An unreadable .env makes the account folder unknown: the hub still watches data/ and says why (it read its own .env at start).
+    let authW = null;
+    try { authW = require('./lib/auth').resolveAuthDir(); } catch (e) { console.warn('[settings-journal] not watching the account folder:', e.message); }
+    sjw.startWatches(authW ? [dataW, authW] : [dataW]);
+  } catch (e) { console.error('[settings-journal] file watch not started:', e.message); }
+  // A change whose file was written but whose commit line was not (a crash, a full disk) is still pending in the journal: it gets its commit
+  // line when the live value is the entry's "after", else a failed line (lib/settings-journal reconcile).
+  try { require('./lib/settings-journal').reconcile(); } catch (e) { console.error('[settings-journal] pending entries not reconciled:', e.message); }
   // A hub restart during the voice download leaves the setting on and nothing installing: pick the install up again.
   setTimeout(() => { try { if (process.env.NODE_TEST_CONTEXT || process.env.MM_TEST_NO_REAL_CLAUDE === '1' || process.env.MM_VOICE_NO_AUTO_INSTALL === '1') return; require('./lib/voice/routes').resumeIfNeeded({ getSetting: hubSettings.getSetting, log: (m) => console.log(m) }); } catch (e) { console.error('[voice] resume:', e.message); } }, 10000).unref();
   // Voice is on by default: about 20 s after the start, fetch the speech engines when they are missing (never under tests; never when voice was turned off).
@@ -4163,16 +4190,18 @@ server.listen(PORT, HOST, () => {
   // here, once this process owns the port, so a second copy started on the same data never gets this far; it is
   // synchronous, so no request is handled before it finishes.
   try {
-    if (require('./lib/agents').ensureMaestroLead().changed) console.log('[agents] marked maestro as the lead agent (no agent was marked)');
+    const bootActor = (fn) => require('./lib/settings-journal').withActor({ kind: 'hub', why: 'start-up' }, fn);   // the settings journal names these writes "hub, start-up"
+    if (bootActor(() => require('./lib/agents').ensureMaestroLead()).changed) console.log('[agents] marked maestro as the lead agent (no agent was marked)');
   } catch (e) { console.warn('[agents] could not mark the lead agent:', e.message); }
   // Team guidance (lib/team-guidance): agents that existed before this update keep their old prompt (switched off once); lead agents get it.
   try {
-    const tg = require('./lib/agents').migrateTeamGuidance();
+    const tg = require('./lib/settings-journal').withActor({ kind: 'hub', why: 'start-up' }, () => require('./lib/agents').migrateTeamGuidance());
     if (tg.changed > 0) console.log(`[agents] team guidance switched off for ${tg.changed} agents that existed before this update (lead agents keep it)`);
   } catch (e) { console.warn('[agents] could not migrate team guidance:', e.message); }
   // Behaviour changes (lib/behaviour-changes): on an install that already has agents each one waits, off, for the owner's decision.
   try {
-    const bm = require('./lib/behaviour-changes').migrate({ agentsFile: path.join(__dirname, 'data', 'agents.json') });
+    const bm = require('./lib/settings-journal').withActor({ kind: 'hub', why: 'start-up' }, () => require('./lib/behaviour-changes').migrate({ agentsFile: path.join(__dirname, 'data', 'agents.json') }));
+    if (bm.quiet && bm.quiet.length) console.log(`[behaviour] ${bm.quiet.length} quiet change(s) turned on by themselves, with a notice on the card: ${bm.quiet.join(', ')}`);
     if (bm.added && bm.added.length) console.log(`[behaviour] ${bm.added.length} change(s) waiting for the owner's decision: ${bm.added.join(', ')}`);
   } catch (e) { console.warn('[behaviour] could not check the behaviour changes:', e.message); }
   console.log(`\n  My Maestro AI v${require('./package.json').version} (multi-provider)`);

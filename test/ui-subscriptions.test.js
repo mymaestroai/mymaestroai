@@ -162,7 +162,7 @@ for (const [name, src] of [['app.js', app], ['mobile.js', mjs]]) {
     s.limits[0].windows.push({ minutes: 300, label: '5-hour', usedPercent: 50, short: true, weekly: false, resetsAt: iso(30) });
     assert.strictEqual(C.codexBadge(s, lv, NOW).text, 'ChatGPT 42%');
     s.limits[0].windows[1].usedPercent = 51;
-    assert.strictEqual(C.codexBadge(s, lv, NOW).text, 'ChatGPT 42% · 5h 51%');
+    assert.strictEqual(C.codexBadge(s, lv, NOW).text, 'ChatGPT 42% · 5-hour 51%');
     // no weekly: the longest window with its label
     s = proSnap();
     s.limits[0].windows = [{ minutes: 300, label: '5-hour', usedPercent: 40, short: true, weekly: false, resetsAt: iso(30) }];
@@ -198,7 +198,7 @@ test('the helper blocks of app.js and mobile.js are the same code', () => {
 });
 
 test('desktop source: the Subscriptions section is listed before st-plan-section and built before the Claude plan', () => {
-  assert.ok(app.includes("'st-or-section', 'st-subs-section', 'st-plan-section'"));
+  assert.ok(require('../lib/ui-settings-groups.js').GROUPS.find((g) => g.id === 'money').sections.join(',').includes('st-subs-section,st-plan-section,st-spend-section'), 'P4-7 order: subscriptions and plan usage, then spend, then keys');
   const a = app.indexOf('id="st-subs-section"'), b = app.indexOf('id="st-plan-section"');
   assert.ok(a > 0 && b > a, 'section built before the Claude plan section');
   assert.ok(app.includes('<h4>Subscriptions</h4>') && app.includes('id="st-subs-on"'));

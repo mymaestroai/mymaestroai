@@ -73,8 +73,8 @@ function desktop(o) {
 
 test('desktop: the call bar carries a labelled Display select (id vcb-display-<chat>, data-vcb="display") before Hang up', () => {
   const html = desktop().api.voiceCallBarHtml('c1');
-  assert.ok(/<select id="vcb-display-c1" data-vcb="display" aria-label="Display">/.test(html), 'the select');
-  assert.ok(/<label class="vcb-disp ucd-dup">Display <select/.test(html), 'labelled Display (marked .ucd-dup: the call screen\'s drawer does not repeat the bar\'s Display)');
+  assert.ok(/<select id="vcb-display-c1" data-vcb="display" aria-label="Call display">/.test(html), 'the select');
+  assert.ok(/<label class="vcb-disp ucd-dup">Call display <select/.test(html), 'labelled Display (marked .ucd-dup: the call screen\'s drawer does not repeat the bar\'s Display)');
   assert.ok(html.indexOf('data-vcb="display"') < html.indexOf('data-vcb="hang"'), 'before the Hang up button');
   assert.ok(html.indexOf('data-vcb="display"') < html.indexOf('class="vcb-sliders'), 'in the first row');
 });
@@ -102,9 +102,10 @@ test('desktop: a select that is the active element (an open picker) is not refil
 test('desktop: a select rebuilt while the packs load is not painted (the old node is gone)', async () => {
   const d = desktop({ prefs: { choice: 'orb' } });
   const p = d.api.voiceDispPaintPanel('c1');
+  const loadingPaint = d.barSel.children.length;   // the panel paints once as "loading" before it waits
   d.doc.byId.delete('vcb-display-c1');   // the bar was rebuilt meanwhile
   await p;
-  assert.strictEqual(d.barSel.children.length, 0); assert.strictEqual(d.panelSel.value, 'orb');
+  assert.strictEqual(d.barSel.children.length, loadingPaint, 'the old node is not painted again after the wait'); assert.strictEqual(d.panelSel.value, 'orb');
 });
 
 test('desktop: choosing in the bar reaches the running display and both selects show it; with no display the prefs change', async () => {
@@ -158,7 +159,7 @@ test('phone: mobile.html has #cp-display in #call-panel, labelled Display, befor
   const start = mobHtml.indexOf('<div id="call-panel"'), end = mobHtml.indexOf('<div id="composer"', start);
   assert.ok(start > 0 && end > start);
   const block = mobHtml.slice(start, end);
-  assert.ok(/<label class="cp-disp ucd-dup" for="cp-display"><span>Display<\/span><select id="cp-display">/.test(block), 'label and select (marked .ucd-dup: the call screen\'s drawer does not repeat the bar\'s Display)');
+  assert.ok(/<label class="cp-disp ucd-dup" for="cp-display"><span>Call display<\/span><select id="cp-display">/.test(block), 'label and select (marked .ucd-dup: the call screen\'s drawer does not repeat the bar\'s Display)');
   assert.ok(block.indexOf('id="cp-display"') < block.indexOf('<div class="cp-actions">'), 'before the actions row');
   assert.ok(block.indexOf('id="cp-levels"') > block.indexOf('id="cp-display"'), 'Levels is still there');
   assert.ok(/#call-panel \.cp-disp \{[^}]*min-height: 48px[^}]*font-size: 16px/.test(mobHtml) && /#call-panel \.cp-disp select \{[^}]*min-height: 44px[^}]*font-size: 16px/.test(mobHtml), 'touch size, 16px against iOS zoom');
@@ -319,7 +320,9 @@ test('desktop: the older paint answering first is dropped too: after both answer
   const p1 = d.api.voiceDispPaintPanel('c1');
   savePrefs(d.storage, { choice: 'pack:owl', interrupt: true });
   const p2 = d.api.voiceDispPaintPanel('c1');
-  m.settle(0); await p1; assert.strictEqual(d.barSel.children.length, 0, 'the superseded paint paints nothing');
+  const loadingPaint = d.barSel.children.length;   // each paint first shows "loading"; the superseded one paints nothing more after its answer
+  m.settle(0); await p1; assert.strictEqual(d.barSel.children.length, loadingPaint, 'the superseded paint paints nothing after its answer');
+  assert.strictEqual(d.barSel.value, 'pack:owl', 'still the newer prefs, shown as loading');
   m.settle(1); await p2; assert.strictEqual(d.barSel.value, 'pack:owl');
 });
 
@@ -328,7 +331,8 @@ test('desktop: the captions and interrupt checkboxes are set at once, before the
   const cap = d.doc.add('vp-captions-c1', null, 'input'), intr = d.doc.add('vp-interrupt-c1', null, 'input');
   d.api.voiceDispPaintPanel('c1');   // never answered
   assert.strictEqual(cap.checked, true); assert.strictEqual(intr.checked, true);
-  await tick(); assert.strictEqual(d.barSel.children.length, 0, 'the lists wait for the packs');
+  await tick(); assert.ok(d.barSel.children.length > 0, 'the list is painted once as loading while the packs are awaited');
+  assert.ok(!/not on this Maestro|not installed/.test(d.barSel.children.map(c => c.textContent).join('|')), 'never absent while loading');
 });
 
 test('desktop: the bar and the voice pop repaint the Display select on focusout (listener source run), a skipped select is then filled', async () => {

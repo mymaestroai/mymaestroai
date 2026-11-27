@@ -17,8 +17,9 @@
 .ucd-who { flex: 0 1 auto; min-width: 4.5em; max-width: 22em; box-sizing: border-box; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: rgba(0, 0, 0, .35); color: #fff; }
 .ucd-who[hidden] { display: none; }
 .ucd-status { position: absolute; z-index: 1; top: 10px; left: 12px; font-size: 14px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: rgba(0, 0, 0, .35); color: #fff; }
-.ucd-note { position: absolute; z-index: 1; top: 44px; left: 12px; right: 12px; font-size: 12px; color: #fff; opacity: .85; text-shadow: 0 1px 2px rgba(0, 0, 0, .6); }
-.ucd-note[hidden], .ucd-caption[hidden], .ucd-caption:empty { display: none; }
+.ucd-notebox { position: absolute; z-index: 1; top: 44px; left: 12px; right: 12px; }
+.ucd-note { font-size: 12px; color: #fff; opacity: .85; text-shadow: 0 1px 2px rgba(0, 0, 0, .6); }
+.ucd-notebox[hidden], .ucd-note[hidden], .ucd-caption[hidden], .ucd-caption:empty { display: none; }
 .ucd-caption { position: absolute; z-index: 2; left: 12px; right: 12px; bottom: 12px; text-align: center; font-size: clamp(20px, 4.2vw, 40px); line-height: 1.25; font-weight: 600;
   padding: 10px 14px; border-radius: 14px; background: rgba(0, 0, 0, .55); color: #fff; overflow-wrap: anywhere; box-sizing: border-box; max-height: 40%;
   /* a long caption scrolls (ui-call-display.js keeps the newest line in view) instead of clipping it; the band stays inside the stage, which ends above the call bar */
@@ -103,13 +104,25 @@ body:has(> .ucd-overlay) .voice-sheet.open { z-index: 10005; }
 .ucd-docked .ucd-head { position: static; max-width: 60%; }
 .ucd-docked .ucd-who { color: var(--text, #e8ecf1); background: var(--bg-input, rgba(255, 255, 255, .08)); }
 .ucd-docked .ucd-stage > .ucd-rec { position: static; margin-left: auto; }
-.ucd-docked .ucd-host, .ucd-docked .ucd-note, .ucd-docked .ucd-caption, .ucd-docked .ucd-bar .ucd-back, .ucd-docked .ucd-bar .ucd-caps { display: none !important; }
+.ucd-docked .ucd-host, .ucd-docked .ucd-caption, .ucd-docked .ucd-bar .ucd-back, .ucd-docked .ucd-bar .ucd-caps { display: none !important; }
 /* the character download's line (ui-call-display.js): small, under the status pill and note, inside the stage so it never reaches the call bar's Hang up */
 .cd-download { position: absolute; z-index: 1; top: 72px; left: 12px; right: 12px; max-width: 360px; box-sizing: border-box; padding: 6px 10px; border-radius: 10px; font-size: 12px; line-height: 1.35; background: rgba(0, 0, 0, .45); color: #fff; }
 .cd-download[hidden], .cd-download-bar[hidden], .cd-download-retry[hidden] { display: none; }
 .cd-download-bar { display: block; width: 100%; height: 6px; margin-top: 5px; accent-color: var(--accent, #3d7bff); }
 .cd-download-retry { font: inherit; font-size: 13px; min-height: 36px; margin-top: 6px; padding: 0 14px; cursor: pointer; border: 1px solid rgba(255, 255, 255, .4); border-radius: 10px; color: #fff; background: rgba(255, 255, 255, .12); }
 .cd-download-retry:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+/* Try again after a failed character list: in the flow right after the note text, inside the note's wrapper (so a wrapped note pushes it down).
+   Docked, the note is hidden unless the list failed; then its text and the button show on their own line. */
+.ucd-pack-retry[hidden] { display: none; }
+.ucd-docked .ucd-notebox { position: static; flex: 1 1 100%; }
+.ucd-docked .ucd-notebox:not(.ucd-listfail):not(.ucd-absent) { display: none !important; }
+/* a note in the docked bar grows the bar upward (the chat above shrinks), never past the window's bottom: the bar row stays the last thing in the root,
+   the root never shrinks, and the chat column's other children may shrink below their content */
+.ucd-overlay.ucd-docked { flex-shrink: 0; margin-top: auto; }
+.ucd-docked .ucd-bar { flex-shrink: 0; }
+:where(:has(> .ucd-overlay.ucd-docked) > :not(.ucd-overlay)) { min-height: 0; }
+.ucd-docked .ucd-note { color: var(--text, #e8ecf1); opacity: 1; text-shadow: none; }
+.ucd-docked .ucd-pack-retry { color: var(--text, #e8ecf1); border-color: currentColor; background: transparent; }
 .cd-download-panel { display: block; width: 100%; max-width: 320px; height: 6px; margin-top: 4px; }   /* the same bar in the voice panel / sheet */
 /* Both bars drawn explicitly (a native progress bar can paint nothing on a dark panel): a light track and the accent fill. */
 .cd-download-bar, .cd-download-panel { flex: none; min-height: 6px; -webkit-appearance: none; appearance: none; border: 0; border-radius: 3px; overflow: hidden; background: rgba(255, 255, 255, .18); color: var(--accent, #3d7bff); }

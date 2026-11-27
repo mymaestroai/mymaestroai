@@ -362,7 +362,7 @@ test('wiring: the desktop banner and the help text', () => {
   assert.ok(app.includes("const closeKey = pl.phone && pl.keepDesktop ? 'hub-mobile-banner-kept' : 'hub-mobile-banner';"));
   assert.ok(app.includes("closeStore = closeKey === 'hub-mobile-banner-kept' ? sessionStorage : localStorage;"));
   assert.ok(app.includes("if (closeStore && closeStore.getItem(closeKey) === 'off') return;"));
-  assert.ok(app.includes("for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice',"), 'the bar is the first notice in the stack, so it covers none of them');
+  assert.ok(app.includes("for (const id of ['hub-phone-layout-notice', 'hub-theme-notice', 'hub-review-banner']) {"), 'the bar is the first notice in the stack, so it covers none of them');
   const fn = app.slice(app.indexOf('function showMobileBanner()'), app.indexOf('// ── Hub Health Monitor'));
   assert.ok(fn.includes("bar.id = 'hub-phone-layout-notice'") && fn.includes('bar.remove(); layoutBanners();') && /appendChild\(bar\);\n\s*layoutBanners\(\);/.test(fn), 'drawn and dismissed through layoutBanners');
   assert.ok(app.includes('Open the phone layout'));

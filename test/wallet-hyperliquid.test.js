@@ -139,7 +139,11 @@ describe('hyperliquid service: gate and owner controls', () => {
     assert.match(src, /hl\.ownerGate\(\{ passphrase \}\)/, 'HL owner routes take only the passphrase');
     assert.match(src, /ex\.ownerGate\(\{ passphrase \}\)/, 'executor owner routes take only the passphrase');
     assert.ok(!/ownerGate\(\{[^}]*x-executor-token/.test(src), 'no owner route reads X-Executor-Token');
-    for (const p of ["ownerProof('UNPAUSE'", "ownerProof('WALLET_CREATE'", "ownerProof('WALLET_IMPORT'", 'delete patch.walletAgents']) assert.ok(src.includes(p), `server.js must contain ${p}`);
+    for (const p of ["ownerProof('UNPAUSE'", "ownerProof('WALLET_CREATE'", "ownerProof('WALLET_IMPORT'"]) assert.ok(src.includes(p), `server.js must contain ${p}`);
+    // the walletAgents drop moved to lib/settings-apply cleanSettingsPatch (POST /api/settings calls it): test the real function
+    assert.ok(src.includes("require('./lib/settings-apply').cleanSettingsPatch(patch,"));
+    { const o = require('./helpers/isolated-settings-apply').callSettingsApply('cleanSettingsPatch', [{ walletAgents: ['x'], theme: 'a' }, {}]);   // in a throwaway install
+      assert.ok(!('walletAgents' in o.patch) && o.patch.theme === 'a', 'a settings patch cannot widen walletAgents'); }
     const svcSrc = fs.readFileSync(path.join(__dirname, '../lib/wallet/hyperliquid.js'), 'utf8');
     assert.ok(!/tokenCheck: \(t\)/.test(svcSrc), 'the live service no longer wires the executor token in as owner proof');
     assert.throws(() => r.hl.configure({ env: 'devnet' }), /env must/); assert.throws(() => r.hl.configure({ caps: { maxLeverage: 2.5 } }), /whole/); assert.throws(() => r.hl.configure({ hlpVault: 'nope' }), /pinned in code/);

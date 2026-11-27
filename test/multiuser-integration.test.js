@@ -33,7 +33,7 @@ test('server: account, user-management, me, filtered agents/status/events, login
   assert.ok(server.includes("access.visibleAgents(req.hubUser, all, { ownerFilter: access.isAdmin(req.hubUser) ? ownerFilter : null })"));
   // every agent event goes through visible(); the background count is checked against the current agents at delivery (working-on review r2)
   // changed: the call also passes redact (members get team-turn text redacted); the pinned call is one contiguous literal, so the redact key is added right after isAdmin and the rest (visible filter, statusView, background check) is unchanged
-  assert.ok(server.includes("events.subscribe(req, res, { isAdmin, visibleAgent: visible, redact: isAdmin ? null : (ev) => access.redactTeamTurn(ev), statusView: (m) => isAdmin ? m : access.statusForViewer(req.hubUser, m, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) }), filter: (ev) => ev.type === 'background' ? require('./lib/background-work').backgroundEventVisible(req.hubUser, ev, { agents: require('./lib/agents').getAgentsSync(), resolveVirtual: (n) => temporalWorkersLib.getVirtual(n), access }) : visible(ev.agent) })"));
+  assert.ok(server.includes("events.subscribe(req, res, { isAdmin, visibleAgent: visible, redact: isAdmin ? null : (ev) => access.redactTeamTurn(ev), statusView: (m) => isAdmin ? m : access.statusForViewer(req.hubUser, m, { agents: allAgents, resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) }), filter: (ev) => ev.type === 'background' ? require('./lib/background-work').backgroundEventVisible(req.hubUser, ev, { agents: require('./lib/agents').getAgentsSync(), resolveVirtual: (n) => temporalWorkersLib.getVirtual(n), access }) : visible(ev.agent), eventFilter: (ev) => require('./lib/sdk-chat').researchEventVisible(ev, req.hubUser, isAdmin) })"));   // research_progress and research report turns checked against current access at delivery (reviews r3, r9)
   assert.ok(server.includes("createAgent(body.name, body.model, body.personality, body.skills, body.category, body.owner || null)"));
   assert.ok(server.includes("pathname === '/login' || pathname === '/invite'"));
   assert.ok(server.includes("pathname === '/setup' || pathname === '/setup-admin'"), 'old setup links are still answered (the Welcome page replaced the page)');
@@ -107,7 +107,9 @@ test('teams: a member-owned head introduces itself once; USER.md names the membe
   assert.strictEqual(again, null, 'no greeting when the chat already has history');
   const uf = teams.userFile(user, { team: 'medical', head: true });
   assert.match(uf, /Name:\*\* Sam/); assert.match(uf, /This team is theirs/); assert.match(uf, /## First run/);
-  assert.ok(server.includes("require('./lib/teams').greetIfFresh(name, u)"), 'owner switch to a member greets');
+  // the route's after-change steps are one shared function (lib/settings-apply afterAgentChange), which the route calls
+  assert.ok(server.includes('settingsApply.afterAgentChange(name, body'), 'the route runs the after-change steps');
+  assert.ok(fs.readFileSync(path.join(__dirname, '..', 'lib', 'settings-apply.js'), 'utf8').includes("require('./teams').greetIfFresh(name, u)"), 'owner switch to a member greets');
 });
 
 test('server: 2026-10-16 review fixes are wired (static allow-list, hub-only body fields, member model guard, /v1 needs finished 2FA, token-scoped turn, request wrapper, walletOwner strip)', () => {
@@ -120,7 +122,10 @@ test('server: 2026-10-16 review fixes are wired (static allow-list, hub-only bod
   assert.ok(server.includes("!(access.isAdmin(req.hubUser) && !req.hubPendingTotp)"));
   assert.ok(server.includes("if (req.hubToken && req.hubToken.agents && !req.hubToken.agents.includes(agentName)) return jsonResponse(res, 403, { error: 'token_scope'"));
   assert.ok(server.includes("handleHttpRequest(req, res).catch((err) => {"));
-  assert.ok(server.includes("'walletOwner' in patch"));
+  // the strip moved to lib/settings-apply cleanSettingsPatch (POST /api/settings calls it): test the real function
+  assert.ok(server.includes("require('./lib/settings-apply').cleanSettingsPatch(patch,"));
+  { const r = require('./helpers/isolated-settings-apply').callSettingsApply('cleanSettingsPatch', [{ walletOwner: '0xabc', walletAgents: ['x'], theme: 'a' }, {}]);   // in a throwaway install
+    assert.ok(!('walletOwner' in r.patch) && !('walletAgents' in r.patch) && r.patch.theme === 'a', 'walletOwner and walletAgents are stripped from a settings patch'); }
   assert.ok(sdk.includes("handlers.__cwd = hands.tools.cwd;"), 'gateway gate and hands share a working directory');
   assert.ok(sdk.includes("cwd: (handlers && handlers.__cwd) || process.cwd()"));
   assert.ok(sdk.includes("const v = temporalWorkers.getVirtual(agentName); if (v && v.parent) agent = all.find(a => a.name === v.parent) || null;"), 'temporary workers use their parent\'s hands');

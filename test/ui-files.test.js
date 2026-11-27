@@ -111,5 +111,5 @@ test('mobile: paperclip accepts any file; non-images upload to the open agent\'s
   assert.ok(mhtml.includes('id="camera-input" accept="image/*"'), 'camera unchanged');
   assert.ok(mjs.includes("if (f.type.startsWith('image/')) addImageFile(f); else uploadFileForChat(f);"));
   assert.ok(mjs.includes("uploadFileToHub(file, '', false, agent)") && mjs.includes("const agent = current || ''; // this chat's agent folder"), 'chat uploads land in the open agent\'s folder');
-  assert.ok(sw.includes("const VERSION = 'hub-mobile-v94';"), 'service worker cache bumped');
+  assert.ok(sw.includes("const VERSION = 'hub-mobile-v104';"), 'service worker cache bumped');
 });

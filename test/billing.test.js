@@ -51,10 +51,6 @@ test('wiring: the Claude client env has no API key; /api/models carries billing;
   assert.match(app, /selected>\$\{chat\.autoModel \? 'Auto' : esc\(billingDisplay\(chat\.model, true\)\)\}<\/option>/, 'the header shows model then route before the list loads');
   assert.match(app, /class="cyber-tag billing-api" title="This agent runs on a provider API key/, 'agent list badge');
   assert.match(app, /sel\.innerHTML = groupModels\(models\)\.map\(\(\[label, rows\]\) =>/, 'create-agent select uses the same groups');
-  const page = read('agent-settings.html');
-  assert.match(page, /function billingDisplay\(modelId\)/);
-  assert.match(page, /opt\.textContent = `✅ \$\{billingDisplay\(m\)\} \(\$\{health\.latency\}ms\)`;/);
-  assert.match(page, /const FAMILY_ORDER = \['Anthropic · Subscription \(Claude sign-in\)', 'Anthropic · API \$', 'OpenAI · Subscription \(ChatGPT\)', 'OpenAI · API \$', 'Google · API \$', 'Perplexity · API \$', 'OpenRouter · API \$', 'Local'\];/);
-  assert.match(page, /return `\$\{vendor\} · \$\{route\}`;/, 'settings page families are vendor + route');
+  // (P4-2: the old agent-settings.html's billingDisplay / FAMILY_ORDER are gone; the card's Model row labels "Model · route" - test/ui-agent-card-basics.test.js)
   assert.match(read('index.html'), /\.cyber-tag\.billing-api \{/);
 });

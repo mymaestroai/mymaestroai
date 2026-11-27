@@ -13,17 +13,14 @@ const server = read('server.js');
 const app = read('app.js');
 
 // ── server.js: the settings POST validation ──
-// The validation block is cut out of the route's source and run against a stub store, so the real code is what is tested.
+// The route's validation moved from server.js into lib/settings-apply cleanSettingsPatch (the lead's settings tool uses it too): the
+// real function is run against a stub store, and a refusal is shaped like the route's answer ({ code, body }).
 function validator(stored = {}) {
-  const a = server.indexOf('if (patch && patch.researchThorough !== undefined) {');
-  const b = server.indexOf('// Subscription usage (lib/codex-usage');
-  assert.ok(a > 0 && b > a, 'the validation block is in the settings route');
-  const src = server.slice(a, b);
-  const fn = vm.runInNewContext(`(function (patch, jsonResponse, res, hubSettings) { ${src.replace(/return jsonResponse\(/g, 'return jsonResponse(')} return null; })`);
+  assert.ok(server.includes("require('./lib/settings-apply').cleanSettingsPatch(patch,"), 'the settings route calls it');
+  const sa = lib('settings-apply.js');
   return (patch) => {
-    let out = null;
-    const r = fn(patch, (rs, code, body) => { out = { code, body }; return out; }, {}, { getSetting: (k) => (k === 'researchThorough' ? stored : undefined) });
-    return r || null;
+    const r = sa.cleanSettingsPatch(patch, { ownSession: false, getSetting: (k) => (k === 'researchThorough' ? stored : undefined) });
+    return r.errors.length ? { code: r.status, body: { error: r.errors[0] } } : null;
   };
 }
 

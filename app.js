@@ -68,12 +68,8 @@
         }
       } catch (e) { /* offline: behave as before */ }
       try { activeJobsSync(); } catch { /* the Active state is declared further down; its own first sync covers an early call */ }
-      paintSetupNotice();
-      paintNoAccountsNotice();
-      paintReadinessBanner().catch(() => {});
-      paintHealthBanner().catch(() => {});
-      paintSecurityBanner().catch(() => {});
-      paintRecoveryBanner().catch(() => {});
+      reviewRefresh().catch(() => {});   // the count on the gear
+      if (!window.__rvTimer) window.__rvTimer = setInterval(() => reviewRefresh().catch(() => {}), 5 * 60 * 1000);
       paintUpdateCard().catch(() => {});
       paintVersionLabel().catch(() => {});
       if (!window.__hvTimer) window.__hvTimer = setInterval(() => paintVersionLabel().catch(() => {}), 5 * 60 * 1000);
@@ -464,6 +460,16 @@
       simpleLookOnce = true;
       document.addEventListener('mm-look-change', () => { try { simpleThemeBtnVisible(); } catch { /* cosmetic */ } });
     }
+    // Simple's For your review line: the review build's summary ("3 to fix · 10 suggestions · 1 new feature", "Nothing to fix" when no red item); "Checking…" until the first read
+    function simpleReviewText(r) {
+      if (!r || !window.hubReview) return 'Checking…';
+      return window.hubReview.summaryText(r);
+    }
+    // Settings with one group in front (review, money); Simple's two buttons and the phone's /#settings-group=review use it
+    async function openSettingsGroup(groupId) {
+      await openSettings();
+      stShowGroup(groupId, false);
+    }
     function simpleCloseSettings() {
       if (simpleLookOff) { simpleLookOff(); simpleLookOff = null; }
       const o = document.getElementById('simple-settings'); if (o) o.remove();
@@ -477,12 +483,21 @@
       overlay.innerHTML =
         '<div class="simple-modal" role="dialog" aria-label="Settings">' +
           '<div class="sm-h"><h2>Settings</h2><button type="button" class="sm-x" aria-label="Close">✕</button></div>' +
+          (me.isAdmin === true ? '<h3 class="sm-gh" id="sm-g-review">For your review</h3>' +
+            '<div class="sm-set sm-review"><span class="sm-lab" id="sm-review-line" role="status">Checking…</span><button type="button" class="sm-plain" data-act="review"><div><b>Review</b></div><span aria-hidden="true">›</span></button></div>' : '') +
+          '<h3 class="sm-gh" id="sm-g-you">You and this device</h3>' +
           '<div class="sm-set"><span class="sm-lab">Appearance</span><div class="sm-seg"><button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div><div class="sm-follow" hidden></div></div>' +
           '<div class="sm-set"><span class="sm-lab">Interface style</span><div class="sm-style"></div></div>' +
           '<div class="sm-set"><span class="sm-lab">Name</span><div class="sm-name"></div></div>' +
-          (me.isAdmin === false ? '' : '<div class="sm-set"><button type="button" class="sm-plain" data-act="settings"><div><b>All settings</b><span>Provider keys, web search, voice, backups and the rest</span></div><span aria-hidden="true">›</span></button></div>') +   // admins only, as the gear in Advanced
+          '<div class="sm-set" id="sm-notes"><span class="sm-lab">Each agent\'s notifications are on its card: press the agent\'s name in its chat.</span></div>' +
           '<div class="sm-set"><button type="button" class="sm-plain" data-act="advanced"><div><b>Switch to Advanced</b><span>All tools, agents\' work and settings</span></div><span aria-hidden="true">›</span></button></div>' +
           '<div class="sm-set"><button type="button" class="sm-plain sm-out" data-act="signout">Sign out</button></div>' +
+          '<h3 class="sm-gh" id="sm-g-voice">Voice and calls</h3>' +
+          (me.isAdmin === false ? '<div class="sm-set"><span class="sm-lab">An admin turns voice on and picks the voices. Use the microphone in a chat to talk.</span></div>' : '<div class="sm-set"><button type="button" class="sm-plain" data-act="voice"><div><b>Voice settings</b><span>Turn voice on or off, the voices and calls</span></div><span aria-hidden="true">›</span></button></div>') +
+          (me.isAdmin === true ? '<h3 class="sm-gh" id="sm-g-money">Models and money</h3>' +
+            '<div class="sm-set sm-money"><span class="sm-lab" id="sm-money-line">Subscriptions, keys and spending</span><button type="button" class="sm-plain" data-act="money"><div><b>Open</b></div><span aria-hidden="true">›</span></button></div>' : '') +
+          '<h3 class="sm-gh" id="sm-g-more">More settings</h3>' +
+          '<div class="sm-set"><button type="button" class="sm-plain" data-act="settings"><div><b>More settings</b><span>' + (me.isAdmin === false ? 'Notifications, voice, chat and your account' : 'Provider keys, web search, backups and the rest') + '</span></div><span aria-hidden="true">›</span></button></div>' +   // everyone (as the gear in Advanced: an admin gets all the groups, a member the one); the last button
         '</div>';
       overlay.querySelector('.sm-name').textContent = name;
       const paintSeg = () => { const cur = me.theme === 'light' || me.theme === 'dark' ? me.theme : 'auto'; overlay.querySelectorAll('.sm-seg button').forEach(b => b.classList.toggle('on', b.dataset.theme === cur)); };
@@ -501,6 +516,18 @@
       const onLook = () => { if (!overlay.isConnected) { document.removeEventListener('mm-look-change', onLook); return; } paintFollow(); };
       document.addEventListener('mm-look-change', onLook);
       simpleLookOff = () => document.removeEventListener('mm-look-change', onLook);
+      // For your review (admins): the last answer the page has, else one read; the line goes warning-coloured only for problems (as the gear)
+      const paintReview = () => {
+        const line = overlay.querySelector('#sm-review-line');
+        if (!line) return;
+        const r = typeof reviewLast !== 'undefined' ? reviewLast : null;
+        line.textContent = simpleReviewText(r);
+        line.classList.toggle('sm-warn', !!(r && r.count > 0));   // red only: worth-doing items and suggestions do not colour it
+      };
+      if (me.isAdmin === true) {
+        paintReview();
+        if (typeof reviewLast === 'undefined' || !reviewLast) { try { reviewRefresh().then(() => { if (overlay.isConnected) paintReview(); }).catch(() => {}); } catch { /* the line stays */ } }
+      }
       overlay.addEventListener('click', async (e) => {
         if (e.target === overlay || e.target.closest('.sm-x')) { simpleCloseSettings(); return; }
         const t = e.target.closest('.sm-seg button');
@@ -515,12 +542,16 @@
         }
         const a = e.target.closest('[data-act]');
         if (!a) return;
-        if (a.dataset.act === 'settings') { simpleCloseSettings(); openSettings(); }   // the full Settings dialog, as in Advanced
+        if (a.dataset.act === 'review') { simpleCloseSettings(); openSettingsGroup('review'); }   // Settings at For your review
+        else if (a.dataset.act === 'money') { simpleCloseSettings(); openSettingsGroup('money'); }   // Settings at Models and money
+        else if (a.dataset.act === 'settings') { simpleCloseSettings(); openSettings(); }   // the full Settings dialog, as in Advanced
+        else if (a.dataset.act === 'voice') { simpleCloseSettings(); openVoiceSettings(); }   // Settings at the Voice group
         else if (a.dataset.act === 'advanced') simpleSwitchMode('advanced');
         else if (a.dataset.act === 'signout') signOut();
       });
       overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') simpleCloseSettings(); });
       document.body.appendChild(overlay);
+      if (window.hubSettingsHelp) window.hubSettingsHelp.mount(overlay, 'simple-desktop').catch(() => {});   // the ⓘ help, if the records anchor any here
       const first = overlay.querySelector('.sm-x'); if (first) first.focus();
     }
 
@@ -601,38 +632,8 @@
       return { 'X-Hub-Time-Zone': tz };
     }
     for (const ev of ['pointerdown', 'keydown']) document.addEventListener(ev, reportTimeZone, { capture: true, passive: true });
-    // An install updated from before multi-user has provider keys but no admin account, so the setup wizard never
-    // asked for one: the hub runs with no login and every multi-user feature off. Say so, once per page, with the link.
-    function paintNoAccountsNotice() {
-      const me = window.hubMe;
-      let bar = document.getElementById('hub-no-accounts-notice');
-      const none = (me && me.accounts === false) || (!me && window.hubNoAccounts === true);
-      if (!none) { if (bar) { bar.remove(); layoutBanners(); } return; }
-      if (bar) return;
-      bar = document.createElement('div');
-      bar.id = 'hub-no-accounts-notice';
-      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9997;background:var(--banner-setup-bg);color:var(--on-color-text);padding:6px 14px;font-weight:600;box-sizing:border-box';
-      bar.innerHTML = 'This hub has no login yet: anyone who can reach it has full control, and multi-user features (members, sharing, the account menu, member sandboxes) stay off until an admin account exists. <a href="/welcome" style="color:var(--on-color-text);text-decoration:underline">Create the admin account</a> (you will need the setup link: run mymaestro setup-link).';
-      document.body.prepend(bar);
-      layoutBanners();
-    }
-    // No AI provider configured yet (fresh install after the first admin signed up): a one-line notice with the link
-    // to the setup wizard. The wizard no longer takes over "/" once accounts exist, so the 2FA enrolment can finish.
-    async function paintSetupNotice() {
-      const me = window.hubMe;
-      if (!me || !me.isAdmin) return;
-      let needed = false;
-      try { const r = await fetch('/api/setup/status', { credentials: 'include' }); if (r.ok) needed = !!(await r.json()).setupNeeded; } catch { return; }
-      let bar = document.getElementById('hub-setup-notice');
-      if (!needed) { if (bar) { bar.remove(); layoutBanners(); } return; }
-      if (bar) return;
-      bar = document.createElement('div');
-      bar.id = 'hub-setup-notice';
-      bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9998;background:var(--banner-info-bg);color:var(--on-color-text);padding:6px 14px;font-weight:600;box-sizing:border-box';
-      bar.innerHTML = 'No AI provider is configured yet, so agents cannot answer. <a href="/welcome" style="color:var(--on-color-text);text-decoration:underline">Open the Welcome page</a> to connect a Claude or ChatGPT subscription, an API key or a local model.';
-      document.body.prepend(bar);
-      layoutBanners();
-    }
+    // An install updated from before multi-user has provider keys but no admin account (no login at all), and a fresh install may have no AI provider:
+    // both are "Fix now" items in For your review (ids accounts and provider, lib/ui-review.js) and the one banner (reviewPaintBanner) says so.
     function renderOwnerSwitcher() {
       const sel = document.getElementById('owner-view');
       if (!sel) return;
@@ -655,13 +656,9 @@
       const me = window.hubMe;
       if (!me || me.isAdmin) return;
       document.body.classList.add('member-view');
-      // Every item of the ⋯ menu is an admin control, so the whole menu goes (more-wrap), not just its rows.
-      for (const id of ['more-modules-item', 'more-remote-item', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn',
-                        'settings-btn', 'schedule-btn', 'credit-meter', 'spend-today', 'plan-warn', 'hub-halt-bar', 'halt-btn', 'more-wrap', 'update-chip']) {
+      for (const id of ['schedule-btn', 'credit-meter', 'spend-today', 'plan-warn', 'hub-halt-bar', 'halt-btn', 'update-chip']) {
         const el = document.getElementById(id);
-        if (!el) continue;
-        const row = el.closest('.more-item, .more-row') || el;
-        row.style.display = 'none';
+        if (el) el.style.display = 'none';
       }
       // Tiger Team is admin-only and the Guide describes admin features (gear, New/Clone, Tiger Team modes);
       // members keep the strip for All Agents and Teams (their own agents' teams).
@@ -669,8 +666,6 @@
         const tab = document.querySelector(`.tab[data-tab="${t}"]`);
         if (tab) tab.style.display = 'none';
       }
-      const menu = document.getElementById('more-menu');
-      if (menu) menu.classList.remove('advanced');
     }
     function renderUserChip() {
       const chip = document.getElementById('user-chip');
@@ -695,11 +690,11 @@
       if (note) note.style.display = (me.isAdmin && !me.user.totpEnabled && me.admin2faRequired !== false) ? '' : 'none';
       if (typeof simpleTopSync === 'function') simpleTopSync();   // the Simple view switch (real accounts only)
     }
-    // Remote computers links (⋯ menu, account menu, Settings): only for an admin, and only while the connector is on (its routes answer 200 only then).
+    // Remote computers links (account menu, Settings door): only for an admin, and only while the connector is on (its routes answer 200 only then).
     let remoteComputersOk = null, remoteComputersChecking = false;
     function applyRemoteComputersLinks() {
       const show = !!(window.hubMe && window.hubMe.isAdmin && remoteComputersOk === true);
-      for (const id of ['more-remote-item', 'account-remote', 'st-remote-link']) {
+      for (const id of ['account-remote', 'st-door-remote']) {
         const el = document.getElementById(id);
         if (el) el.style.display = show ? '' : 'none';
       }
@@ -1037,7 +1032,7 @@
       try { bkState = await bkApi('/api/backups', undefined, 'GET'); }
       catch (e) { el.textContent = 'Could not read the backups: ' + e.message; stSum('backups', 'last', 'Backups: unreadable', true); return; }
       paintBackups();
-      paintRecoveryBanner(bkState).catch(() => {});
+      reviewRefresh().catch(() => {});   // the paused-after-restore item follows what the backups page just read
     }
     function paintBackups() {
       const el = document.getElementById('bk-body'); const s = bkState; if (!el || !s) return;
@@ -1305,7 +1300,7 @@
     async function bkResume(btn) {
       if (btn) btn.disabled = true;
       try { await bkApi('/api/backups/recovery/resume', {}); } catch (e) { alert(e.message); }
-      if (document.getElementById('bk-body')) loadBackups(); else paintRecoveryBanner().catch(() => {});
+      if (document.getElementById('bk-body')) loadBackups(); else reviewRefresh().catch(() => {});
     }
     async function bkDecide(i, action, btn) {
       const h = bkState.recovery.held[i];
@@ -1476,19 +1471,7 @@
       };
       setTimeout(tick, 3000);
     }
-    // While a restored setup waits for Resume, every admin page says so at the top.
-    async function paintRecoveryBanner(state) {
-      const me = window.hubMe;
-      let bar = document.getElementById('hub-recovery-notice');
-      if (!me || !me.isAdmin || !me.user) { if (bar) bar.remove(); return; }
-      let rec = state ? state.recovery : undefined;
-      if (rec === undefined) { try { rec = (await bkApi('/api/backups/recovery', undefined, 'GET')).recovery; } catch { return; } }
-      if (!rec || rec.resumedAt) { if (bar) { bar.remove(); layoutBanners(); } return; }
-      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-recovery-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9997;background:var(--banner-backup-bg);color:var(--on-color-text);padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
-      const held = (rec.held || []).length;
-      bar.innerHTML = `Restored from the backup of ${esc(bkWhen(rec.restoredFrom))}. Agents are paused until you press Resume${held ? `; ${held} item${held === 1 ? '' : 's'} wait${held === 1 ? 's' : ''} for Run or Skip` : ''}. <a href="#" onclick="openSettingsAt('st-backups-section'); return false" style="color:var(--on-color-text);text-decoration:underline">Open Backups</a> <button onclick="bkResume(this)" style="margin-left:8px;padding:2px 10px;border-radius:4px;border:1px solid var(--on-color-text);background:transparent;color:var(--on-color-text);cursor:pointer">Resume</button>`;
-      layoutBanners();
-    }
+    // While a restored setup waits for Resume, For your review lists "Agents are paused after a restore" under Fix now (the one banner shows it, with Resume).
 
     // POST /api/restart. When running jobs would stop with the restart, the server answers 409 { needsConfirm, message } and
     // restarts nothing: ask the person (the message names the jobs) and send the confirm.
@@ -1506,7 +1489,7 @@
     // ── Restart Hub Button ──
     async function restartHub() {
       if (!confirm('Restart My Maestro AI?\n\n• Conversation history is auto-saved (safe)\n• Memory & session notes are saved instantly (safe)\n• Active streaming responses will be flushed to disk\n• Agents mid-response will lose their last ~3 seconds of output')) return;
-      const btn = document.getElementById('restart-hub-btn');
+      const btn = document.getElementById('restart-hub-btn') || document.createElement('button');   // the button lives in Settings → Upkeep
       btn.classList.add('restarting');
       btn.title = 'Restarting...';
       // The boot id proves a restart: the old server answering /api/health again is a FAILED restart, not success.
@@ -2474,7 +2457,8 @@
           <td>${badge(j)}${j.restartWarning ? `<br><small style="color:var(--warning)">${esc(j.restartWarning)}</small>` : ''}<br><small>${handoff(j)}</small></td>
           <td><small>${esc(when(j.startedAt))}${j.endedAt ? `<br>ended ${esc(when(j.endedAt))}` : ''}</small></td>
           <td style="white-space:nowrap"><button class="gs-btn secondary" onclick="jobsAct('log', '${esc(j.id)}')">Log</button>
-            ${j.status === 'running' ? `<button class="gs-btn secondary" onclick="jobsAct('cancel', '${esc(j.id)}')">Cancel</button>` : ''}</td>
+            ${j.status === 'running' ? `<button class="gs-btn secondary" onclick="jobsAct('cancel', '${esc(j.id)}')">Cancel</button>` : ''}
+            ${j.status === 'running' && typeof isHubAdmin === 'function' && isHubAdmin() ? `<br><label style="font-size:11px;white-space:normal"><input type="checkbox" ${j.keep ? 'checked' : ''} onchange="jobsAct('keep', '${esc(j.id)}', this.checked)"> Keep running when all agents are stopped</label>` : ''}</td>
         </tr>`).join('') : `<tr><td colspan="5"><i>${!data.jobs.length ? 'No jobs yet. Agents start them with the run_job tool.'
           : v.scope === 'active' ? 'No jobs running.' : `No jobs ${schedScopeWords(v.scope)}.`}</i></td></tr>`;
       let logBox = '';
@@ -2496,8 +2480,9 @@
       const html = await jobsSectionHtml();
       if (document.getElementById('sched-jobs') === box) box.innerHTML = html;
     }
-    async function jobsAct(action, id) {
+    async function jobsAct(action, id, flag) {
       try {
+        if (action === 'keep') { await jobsApi('/keep', { id, keep: flag === true }); return refreshJobsSection(); }
         if (action === 'log') { jobsPanelLog = id; return refreshJobsSection(); }
         if (action === 'hidelog') { jobsPanelLog = null; return refreshJobsSection(); }
         if (action === 'cancel') { if (!confirm('Stop this job? The owner will be told it was cancelled.')) return; const j = await jobsApi('/cancel', { id }); refreshScheduleBadge(); return openSchedulePanel(`Job ${j.id} "${j.name}": ${j.status}.`); }
@@ -3184,10 +3169,10 @@
         <p class="gs-sub">Restarting the hub…</p>`);
 
       // Reuse the restart button's flush + poll path.
-      const rbtn = document.getElementById('restart-hub-btn');
+      const rbtn = document.getElementById('restart-hub-btn') || document.createElement('button');   // the button lives in Settings → Upkeep: a closed dialog has none
       try {
         const pr = await postRestart();
-        if (pr.cancelled || !pr.r.ok) { gsModal(`<h3>⬇ Update from GitHub</h3><div class="gs-ok">✓ Updated to ${esc(r.head)}</div><p class="gs-sub">Not restarted yet. Restart it from the ⋯ menu to finish.</p>`); return; }
+        if (pr.cancelled || !pr.r.ok) { gsModal(`<h3>⬇ Update from GitHub</h3><div class="gs-ok">✓ Updated to ${esc(r.head)}</div><p class="gs-sub">Not restarted yet. Restart it from Settings, under Upkeep, to finish.</p>`); return; }
       } catch (e) { /* expected — server dies */ }
       setTimeout(() => pollForRestart(rbtn), 8000);
     }
@@ -3223,9 +3208,9 @@
         <p style="margin:6px 0 0;font-size:12px"><a href="/help" target="_blank" rel="noopener">Open help in its own tab</a></p>`, { dock: true, title: '❓ Help' });
     }
 
-    // Settings groups: openSettings() draws its sections in one column, then groupSettings() folds them into these
-    // groups, closed until opened. Sections are matched by id; one this list doesn't know lands in the last group,
-    // so a new section can't disappear. Which groups are open is kept per browser (localStorage hub-settings-open).
+    // Settings groups: openSettings() draws its sections in one column, then groupSettings() sorts them into the eight groups of
+    // lib/ui-settings-groups.js (a list on the left, the open group on the right). Sections are matched by id; one the list doesn't
+    // know lands in Upkeep > More, so a new section can't disappear. The open group is kept per browser (localStorage hub-settings-group).
     // Workers at once (settings.workersAtOnce): one number per AI service, admins only. Rows come from /api/hub/status pacing.caps.
     const WAO_LABELS = { 'claude-sdk': 'Claude subscription', 'codex-cli': 'ChatGPT subscription', anthropic: 'Anthropic API', openai: 'OpenAI API', codex: 'OpenAI Codex API', google: 'Google Gemini', perplexity: 'Perplexity', lmstudio: 'LM Studio', ollama: 'Ollama' };
     let waoStored = {};   // the saved map as the page opened; rows for services not listed keep their value
@@ -3384,25 +3369,21 @@
       row.appendChild(lab); row.appendChild(sel); row.appendChild(state);
       host.appendChild(row);
     }
-    const ST_GROUPS = [
-      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-health-section', 'st-sec-section', 'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section'] },
-      { id: 'looks', title: '🎨 Appearance', sections: ['st-looks-section'] },
-      { id: 'voice', title: '🎙 Voice', sections: ['st-voice-section'] },
-      { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
-      { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
-      { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-subs-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
-      { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-lb-section', 'st-mp-section', 'st-approvals-section', 'st-chat-section', 'st-tuning-section'] },
-      { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
-      { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-comms-section', 'st-cx-section', 'st-modules-section'] },
-      { id: 'money', title: '💰 Money and safety', sections: ['st-spend-section', 'st-emergency-section'] },
-    ];
-    const stSumParts = {};   // group -> { key: { text, crit } }: the one-line summary on each group's header
+    // The eight groups, which section sits in which and which rows move are in lib/ui-settings-groups.js (window.hubSettingsGroups).
+    const STG = window.hubSettingsGroups;
+    // The section loaders still name their summary by the old group ids; this says which of the eight groups each one belongs to now.
+    const ST_SUM_HOME = { status: { setup: 'review-checks', security: 'review-checks', health: 'review-checks', memory: 'upkeep', selfcheck: 'upkeep', updates: 'upkeep' }, security: 'safety', backups: 'upkeep', models: 'money', notify: 'you', agents: { sb: 'safety', appr: 'safety' }, tools: 'tools', money: 'money', voice: 'voice' };
+    const stSumHome = (group, key) => { const h = ST_SUM_HOME[group]; return (h && typeof h === 'object' ? h[key] : h) || group; };
+    const stSumParts = {};   // group -> { key: { text, crit } }: the one-line summary on each group's list row
     const stSandboxText = (sbd) => `Sandboxes: members' agents ${sbd.member || 'container'}, admin-side ${sbd.admin || 'off'}`;
     const stQuestionsText = (qa) => qa === null ? 'Question reminders off' : `Questions: ${qa === 0 ? 'right away' : `after ${qa === undefined ? 3 : qa} min`}`;
-    let stSearchSnap = null;   // which groups were open before a search, put back when the search is cleared
+    let stCurGroup = null;     // the group open in the right pane
+    let stPicked = false;      // they (or a link) chose a group: a red finding arriving later does not switch it
+    let stSearching = false;   // a search is showing matches from every group
 
     // Set one part of a group's summary line; the section loaders call this as their data arrives.
     function stSum(group, key, text, crit = false) {
+      group = stSumHome(group, key);
       (stSumParts[group] ||= {})[key] = { text: text || '', crit: !!crit };
       const el = document.getElementById(`st-sum-${group}`);
       if (!el) return;
@@ -3411,26 +3392,91 @@
       el.classList.toggle('st-sum-crit', parts.some(p => p.crit && p.text));
     }
 
-    // Open or close a group without counting it as the person's choice (searches, deep links, a critical finding).
-    function stSetOpen(g, open) {
-      if (!g || g.open === open) return;
-      g.dataset.auto = '1';
-      if (open) g.dataset.autoOpen = '1';   // opened for them: not remembered unless they click it themselves
-      g.open = open;
+    // Show one group in the right pane (the others are hidden). remember = the person chose it: kept in localStorage 'hub-settings-group'
+    // and a red finding arriving later no longer switches the pane. A link or a door passes remember false: it opens the group
+    // for now without changing which one is remembered.
+    // The phone (the Settings frame, or a window under 721 px) shows the list of groups first and one group at a time as a page:
+    // stPhonePage is null on the list, else the open group's id. #st-groups[data-page] is "list" or "group" only there.
+    let stPhonePage = null;
+    let stSingle = false;      // a member's Settings: one group, so no list page on the phone and no moved rows
+    function stPhoneOn() {
+      try { return document.documentElement.classList.contains('mm-settings-only') || (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 720px)').matches); } catch { return false; }
     }
-    function stOpenGroup(groupId) {
+    function stPhoneList() {   // the list of groups (also the starting state)
+      stPhonePage = null;
+      const wrap = document.getElementById('st-groups');
+      if (!wrap) return;
+      if (stPhoneOn() && !stSingle) wrap.dataset.page = 'list'; else delete wrap.dataset.page;
+      stPhoneSaveMark();
+    }
+    // The shared Save is shown on the phone only on a page whose group has a box it writes (lib/ui-settings-groups usesSharedSave); a search
+    // result may show any group, so it keeps Save. index.html hides it with [data-save-here="no"].
+    function stPhoneSaveMark() {
+      const wrap = document.getElementById('st-groups'), m = wrap && wrap.closest('.st-modal');
+      if (!m) return;
+      const here = !stPhoneOn() || stSingle || stSearching || (stPhonePage ? STG.usesSharedSave(stPhonePage) : false);
+      m.dataset.saveHere = here ? 'yes' : 'no';
+    }
+    function stPhoneGo(groupId) {   // one group as a page
+      if (!stPhoneOn() || stSingle) return;
+      const wrap = document.getElementById('st-groups');
+      if (!wrap) return;
+      stPhonePage = groupId;
+      wrap.dataset.page = 'group';
+      const t = wrap.querySelector('.st-phone-title');
+      const def = STG.GROUPS.find((x) => x.id === groupId);
+      if (t) t.textContent = def ? def.title : '';
+      stPhoneSaveMark();
+      const m = wrap.closest('.st-modal'); if (m) m.scrollTop = 0;
+    }
+    // Back: from a group page to the list. false when it was already on the list (the caller then closes Settings).
+    function stPhoneBack() {
+      if (!stPhonePage) return false;
+      const from = stPhonePage;
+      stPhoneList();
+      const w = document.getElementById('st-groups'), m = w && w.closest('.st-modal'); if (m) m.scrollTop = 0;
+      const b = document.getElementById(`st-gbtn-${from}`); if (b) { try { b.focus(); } catch { /* not focusable */ } }
+      return true;
+    }
+    function stShowGroup(groupId, remember, keepPage) {
       const g = document.getElementById(`st-group-${groupId}`);
-      if (stSearchSnap) {   // a search is in progress: show the group now, and keep it open when the search is cleared
-        stSearchSnap[groupId] = true;
-        if (g) { g.style.display = ''; for (const s of g.querySelectorAll('.st-section')) s.style.display = ''; }
+      if (!g) return null;
+      stCurGroup = groupId;
+      if (!keepPage) stPhoneGo(groupId);
+      stPicked = true;
+      for (const el of document.querySelectorAll('#st-groups .st-group')) el.hidden = stSearching ? el.hidden : el.dataset.group !== groupId;
+      if (stSearching) g.hidden = false;
+      for (const b of document.querySelectorAll('#st-groups .st-gbtn')) {
+        if (b.dataset.group === groupId) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current');
       }
-      stSetOpen(g, true);
+      if (remember) { try { localStorage.setItem(STG.STORE_KEY, groupId); } catch {} }
+      return g;
     }
-
-    function stSaveOpen() {
-      const open = {};
-      for (const g of document.querySelectorAll('#st-groups details.st-group')) if (g.open && !g.dataset.autoOpen) open[g.dataset.group] = true;
-      try { localStorage.setItem('hub-settings-open', JSON.stringify(open)); } catch {}
+    // Open or close a group's closed More (a button "▸ More: names" that opens in place).
+    function stSetMore(g, open) {
+      const btn = g && g.querySelector('.st-more-btn'), body = g && g.querySelector('.st-more-body');
+      if (!btn || !body) return;
+      body.hidden = !open;
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      btn.textContent = `${open ? '▾' : '▸'} ${btn.dataset.label || 'More'}`;
+    }
+    // Show whatever holds this element: its group in the pane and, when it sits under More, that More.
+    function stReveal(el) {
+      const g = el && el.closest ? el.closest('#st-groups .st-group') : null;
+      if (!g) return;
+      if (stSearching) { const inp = document.getElementById('st-search'); if (inp) { inp.value = ''; stSearch(''); } }
+      stShowGroup(g.dataset.group, false);
+      if (el.closest('.st-more-body')) stSetMore(g, true);
+    }
+    // A critical finding in some group (the loaders call this with an old or a new id): show that group unless they already chose one.
+    function stOpenGroup(groupId) {
+      const id = stSumHome(groupId, 'setup') || groupId;
+      if (stPicked || stSearching || !document.getElementById(`st-group-${id}`)) return;
+      const crit = {};
+      for (const [gid, parts] of Object.entries(stSumParts)) crit[gid] = Object.values(parts).some((p) => p.crit && p.text);
+      crit[id] = true;
+      stShowGroup(STG.defaultGroup({ crit, last: null }), false, true);   // the pane's group; the phone stays on its list
+      stPicked = false;
     }
 
     // Settings, Security: the "Require two-factor sign-in for admins" switch. Checking it posts at once; unchecking opens
@@ -3529,28 +3575,56 @@
       if (!modal) return;
       const sections = [...modal.children].filter(el => el.classList.contains('st-section'));
       if (!sections.length) return;
-      let saved = {};
-      try { saved = JSON.parse(localStorage.getItem('hub-settings-open') || '{}') || {}; } catch {}
+      let last = null;
+      try { last = localStorage.getItem(STG.STORE_KEY); } catch {}
       for (const k of Object.keys(stSumParts)) delete stSumParts[k];
-      stSearchSnap = null;
+      stSearching = false; stPicked = false; stCurGroup = null; stPhonePage = null;
+      // A member has ONE group (You and this device): no list of groups, no search, no phone list page, just the group.
+      stSingle = !isHubAdmin();
+      const defs = stSingle ? STG.GROUPS.filter(g => g.id === 'you') : STG.GROUPS;
       const wrap = document.createElement('div');
       wrap.id = 'st-groups';
-      wrap.innerHTML = `<div class="st-search"><input type="search" id="st-search" placeholder="Search settings: privacy, sandbox, push, spend…" autocomplete="off" aria-label="Search settings"><span id="st-search-none" hidden>Nothing matches.</span></div>`
-        + (window.hubMe && window.hubMe.isAdmin ? `<div id="st-quick-links" style="margin:6px 0 10px;font-size:0.85rem">Go to: <a href="/modules" id="st-connectors-link" style="color:var(--accent)">🔌 Data connectors</a><a href="/modules#remote-computers" id="st-remote-link" style="color:var(--accent);margin-left:14px;display:${remoteComputersOk === true ? '' : 'none'}">💻 Remote computers</a><a href="/changes" id="st-changes-link" style="color:var(--accent);margin-left:14px">Changes to how agents behave</a></div>` : '')
-        + ST_GROUPS.map(g => `<details class="st-group" id="st-group-${g.id}" data-group="${g.id}"${saved[g.id] ? ' open' : ''}><summary><span class="st-group-title">${esc(g.title)}</span><span class="st-group-sum" id="st-sum-${g.id}"></span></summary><div class="st-group-body"></div></details>`).join('');
+      if (stSingle) wrap.className = 'st-single';
+      wrap.innerHTML = `<div class="st-phone-head"><button type="button" class="st-phone-back" id="st-phone-back">‹ Settings</button><span class="st-phone-title"></span></div><div class="st-search"${stSingle ? ' hidden' : ''}><input type="search" id="st-search" placeholder="Search settings: privacy, sandbox, push, spend…" autocomplete="off" aria-label="Search settings"><span id="st-search-none" hidden>Nothing matches.</span></div>`
+        + `<div class="st-panes"><nav class="st-glist" aria-label="Settings groups"${stSingle ? ' hidden' : ''}>`
+        + defs.map(g => `<button type="button" class="st-gbtn" id="st-gbtn-${g.id}" data-group="${g.id}"><span class="st-gicon" aria-hidden="true">${esc(g.icon)}</span><span class="st-gtext"><span class="st-group-title">${esc(g.title)}</span><span class="st-group-sum" id="st-sum-${g.id}"></span></span></button>`).join('')
+        + `</nav><div class="st-gpane">`
+        + defs.map(g => `<section class="st-group" id="st-group-${g.id}" data-group="${g.id}" aria-label="${esc(g.title)}" hidden><h5 class="st-ghead">${esc(g.title)}</h5><div class="st-group-body"></div><div class="st-more" hidden><button type="button" class="st-more-btn" aria-expanded="false">▸ More</button><div class="st-more-body" hidden></div></div></section>`).join('')
+        + `</div></div>`;
       modal.insertBefore(wrap, sections[0]);
       const body = (id) => wrap.querySelector(`#st-group-${id} .st-group-body`);
-      const placed = new Set();
-      for (const g of ST_GROUPS) for (const id of g.sections) {
-        const s = sections.find(el => el.id === id);
-        if (s) { body(g.id).appendChild(s); placed.add(s); }
+      for (const s of sections) {   // each section goes where lib/ui-settings-groups says; one it does not know lands in Upkeep > More
+        const at = stSingle ? { group: 'you', more: false } : STG.groupOfSection(s.id);
+        (at.more ? wrap.querySelector(`#st-group-${at.group} .st-more-body`) : body(at.group)).appendChild(s);
       }
-      for (const s of sections) if (!placed.has(s)) body(ST_GROUPS[ST_GROUPS.length - 1].id).appendChild(s);
-      for (const d of wrap.querySelectorAll('details.st-group')) d.addEventListener('toggle', () => {
-        if (d.dataset.auto) { delete d.dataset.auto; return; }
-        delete d.dataset.autoOpen;   // they clicked it: from now on it is their choice
-        if (!stSearchSnap) stSaveOpen();   // during a search nothing is remembered
+      for (const id of ['st-maestro-section', 'st-users-section']) {   // "This Maestro" opens Upkeep and the Users door opens People and safety
+        const s = wrap.querySelector(`#${id}`);
+        if (s && s.parentNode) s.parentNode.insertBefore(s, s.parentNode.firstChild);
+      }
+      stPlaceRows();
+      setTimeout(stPlaceRows, 0);   // the Appearance section paints its "new members" row a tick later
+      for (const b of wrap.querySelectorAll('.st-gbtn')) {
+        b.addEventListener('click', () => {
+          if (stSearching) { const inp = document.getElementById('st-search'); if (inp) { inp.value = ''; stSearch(''); } }
+          stShowGroup(b.dataset.group, true);
+        });
+        b.addEventListener('keydown', (e) => {   // arrow keys walk the list; Enter or Space opens (the button's own click)
+          const all = [...wrap.querySelectorAll('.st-gbtn')], i = all.indexOf(b);
+          const to = e.key === 'ArrowDown' ? all[i + 1] : e.key === 'ArrowUp' ? all[i - 1] : e.key === 'Home' ? all[0] : e.key === 'End' ? all[all.length - 1] : null;
+          if (to) { e.preventDefault(); to.focus(); }
+        });
+      }
+      for (const m of wrap.querySelectorAll('.st-more-btn')) m.addEventListener('click', () => stSetMore(m.closest('.st-group'), m.getAttribute('aria-expanded') !== 'true'));
+      stShowGroup(stSingle ? 'you' : STG.defaultGroup({ crit: {}, last }), false, true);
+      stPhoneList();   // the phone starts on the list of groups; the desktop shows the group at once
+      wrap.querySelector('#st-phone-back').addEventListener('click', () => { stPhoneBack(); });
+      for (const h of wrap.querySelectorAll('.st-ghead')) h.addEventListener('click', () => {   // a match in a phone search: its group opens as a page
+        if (!stSearching || !stPhoneOn()) return;
+        const id = h.closest('.st-group').dataset.group;
+        const inp = document.getElementById('st-search'); if (inp) { inp.value = ''; stSearch(''); }
+        stShowGroup(id, false);
       });
+      stPicked = false;   // only their click (or a link) counts as a choice; a red finding may still bring another group forward
       const input = wrap.querySelector('#st-search');
       input.addEventListener('input', () => stSearch(input.value));
       input.addEventListener('keydown', (e) => { if (e.key === 'Escape' && input.value) { e.stopPropagation(); input.value = ''; stSearch(''); } });
@@ -3570,57 +3644,386 @@
       stSum('notify', 'q', stQuestionsText(qa));
       stSum('notify', 'push', '');
       for (const k of ['search', 'cx']) stSum('tools', k, '');
-      for (const k of ['spend', 'caps']) stSum('money', k, '');
-      // Behaviour changes waiting for the owner (lib/behaviour-changes): the link says how many.
-      const chLink = document.getElementById('st-changes-link');
-      if (chLink) fetch('/api/behaviour-changes').then((r) => r.ok ? r.json() : null).then((j) => {
-        const n = j && Array.isArray(j.changes) ? j.changes.filter((c) => c && c.state === 'pending').length : 0;
-        if (n > 0) chLink.textContent = `Changes waiting for your decision (${n})`;
-      }).catch(() => {});
+      for (const k of ['spend', 'caps', 'month']) stSum('money', k, '');
+      reviewMount(wrap);
+      // Empty slots that later modules fill: "Stop all agents" at the very top of For your review, a monthly cap just above Spend in Models and money.
+      // A slot draws nothing until a module puts a row in it; modules wait for 'hub-settings-drawn' (fired once per drawing).
+      if (!stSingle) {
+        for (const [gid, id, slot] of [['review', 'st-review-top', 'stop-all'], ['money', 'st-money-cap', 'monthly-cap']]) {
+          const b = body(gid);
+          if (!b || document.getElementById(id)) continue;
+          const d = document.createElement('div');
+          d.id = id; d.setAttribute('data-slot', slot);
+          const spend = gid === 'money' ? b.querySelector('#st-spend-section') : null;   // the monthly cap rows sit with Spend: subscriptions and plan usage, then spend and caps, then the keys
+          b.insertBefore(d, spend || b.firstChild);
+        }
+      }
+      document.dispatchEvent(new CustomEvent('hub-settings-drawn'));
     }
 
-    // Search: show the sections whose words match (a group's title matching shows all of it), open their groups,
-    // hide the rest. Clearing the box puts every group back the way it was.
-    function stSearch(q) {
-      q = String(q || '').trim().toLowerCase();
-      const groups = [...document.querySelectorAll('#st-groups details.st-group')];
-      const none = document.getElementById('st-search-none');
-      if (!q) {
-        for (const g of groups) {
-          g.style.display = '';
-          for (const s of g.querySelectorAll('.st-section')) { s.style.display = ''; s.classList.remove('st-match'); }
-          if (stSearchSnap) stSetOpen(g, !!stSearchSnap[g.dataset.group]);
-        }
-        stSearchSnap = null;
-        if (none) none.hidden = true;
+    // ── For your review (lib/ui-review.js): the problems and the new features waiting, the count on the gear ──
+    // reviewRefresh() reads every answer once (each read on its own), builds the list and paints three places: the gear's count,
+    // the top of the "For your review" group and that group's summary line. Admins only (a member's Settings is another part).
+    const RV = window.hubReview;
+    let reviewLast = null, reviewSeq = 0;
+    let reviewDecided = {};   // feature id -> { title, line }: what the owner chose in this Settings window, kept on its row
+    let reviewFoldOpen = false;   // the "Suggestions" block is folded until the owner opens it
+    async function reviewRefresh() {
+      const me = window.hubMe;
+      const seq = ++reviewSeq;
+      // a hub with no login at all: /api/me is refused (no answer) or says accounts:false with no user, so the one thing to say is that
+      if (RV && ((!me && window.hubNoAccounts === true) || (me && me.accounts === false && !me.user))) {
+        reviewLast = RV.build({ accounts: { none: true }, now: Date.now() });
+        reviewPaintGear(); reviewPaintBanner();
         return;
       }
-      if (!stSearchSnap) { stSearchSnap = {}; for (const g of groups) stSearchSnap[g.dataset.group] = g.open; }
-      let any = false;
+      if (!RV || !me || !me.isAdmin || !me.user) { reviewLast = null; reviewPaintGear(); reviewPaintBanner(); return; }
+      let input;
+      try { input = await RV.load((u, o) => fetch(u, o), { accounts: { none: me.accounts === false } }); } catch { return; }
+      if (seq !== reviewSeq) return;   // a newer read is on its way
+      input.now = Date.now();
+      try { input.snooze = RV.readSnooze(localStorage, input.now); } catch { input.snooze = {}; }   // the suggestions asked again later (this browser)
+      let extra = [];
+      try { extra = await RV.loadSources((u, o) => fetch(u, o)); } catch { extra = []; }   // modules that registered a source
+      if (seq !== reviewSeq) return;
+      const before = reviewLast;   // a read that failed keeps what the last result said about it (marked stale)
+      input.previous = before;
+      reviewLast = RV.merge(RV.build(input), extra, before);
+      reviewPaintGear();
+      reviewPaintGroup();
+      reviewPaintBanner();
+    }
+    // The ONE banner (P4-15): only while something is in "Fix now". "<first item> (and N more to fix). Open For your review" and that item's fix button.
+    // It replaces the no-login, no-provider, setup, health, security and restore banners; pressing the link opens Settings at Fix now.
+    function reviewPaintBanner() {
+      let bar = document.getElementById('hub-review-banner');
+      const b = reviewLast && RV ? RV.bannerOf(reviewLast) : null;
+      if (!b) { if (bar) { bar.remove(); layoutBanners(); } return; }
+      if (!bar) {
+        bar = document.createElement('div');
+        bar.id = 'hub-review-banner';
+        bar.setAttribute('role', 'status');
+        bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9995;background:var(--banner-critical-bg);color:var(--on-color-text);padding:6px 14px;font-weight:700;box-sizing:border-box';
+        bar.addEventListener('click', (e) => {
+          const t = e.target && e.target.closest ? e.target.closest('[data-rv="open-fix"]') : null;
+          if (!t) return;
+          if (e.preventDefault) e.preventDefault();
+          openReviewAt('fix');
+        });
+        document.body.prepend(bar);
+      }
+      const first = reviewLast.fix[0];
+      bar.innerHTML = `<span class="rv-banner-text">${esc(b.title)}${b.more > 0 ? ` (and ${b.more} more to fix)` : ''}.</span> <a href="#" data-rv="open-fix" style="color:var(--on-color-text);text-decoration:underline">Open For your review</a> <span class="rv-banner-fix">${reviewFixHtml(first)}</span>`;
+      for (const s of bar.querySelectorAll('.rv-signin')) {
+        const btn = typeof ClaudeSignin !== 'undefined' ? ClaudeSignin.healthButton({ action: 'claude-signin' }) : null;
+        if (btn) s.appendChild(btn);
+      }
+      layoutBanners();
+    }
+    // "Ask me in a week" on a suggestion: kept in this browser (localStorage 'hub-review-snooze'), so a calm install can clear its suggestions. No request is made.
+    function reviewSnooze(id) {
+      if (!RV || !reviewLast) return;
+      try { RV.snoozeSuggestion(localStorage, id, Date.now()); } catch { /* blocked storage: it stays listed */ }
+      let sn = {};
+      try { sn = RV.readSnooze(localStorage, Date.now()); } catch { /* none */ }
+      reviewLast = RV.merge({ ...reviewLast, snooze: sn }, []);
+      reviewPaintGear(); reviewPaintGroup(); reviewPaintBanner();
+    }
+    function reviewPaintGear() {
+      const btn = document.getElementById('settings-btn');
+      if (!btn) return;
+      let b = document.getElementById('settings-count');
+      const r = reviewLast, kind = r && RV ? RV.badgeKind(r) : '';
+      const label = r && RV ? RV.gearLabel(r) : 'Settings';
+      btn.setAttribute('aria-label', label);
+      btn.title = label;
+      btn.setAttribute('onclick', kind ? "openReviewAt('fix')" : 'openSettings()');   // with something to fix the gear lands on Fix now
+      if (!kind) { if (b) b.remove(); return; }
+      if (!b) { b = document.createElement('span'); b.id = 'settings-count'; btn.appendChild(b); }
+      b.className = `rv-badge rv-${kind}`;
+      b.setAttribute('aria-hidden', 'true');   // the button's own label says it
+      b.textContent = String(r.count);
+    }
+    function reviewMount(wrap) {
+      reviewDecided = {};
+      const body = wrap.querySelector('#st-group-review .st-group-body');
+      if (!body) return;
+      const top = document.createElement('div');
+      top.id = 'st-review-list';   // the problems and features; #st-review-top (above it) is the empty slot for "Stop all agents"
+      top.addEventListener('click', (e) => {
+        const t = e.target && e.target.closest ? e.target.closest('[data-rv]') : null;
+        if (!t) return;
+        if (t.dataset.rv === 'details') reviewDetails(t.dataset.sec);
+        else if (t.dataset.rv === 'decide') reviewDecide(t.dataset.id, t.dataset.decision, t);
+        else if (t.dataset.rv === 'snooze') reviewSnooze(t.dataset.id);
+        else if (t.dataset.rv === 'fold') { reviewFoldOpen = !reviewFoldOpen; reviewPaintGroup(); }
+      });
+      reviewFoldOpen = false;
+      body.insertBefore(top, body.firstChild);
+      stSum('review', 'list', reviewLast && RV ? RV.summaryText(reviewLast) : 'Checking…');
+      reviewPaintGroup();
+      reviewRefresh().catch(() => {});
+    }
+    function reviewDetails(sectionId) {
+      const s = document.getElementById(sectionId);
+      if (!s) return;
+      stReveal(s);   // its group, and its More when it is kept there
+      setTimeout(() => { if (s.scrollIntoView) s.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 50);
+    }
+    function reviewFixHtml(p) {
+      const f = p.fix;
+      if (!f) return '';
+      if (f.kind === 'claude-signin') return `<span class="rv-signin" data-pid="${esc(p.id)}"></span>`;
+      const a = { label: f.label, href: f.href, api: f.api, method: f.method };
+      return p.id.startsWith('sec:') ? securityActionHtml(a) : readinessActionHtml(a);
+    }
+    function reviewPaintGroup() {
+      const top = document.getElementById('st-review-list');
+      const r = reviewLast;
+      const sumText = r && RV ? RV.summaryText(r) : 'Checking…';
+      stSum('review', 'list', sumText, !!r && r.count > 0);
+      const sum = document.getElementById('st-sum-review');
+      if (sum) {
+        sum.classList.remove('st-sum-warn');   // amber never colours the line: only "N to fix" does, and only that first part
+        if (r && r.count > 0) {
+          sum.classList.remove('st-sum-crit');
+          const at = sumText.indexOf(' · ');
+          sum.innerHTML = `<span class="st-sum-first">${esc(at < 0 ? sumText : sumText.slice(0, at))}</span>${at < 0 ? '' : esc(sumText.slice(at))}`;
+        }
+      }
+      if (!top || !r) return;
+      let h = '';
+      for (const n of r.notes) h += `<div class="rv-note">${esc(n)}</div>`;
+      // Fix now (red, never folded), Worth doing (amber marker on each row), Suggestions (grey, folded behind a button; each can be asked again in a week)
+      const rowOf = (p, tier) => `<div class="rv-row rv-${tier}" data-pid="${esc(p.id)}" data-tier="${tier}">
+          <div class="rv-main"><div class="rv-title">${esc(p.title)}</div>${p.text ? `<div class="rv-text">${esc(p.text)}</div>` : ''}${p.snoozedUntil ? `<div class="rv-text">${esc(RV.askedAgainLine(p.snoozedUntil))}</div>` : ''}</div>
+          <div class="rv-acts">${reviewFixHtml(p)}${tier === 'suggest' && !p.snoozedUntil ? ` <button type="button" class="st-test-btn" data-rv="snooze" data-id="${esc(p.id)}">Ask me in a week</button>` : ''}${p.detailsSection ? ` <button type="button" class="st-test-btn" data-rv="details" data-sec="${esc(p.detailsSection)}">Details</button>` : ''}</div></div>`;
+      if (r.fix.length) h += `<div class="rv-block rv-block-fix" data-tier="fix"><h4 class="rv-h">Fix now</h4>${r.fix.map((p) => rowOf(p, 'fix')).join('')}</div>`;
+      if (r.worth.length) h += `<div class="rv-block rv-block-worth" data-tier="worth"><h4 class="rv-h">Worth doing</h4>${r.worth.map((p) => rowOf(p, 'worth')).join('')}</div>`;
+      if (r.suggestions.length || r.snoozedSuggestions.length) {
+        h += `<div class="rv-block rv-block-suggest" data-tier="suggest"><button type="button" class="rv-fold" data-rv="fold" aria-expanded="${reviewFoldOpen ? 'true' : 'false'}">${reviewFoldOpen ? '▾' : '▸'} Suggestions (${r.suggestions.length})</button>`
+          + `<div class="rv-fold-body"${reviewFoldOpen ? '' : ' hidden'}>${r.suggestions.map((p) => rowOf(p, 'suggest')).join('')}${r.snoozedSuggestions.map((p) => rowOf(p, 'suggest')).join('')}</div></div>`;
+      }
+      const shown = r.features.map((f) => ({ id: f.id, title: f.title, text: f.text, snoozedUntil: f.snoozedUntil }));
+      for (const id of Object.keys(reviewDecided)) if (!shown.some((f) => f.id === id)) shown.push({ id, title: reviewDecided[id].title, text: '' });
+      if (shown.length) {
+        h += `<h4>New features</h4>` + shown.map((f) => {
+          const d = reviewDecided[f.id];
+          return `<div class="rv-row rv-feature" data-fid="${esc(f.id)}">
+            <div class="rv-main"><div class="rv-title">${esc(f.title)}</div>${f.text ? `<div class="rv-text">${esc(f.text)}</div>` : ''}${f.snoozedUntil && !d ? `<div class="rv-text">${esc(RV.askedAgainLine(f.snoozedUntil))}</div>` : ''}
+            <div class="rv-result" role="status" aria-live="polite">${d ? esc(d.line) : ''}</div></div>
+            ${d && d.decision !== 'snooze' ? '' : `<div class="rv-acts">${[['on', 'Turn on'], ['off', 'Leave off'], ...(d || f.snoozedUntil ? [] : [['snooze', 'Ask me in a week']])].map(([k, l]) => `<button type="button" class="st-test-btn" data-rv="decide" data-id="${esc(f.id)}" data-decision="${k}">${l}</button>`).join('')}</div>`}</div>`;
+        }).join('');
+      }
+      if (!r.problems.length && !shown.length && !r.notes.length) h += `<div class="rv-calm">Nothing needs your review.</div>`;
+      top.innerHTML = h;
+      for (const s of top.querySelectorAll('.rv-signin')) {
+        const b = typeof ClaudeSignin !== 'undefined' ? ClaudeSignin.healthButton({ action: 'claude-signin' }) : null;
+        if (b) s.appendChild(b);
+      }
+      if (r.worst === 'critical') stOpenGroup('review');   // a red problem brings this group forward unless they chose another
+    }
+    // A choice on a new feature: Turn on / Leave off / Ask me in a week. The row then says what happened in one line.
+    async function reviewDecide(id, decision, btn) {
+      const top = document.getElementById('st-review-list');
+      const row = top && [...top.querySelectorAll('.rv-feature')].find((e) => e.dataset.fid === id);
+      const say = (t) => { const el = row && row.querySelector('.rv-result'); if (el) el.textContent = t; };
+      for (const b of row ? row.querySelectorAll('button') : []) b.disabled = true;
+      try {
+        const r = await fetch(`/api/behaviour-changes/${encodeURIComponent(id)}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, expect: 'pending' }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) {   // a 403 (owner-only, or not their own browser session) shows the server's message; a 409 (answered on another device) also redraws the list
+          say(j.error || j.message || `Not saved (HTTP ${r.status}).`);
+          if (r.status === 409) {   // redraw from the hub's truth, then put the message back on the row if it is still listed
+            const msg = j.error || j.message || 'already decided';
+            reviewRefresh().catch(() => {}).then(() => {
+              const again = document.getElementById('st-review-list');
+              const el = again && [...again.querySelectorAll('.rv-feature')].find((e) => e.dataset.fid === id);
+              const res = el && el.querySelector('.rv-result');
+              if (res) res.textContent = msg;
+            });
+            return;
+          }
+          for (const b of row ? row.querySelectorAll('button') : []) b.disabled = false;
+          return;
+        }
+        const f = reviewLast && reviewLast.features.find((x) => x.id === id);
+        reviewDecided[id] = { title: (f && f.title) || id, decision, line: RV.decisionLine(decision, j.change && j.change.snoozedUntil) };
+        reviewPaintGroup();
+        reviewRefresh().catch(() => {});   // the count follows
+      } catch (e) {
+        say(`Not saved: ${e && e.message ? e.message : 'could not reach the hub'}.`);
+        for (const b of row ? row.querySelectorAll('button') : []) b.disabled = false;
+      }
+    }
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && window.hubMe && window.hubMe.isAdmin) reviewRefresh().catch(() => {}); });
+
+    // The ⓘ help (lib/ui-settings-help.js): the records are fetched again each time Settings opens; the ⓘ buttons go in after the
+    // dialog is drawn (and again for rows added later), and the search learns each section's other words from the same records.
+    let stWordsIdx = null;   // Map(section element -> [{ row, text }]), built once records and dialog are both ready
+    function stHelpMount() {
+      const H = window.hubSettingsHelp, overlay = document.getElementById('st-overlay');
+      stWordsIdx = null;
+      if (!H || !overlay) return;
+      H.mount(overlay, 'desktop', { refetch: true }).then(() => {
+        if (document.getElementById('st-overlay') === overlay) stWordsIdx = H.sectionWords(overlay, 'desktop', 'st-section');
+      }).catch(() => {});
+    }
+    // Search: show the sections whose words match (a group's title matching shows all of it), open their groups,
+    // hide the rest. A section also matches when a setting inside it is known by that word (its record's name, labels, words
+    // or what it does); those rows get a light highlight. Clearing the box puts every group back the way it was.
+    function stSearch(q) {
+      q = String(q || '').trim().toLowerCase();
+      const groups = [...document.querySelectorAll('#st-groups .st-group')];
+      const wrap = document.getElementById('st-groups');
+      const none = document.getElementById('st-search-none');
+      for (const r of document.querySelectorAll('#st-groups .st-word-hit')) r.classList.remove('st-word-hit');
+      for (const r of document.querySelectorAll('#st-groups .st-row-off')) r.classList.remove('st-row-off');   // rows a search hid come back
+      for (const g of groups) g.style.order = '';
+      if (!q) {   // cleared: every section is back, the open group is shown alone again
+        stSearching = false;
+        if (wrap) wrap.classList.remove('st-searching');
+        for (const g of groups) for (const s of g.querySelectorAll('.st-section')) { s.style.display = ''; s.classList.remove('st-match'); }
+        if (none) none.hidden = true;
+        stPhoneSaveMark();
+        const picked = stPicked;
+        stShowGroup(stCurGroup || STG.DEFAULT_GROUP, false, true);
+        stPicked = picked;
+        return;
+      }
+      stSearching = true;
+      if (wrap) wrap.classList.add('st-searching');
+      const wordHits = (s) => ((stWordsIdx && stWordsIdx.get(s)) || []).filter((e) => e.text.includes(q));
+      // every group is searched; a section matches by its own text or by another word a setting inside it is known by
+      const entries = [];
+      for (const g of groups) for (const s of g.querySelectorAll('.st-section')) entries.push({ id: s.id, group: g.dataset.group, el: s, text: `${s.textContent} ${wordHits(s).map((e) => e.text).join(' ')}` });
+      const found = STG.search(q, entries);
+      const hitEls = new Set(found.flatMap((f) => f.els)), wholeGroups = new Set(found.filter((f) => f.whole).map((f) => f.group));
+      found.forEach((f, i) => { const ge = groups.find((x) => x.dataset.group === f.group); if (ge) ge.style.order = String(i); });   // a group whose title matches comes first
       for (const g of groups) {
-        // a group whose summary is red (something critical) stays in view whatever is typed
-        const titleHit = g.querySelector('.st-group-title').textContent.toLowerCase().includes(q) || !!g.querySelector('.st-group-sum.st-sum-crit');
         let n = 0;
         for (const s of g.querySelectorAll('.st-section')) {
-          const hit = titleHit || s.textContent.toLowerCase().includes(q);
+          const hit = hitEls.has(s), whole = wholeGroups.has(g.dataset.group);
           s.style.display = hit ? '' : 'none';
-          s.classList.toggle('st-match', hit && !titleHit);
+          s.classList.toggle('st-match', hit && !whole);
+          if (hit && !whole) {
+            for (const e of wordHits(s)) if (e.row && e.row.classList) e.row.classList.add('st-word-hit');
+            // another group shows only the matching rows (the heading stays); a heading that matches shows its whole section
+            const h = [...s.children].find((c) => c.tagName === 'H4');
+            if (!(h && h.textContent.toLowerCase().includes(q))) {
+              const units = [...s.children].filter((c) => c.tagName !== 'H4');
+              const words = wordHits(s);
+              const keep = STG.searchRows(q, units.map((u) => ({
+                text: `${u.textContent} ${words.filter((e) => { for (let n = e.row; n; n = n.parentNode) if (n === u) return true; return false; }).map((e) => e.text).join(' ')}`,
+                follows: u.classList.contains('st-hint') || u.tagName === 'BUTTON',   // a hint or an ⓘ button belongs to the row above it
+              })));
+              units.forEach((u, i) => { if (!keep[i]) u.classList.add('st-row-off'); });
+            }
+          }
           if (hit) n++;
         }
-        g.style.display = n ? '' : 'none';
-        if (n) stSetOpen(g, true);
-        any = any || n > 0;
+        g.hidden = !n;
       }
-      if (none) none.hidden = any;
+      if (none) none.hidden = found.length > 0;
+      stPhoneSaveMark();
+    }
+    // Rows that move between groups (lib/ui-settings-groups ROWS: Agent Defaults dissolves). Each row, with the hints under it, goes into a
+    // small section "st-moved-<part>" in its target group (under its More when marked so); ids, names and loaders are untouched.
+    // Safe to run again: a row already moved is left alone, one that has not been drawn yet is picked up next time.
+    function stPlaceRows() {
+      const wrap = document.getElementById('st-groups');
+      if (!wrap) return;
+      for (const r of (stSingle ? [] : STG.ROWS)) {   // a member's one group keeps every row where it was drawn
+        const el = wrap.querySelector(r.selector);
+        if (!el || el.closest('.st-moved')) continue;
+        const unit = el.closest('.st-row') || el;
+        const nodes = [unit];
+        for (let n = unit.nextElementSibling; n && n.classList.contains('st-hint'); n = n.nextElementSibling) nodes.push(n);
+        const sid = STG.movedId(r);
+        let sec = document.getElementById(sid);
+        if (!sec) {
+          sec = document.createElement('div');
+          sec.className = 'st-section st-moved'; sec.id = sid;
+          const h = document.createElement('h4'); h.textContent = r.partTitle; sec.appendChild(h);
+          const host = wrap.querySelector(`#st-group-${r.to} ${r.more ? '.st-more-body' : '.st-group-body'}`);
+          if (!host) continue;
+          host.appendChild(sec);
+        }
+        for (const n of nodes) sec.appendChild(n);
+      }
+      const dflt = document.getElementById('st-defaults-section');   // nothing left of Agent Defaults: drop the empty heading
+      if (dflt && !dflt.querySelector('.st-row, .st-hint, input, select, button')) dflt.remove();
+      for (const g of wrap.querySelectorAll('.st-group')) {   // the closed More names what is inside it
+        const more = g.querySelector('.st-more'), btn = g.querySelector('.st-more-btn'), mb = g.querySelector('.st-more-body');
+        const names = [...mb.querySelectorAll(':scope > .st-section')].map((s) => (s.querySelector('h4') ? s.querySelector('h4').textContent.trim() : s.id));
+        const label = STG.moreLabel({ more: names }, (x) => x);
+        more.hidden = !label;
+        if (label) { btn.dataset.label = label; btn.textContent = `${mb.hidden ? '▸' : '▾'} ${label}`; }
+      }
+    }
+
+    // Settings → Status → Recent changes (lib/ui-settings-help.js recentLoad): the newest 30 journal entries, Load more, Restore.
+    function stRecentLoad() {
+      const H = window.hubSettingsHelp, host = document.getElementById('st-recent-list');
+      if (!H || !host) return;
+      const me = window.hubMe && window.hubMe.user;
+      H.recentLoad(host, {
+        doc: document, fetch: (u, o) => fetch(u, o),
+        userName: (id) => (me && me.id === id ? (me.name || me.login) : '') || '',
+        agentName: (n) => { const a = Array.isArray(AGENTS) ? AGENTS.find((x) => x && x.name === n) : null; return (a && a.display) || n; },
+        recordName: (id) => { const r = H.resolve(id); return (r && r.name) || ''; },
+      }).catch(() => {});
+    }
+    // A door into Settings: /#settings-for=OPT-xxxx opens Settings at that record (its group open, scrolled to, lit for 2 s, its ⓘ focused);
+    // a record with no row here opens Settings at the top and says where the setting is. Also in the phone's Settings frame (/mobile passes it on).
+    let stDoorBusy = false;
+    async function settingsDoorRun() {
+      const H = window.hubSettingsHelp, h = location.hash;
+      if (!H || stDoorBusy || !H.parseDoorHash(h, 'settings-for') || !isHubAdmin()) return;
+      stDoorBusy = true;
+      try {
+        try { history.replaceState(history.state, '', location.pathname + location.search); } catch { /* the hash stays */ }
+        if (!document.getElementById('st-overlay')) await openSettings();
+        const overlay = document.getElementById('st-overlay');
+        if (!overlay) return;
+        await H.doorFollow(h, overlay, 'desktop', {
+          open: (f) => stReveal(f.row),   // the row's group in the right pane, and its More when it sits under one
+          notHere: (rec) => hubToast(H.hereIs(rec), 6000),
+        }, 'settings-for');
+      } catch { /* Settings stays as it is */ } finally { stDoorBusy = false; }
+    }
+    function settingsDoorStart() {
+      window.addEventListener('hashchange', () => { settingsDoorRun(); });
+      settingsDoorRun();
     }
 
     // Links into Settings (the plan badge, the setup and security banners, today's spend) open the group that
     // holds the section, then scroll to it.
+    // A door row (P4-3): an option that lives on another page or panel. id "st-door-<name>"; the button is "st-door-<name>-open".
+    // action is the button's onclick (location.href for a page, the opener for a panel); { hidden: true } draws it out of sight until shown.
+    function stDoorHtml(name, title, text, action, o) {
+      return `<div class="st-door" id="st-door-${name}"${o && o.hidden ? ' style="display:none"' : ''}><div class="st-door-text"><span class="st-door-title">${esc(title)}</span><span class="st-door-sub">${esc(text)}</span></div><button type="button" class="st-test-btn" id="st-door-${name}-open" aria-label="Open ${esc(title)}" onclick="${esc(action)}">Open</button></div>`;
+    }
+    // The one banner's link (and the gear): Settings at For your review, the "Fix now" block (tier 'fix', the default) at the top of the view.
+    // The list is read a moment after the dialog opens, so wait for it.
+    async function openReviewAt(tier) {
+      await openSettings();
+      const list = document.getElementById('st-review-list');
+      if (!list) return;
+      stReveal(list);   // the For your review group
+      const want = ['fix', 'worth', 'suggest'].includes(tier) ? tier : 'fix';
+      for (let i = 0; i < 20; i++) {
+        const block = list.querySelector(`.rv-block[data-tier="${want}"]`);
+        if (block) { if (block.scrollIntoView) block.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+        await new Promise((r) => setTimeout(r, 150));
+      }
+    }
+    function recordingsDoorShown() { return AGENTS.some(a => a && a.recordings && a.recordings.canDownload === true); }
     async function openSettingsAt(sectionId) {
       await openSettings();
       const s = document.getElementById(sectionId);
       if (!s) return;
-      stSetOpen(s.closest('details.st-group'), true);
+      stReveal(s);   // its group, and its More when it is kept there
       setTimeout(() => s.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
     }
 
@@ -3635,7 +4038,46 @@
       try { target.focus(); } catch { /* not focusable here */ }
     }
 
+    // A member's Settings: ONE group, "You and this device" (the same sections and loaders as an admin's, only the member-safe ones).
+    // Nothing here reads /api/settings or any admin route; every route it uses already answers a member for their own choices.
+    async function openMemberSettings() {
+      stModal(`<h3>&#x2699; Settings</h3><p class="st-sub">Your own choices for this device and your account. Each box saves on its own.</p>
+        <div class="st-section" id="st-looks-section"><h4>Appearance</h4><div id="st-looks-body"></div></div>
+        <div class="st-section" id="st-notify-section"><h4>Notifications</h4>
+          <div class="st-row"><label>🔔 Push</label><button class="st-test-btn" id="st-push-btn" onclick="toggleDesktopPush()">…</button></div>
+          <div class="st-hint" id="st-push-hint">Notifications on this computer as well as the phone, even with this tab closed.</div>
+          <div id="st-research-pref" role="group" aria-label="Deep research" hidden></div>
+          <div id="st-notify-mine" role="group" aria-label="Your notifications"><div class="st-hint" style="margin-left:0">Loading…</div></div>
+          <div class="st-row" id="st-notify-agent" data-no-dirty><label for="st-nb-agent">For an agent</label><select id="st-nb-agent" onchange="stNotifyAgentPaint()"></select></div>
+          <div class="st-hint">Which notifications one of your agents may send you; the 🔔 next to its chat does the same. Each choice is saved as you make it.</div>
+          <div id="st-nb-agent-box" class="st-nb-box" data-no-dirty></div>
+        </div>
+        <div class="st-section" id="st-chat-section"><h4>Chat</h4>
+          <div class="st-row"><label style="flex-basis:auto"><input type="checkbox" id="st-fold-auto" ${foldAutoOn() ? 'checked' : ''} onchange="saveFoldAuto(this.checked)"> Fold consultations, scheduled tasks and hub notices into cards</label></div>
+          <div class="st-hint">This browser only. Turn it off to show every automatic turn in full.</div>
+          <div class="st-row"><label style="flex-basis:auto"><input type="checkbox" id="st-active-top" ${activeTopOn() ? 'checked' : ''} onchange="saveActiveTop(this.checked)"> Show active agents at the top of the agent list</label></div>
+          <div class="st-hint">This browser only. Agents that are working right now also appear in an Active section at the top of the list; off shows the list exactly as before.</div>
+          ${simpleAccountOk(window.hubMe) ? `<div class="st-row"><button type="button" id="st-switch-simple" onclick="simpleSwitchMode('simple')">Switch to Simple</button></div>
+          <div class="st-hint">The calm view: just the conversation, with the tools and settings out of sight. You can switch back here.</div>` : ''}
+        </div>
+        ${voiceSettingsHtml({})}
+        <div class="st-section" id="st-account-section" data-no-dirty><h4>Your account</h4>
+          <div class="st-hint">Your name and time zone are in Profile; your password, two-factor sign-in and signed-in devices are in Security.</div>
+          <div class="st-row"><button type="button" class="st-test-btn" id="st-open-profile" onclick="openProfileDialog()">Open Profile</button> <button type="button" class="st-test-btn" id="st-open-security" onclick="openSecurityDialog()">Open Security</button></div>
+        </div>
+        <div class="st-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Close</button></div>`);
+      setTimeout(() => lookSectionPaint({}), 0);
+      setTimeout(voiceSettingsInit, 0);
+      setTimeout(loadNotifySettings, 0);
+      setTimeout(() => { typeof researchPrefLoad === 'function' && researchPrefLoad(); }, 0);
+      stNotifyAgentFill();   // only this member's agents: AGENTS holds the agents the hub lists for them
+      groupSettings({});
+      stHelpMount();
+      paintDesktopPush();
+    }
+
     async function openSettings() {
+      if (!isHubAdmin()) return openMemberSettings();
       stModal(`<h3>Loading settings...</h3>`);
       let data;
       try {
@@ -3681,6 +4123,14 @@
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="loadSecurityCheck(true)">Run now</button><span id="st-sec-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
       </div>`;
       setTimeout(loadSecurityCheck, 0);
+      // Recent changes (lib/settings-journal): the newest 30 changes to settings, agents and preferences, who made them, and Restore where a value can be put back.
+      if (isHubAdmin()) {
+        html += `<div class="st-section" id="st-recent-section"><h4>Recent changes</h4>
+        <div class="st-hint">The newest changes: when, who, what, and the value before and after. Restore puts a value back while it is still the one that was set.</div>
+        <div id="st-recent-list" class="st-recent-list" style="margin-left:0">Loading…</div>
+      </div>`;
+        setTimeout(stRecentLoad, 0);
+      }
       // Memory (lib/memory-health): how each agent's memory is doing, nightly and on demand.
       html += `<div class="st-section" id="st-memory-section"><h4>Memory</h4>
         <div class="st-hint">Each agent's memory: its Records against their cap, how full its context gets, compression, its conversation archive and its chat. The check runs every night and on demand, and says what would help. It changes nothing by itself.</div>
@@ -3716,9 +4166,17 @@
       </div>`;
         setTimeout(loadComponents, 0);
       }
+      // This Maestro (moved from the top-bar ⋯ menu): the things you do to the hub itself; the buttons call the same functions as before.
+      html += `<div class="st-section" id="st-maestro-section"><h4>This Maestro</h4>
+        <div class="st-hint">Things you do to the hub itself, right now.</div>
+        <div class="st-row"><label style="flex-basis:150px">About</label><button type="button" class="st-test-btn" id="about-btn" title="Version, channel, commit and update status of this hub" onclick="openAboutDialog()">About My Maestro AI</button></div>
+        <div class="st-row"><label style="flex-basis:150px">Dream</label><button type="button" class="st-test-btn" id="dream-btn" title="Agent Dreaming: agents consolidate what they learned into long-term memory" onclick="startDream()">Dream (consolidate learnings)</button></div>
+        <div class="st-row"><label style="flex-basis:150px">Update</label><button type="button" class="st-test-btn" id="git-sync-btn" title="Update from GitHub" onclick="openGitSync()">Update from GitHub</button></div>
+        <div class="st-row"><label style="flex-basis:150px">Restart</label><button type="button" class="st-test-btn" id="restart-hub-btn" title="Restart My Maestro AI" onclick="restartHub()">Restart hub</button></div>
+      </div>`;
       // Updates (lib/update-check): the daily look at GitHub behind the "Update available" card.
       html += `<div class="st-section" id="st-updates-section"><h4>Updates</h4>
-        <div class="st-hint">Once a day the hub checks GitHub for a new version on its channel and tells admins: a card here with Update now or Later, a card on the phone, and a notification. It never installs anything by itself.</div>
+        <div class="st-hint">Once a day your Maestro checks GitHub for a new version on its channel and tells admins: a card here with Update now or Later, a card on the phone, and a notification. It never installs anything by itself.</div>
         <div class="st-row"><label style="flex-basis:150px">Check every day</label><input type="checkbox" id="st-uc-on" onchange="saveUpdateCheck(this.checked)"><span id="st-uc-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px">Checking…</span></div>
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="checkUpdatesNow(this)">Check now</button></div>
       </div>`;
@@ -3751,21 +4209,24 @@
       // Data connectors (lib/modules): outside services with a guided setup live on their own page.
       // Messaging channels (moved from the ⋯ menu): the existing panel, opened over Settings with its own saves
       html += `<div class="st-section" id="st-comms-section"><h4>Messaging channels</h4>
-        <div class="st-hint">Telegram and other messaging apps: which agents use each channel, who may write to them, and a test message. <button class="st-test-btn" onclick="openCommsPanel()">Open messaging channels</button></div>
+        ${stDoorHtml('comms', 'Messaging channels', 'Telegram and other messaging apps: which agents use each channel, who may write to them, and a test message.', 'openCommsPanel()')}
       </div>`;
-      html += `<div class="st-section" id="st-modules-section"><h4>Data connectors</h4>
-        <div class="st-hint">Connect outside services such as Google Drive and Oura, with a guided setup. <button class="st-test-btn" onclick="location.href='/modules'">Open Data connectors</button></div>
+      html += `<div class="st-section" id="st-modules-section"><h4>Connectors, computers and wallets</h4>
+        ${stDoorHtml('modules', 'Data connectors', 'Outside services such as Google Drive and Oura, each with a guided setup.', "location.href='/modules'")}
+        ${stDoorHtml('remote', 'Remote computers', "Open another computer's desktop from here (shown while the connector is on).", "location.href='/modules#remote-computers'", { hidden: remoteComputersOk !== true })}
+        ${stDoorHtml('wallets', 'Wallets', 'Trading wallets on-chain: balances, sending and keys for your agents.', 'openWalletPanel()')}
       </div>`;
       setTimeout(loadReadiness, 0);
 
       // Local models (lib/local-models): one proxy (llama-swap) for every local engine, configured on its own page.
       html += `<div class="st-section" id="st-local-models-section"><h4>Local models</h4>
-        <div class="st-hint">Run models on this machine through one proxy that starts the right engine (llama.cpp, NInfer or a command of your own), keeps a model loaded while it is in use and swaps when another is asked for. Models appear as <code>local/…</code>. <a href="/local-models" style="color:var(--accent)">Open the Local models page</a> <span id="st-local-models-status" class="st-dim"></span></div>
+        ${stDoorHtml('local-models', 'Local models', 'Run models on this computer through one proxy: add engines and models, see what is loaded. They appear as local/… in the model lists.', "location.href='/local-models'")}
+        <div class="st-hint"><span id="st-local-models-status" class="st-dim"></span></div>
       </div>`;
       setTimeout(async () => { try { const r = await fetch('/api/local-models', { credentials: 'include' }); const j = await r.json(); const el = document.getElementById('st-local-models-status'); if (el && j && j.ok !== false) el.textContent = `· ${j.running ? 'proxy running on ' + j.port : (j.enabled ? 'proxy stopped' : 'off')}, ${(j.models || []).length} model(s)${(j.loaded || []).length ? ', loaded: ' + j.loaded.map(x => x.model || x.id || x).join(', ') : ''}`; if (j && j.ok !== false && j.enabled) stSum('models', 'local', `local models ${j.running ? 'running' : 'stopped'}`); } catch {} }, 0);
 
       html += `<div class="st-section" id="st-prov-section"><h4>LLM Providers</h4>
-        <div class="st-hint">Keys are kept in one place: <code>data/settings.json</code>, readable only by this computer's account. A key typed into <code>.env</code> moves here when the hub starts.</div>`;
+        <div class="st-hint">Keys are kept in one place: <code>data/settings.json</code>, readable only by this computer's account. A key typed into <code>.env</code> moves here when your Maestro starts.</div>`;
       for (const p of PROVIDERS) {
         const pdata = data.providers?.[p.id] || {};
         if (p.hasKey) {
@@ -3835,6 +4296,7 @@
         </div>
         <div class="st-hint">How often someone who chose Never for deep research is reminded, at the end of a reply, that it is off.</div>`;
         })() : ''}
+        ${isHubAdmin() ? researchOwnWorkBlockHtml(data) : ''}
         ${isHubAdmin() ? researchThoroughBlockHtml(data) : ''}
       </div>`;
 
@@ -3903,10 +4365,11 @@
 
       html += `<div class="st-section" id="st-emergency-section"><h4>Emergency</h4>
         <div class="st-row">
-          <label>Kill switch</label>
-          <button class="st-test-btn" style="color:var(--on-color-text);background:var(--halt-banner-bg)" onclick="haltHub()">⛔ Halt all agents</button>
+          <label>Stop all agents</label>
+          <button id="st-stop-all" class="st-test-btn" style="color:var(--on-color-text);background:var(--halt-banner-bg)" onclick="haltHub()">⛔ Stop all agents</button>
         </div>
-        <div class="st-hint">Stops every running turn and job and blocks new ones until you press Resume.</div>
+        <div class="st-hint">Stops every running turn, worker and research run, and every job except those marked Keep running, and blocks new ones until you press Resume. Scheduled tasks that come due meanwhile wait and run after Resume.</div>
+        <div id="st-stop-panel" class="st-hint" style="display:none;margin-left:0"></div>
         <div class="st-row">
           <label>Provider pacing</label>
           <div id="st-pacing" style="flex:1;font-size:0.8rem;display:flex;flex-direction:column;gap:6px"></div>
@@ -3986,6 +4449,9 @@
         <div class="st-row"><label style="flex-basis:150px">Send off this machine</label>${mpSel('send')}</div>
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="saveMemberPolicy()">Save member defaults</button><span id="st-mp-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
       </div>`;
+        html += `<div class="st-section" id="st-users-section"><h4>People</h4>
+        ${stDoorHtml('users', 'Users and invitations', "Accounts, invitations, what each person's agents may do, API tokens.", "location.href='/users'")}
+      </div>`;
         html += `<div class="st-section" id="st-sb-section"><h4>Agent sandboxes</h4>
         <div class="st-hint">A sandboxed agent's shell and file tools run in a container of its own that holds only its folders: no hub data, no keys, no other agents. Hub tools (memory, Records, consultations, the policy gate) stay outside. Each agent can be set on its settings page; the defaults below say what "hub default" means. Needs Docker and the sandbox image. Without them, a sandboxed agent gets no shell instead of running on the host.</div>
         <div class="st-row"><label style="flex-basis:150px">Member-owned agents</label>${selSb('st-sb-member', [['container', 'container (recommended)'], ['off', 'off']], sbd.member || 'container')}</div>
@@ -4020,7 +4486,7 @@
         ${keyRow('serper', 'Serper key', 'serper.dev; Google results')}
         ${keyRow('tavily', 'Tavily key', 'tavily.com; LLM-ready results')}
         <div class="st-row"><label style="flex-basis:150px">Perplexity</label><span class="st-hint" style="margin:0">uses the Perplexity provider key above. <span id="st-ws-pplx"></span></span></div>
-        <div class="st-row" style="flex-wrap:wrap;row-gap:6px"><label style="flex-basis:150px">SearXNG URL</label><input type="text" id="st-ws-searxng" value="${esc((wsc.searxng && wsc.searxng.url) || '')}" placeholder="http://127.0.0.1:8888" style="flex:1 1 180px;min-width:0;max-width:260px"> <button class="st-test-btn" onclick="searxngStart()">Run SearXNG here (Docker)</button><button class="st-test-btn" onclick="searxngStop()">Stop it</button></div>
+        <div class="st-row" style="flex-wrap:wrap;row-gap:6px"><label style="flex-basis:150px">SearXNG URL</label><input type="text" id="st-ws-searxng" value="${esc((wsc.searxng && wsc.searxng.url) || '')}" placeholder="http://127.0.0.1:8888" style="flex:1 1 180px;min-width:0;max-width:260px"> <button class="st-test-btn" data-setting="OPT-0487" onclick="searxngStart()">Run SearXNG here (Docker)</button><button class="st-test-btn" onclick="searxngStop()">Stop it</button></div>
         <div class="st-row"><label style="flex-basis:150px">Private addresses</label>${selWs('st-wf-private', [['admin', 'admin-side agents may fetch them (default)'], ['none', 'nobody'], ['all', 'every agent']], wfc.allowPrivate || 'admin')}</div>
         <div class="st-row"><label style="flex-basis:150px" for="st-wf-render">Browser rendering</label>${selWs('st-wf-render', [['auto', 'auto (when the plain fetch is empty)'], ['off', 'off'], ['always', 'always']], wfc.render || 'auto')}</div>
         <div class="st-row"><label style="flex-basis:150px">Jina Reader</label><label style="flex:1;min-width:0;display:flex;gap:6px;align-items:center;text-align:left;cursor:pointer"><input type="checkbox" id="st-wf-jina" ${wfc.jina ? 'checked' : ''}> Fallback reader (sends the URL to r.jina.ai)</label></div>
@@ -4049,14 +4515,24 @@
         </div>
         <div class="st-row">
           <label style="flex-basis:150px">Daily pay-per-use cap per agent ($)</label>
-          <input type="text" id="st-cap-agent" placeholder="unlimited" inputmode="decimal" style="max-width:120px">
+          <input type="text" id="st-cap-agent" placeholder="unlimited" inputmode="decimal" style="max-width:120px" disabled>
         </div>
         <div class="st-row">
           <label style="flex-basis:150px">Daily pay-per-use cap, whole hub ($)</label>
-          <input type="text" id="st-cap-hub" placeholder="unlimited" inputmode="decimal" style="max-width:120px">
+          <input type="text" id="st-cap-hub" placeholder="unlimited" inputmode="decimal" style="max-width:120px" disabled>
           <button class="st-test-btn" id="st-caps-save" onclick="saveSpendCaps()">Save</button>
         </div>
         <div class="st-hint" style="margin-left:158px">Caps count pay-per-use spend only (API keys and paid cloud voices), never plan use. Over a cap, an agent's decided actions (sending, writing outside its folders, admin, destructive) switch to ask for the rest of the day; nothing is silently stopped. Blank = unlimited.</div>
+        <div class="st-row">
+          <label style="flex-basis:150px" title="A hard stop on pay-per-use spend for the month. Once it is used up, agents on pay-per-use models answer with a short notice until the month starts again or you raise the cap. Plan and local agents keep working.">Monthly cap ($)</label>
+          <input type="text" id="st-cap-month" placeholder="no cap" inputmode="decimal" style="max-width:120px" disabled>
+          <span style="font-size:0.78rem;color:var(--text-dim)">month starts on day</span>
+          <input type="text" id="st-cap-month-day" placeholder="1" inputmode="numeric" style="max-width:44px" title="1 to 28; 1 is the calendar month" disabled>
+        </div>
+        <div class="st-row">
+          <label style="flex-basis:150px"></label>
+          <div id="st-month-spend" style="flex:1;font-size:0.8rem;color:var(--text-dim)"></div>
+        </div>
         <div class="st-row">
           <label style="flex-basis:150px" title="A monthly API credit, for example the one that comes with a Claude Max plan. The header then shows this period's spend through the hub against it.">Monthly API credit ($)</label>
           <select id="st-credit-provider" onchange="fillCreditInputs()" style="max-width:120px">${CREDIT_PROVIDERS.map(([id, label]) => `<option value="${id}">${label}</option>`).join('')}</select>
@@ -4074,16 +4550,19 @@
       html += `<div class="st-actions">
         <span class="st-saved" id="st-saved">Saved</span>
         <button class="st-btn secondary" onclick="dialogRequestClose(this)">Close</button>
-        <button class="st-btn" onclick="saveSettings()">Save</button>
+        <button class="st-btn st-save-main" onclick="saveSettings()">Save</button>
       </div>`;
 
       stModal(html);
       stTuningMount(); stNotifyAgentFill();   // the moved tuning controls and the per-agent notification choices
       groupSettings(data);
+      stHelpMount();   // the ⓘ help beside each setting, and the words the search also matches (lib/ui-settings-help.js); after the rows are drawn, never inside their markup
       paintDesktopPush();
       paintPacingSettings();
+      stStopPanelStart();   // Stop all agents: what was stopped, what is finishing, what waits (admins; refreshes while open)
       paintSpendSettings();
       loadRootGrants();
+      researchCapsLoad();   // the "Today: n started by agents" line (admin only; hidden when the route fails)
     }
 
     // Auto model classifier (lib/classifier): settings, tallies, and the side-by-side try-it box.
@@ -4208,42 +4687,12 @@
         const r = await (await fetch(api, { method, headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: method === 'POST' ? '{}' : undefined })).json();
         if (btn) btn.textContent = r.ok ? (r.job ? `Started as job ${r.job}` : 'Done') : (r.error || 'Failed');
         setTimeout(loadReadiness, 4000);
+        setTimeout(() => (typeof reviewRefresh === "function" ? reviewRefresh() : Promise.resolve()).catch(() => {}), 4000);
       } catch (e) { if (btn) btn.textContent = 'Failed: ' + e.message; }
     }
-    // Banner for admins while anything is critical (no accounts, no provider, members without Docker...).
-    async function paintReadinessBanner() {
-      const me = window.hubMe;
-      let bar = document.getElementById('hub-readiness-notice');
-      if (!me || !me.isAdmin || !me.user) { if (bar) bar.remove(); return; }
-      let d = null;
-      try { d = await (await fetch('/api/readiness', { credentials: 'include' })).json(); } catch { return; }
-      const crit = (d && d.items || []).filter(i => i.level === 'critical' && i.id !== 'accounts' && i.id !== 'provider' && !String(i.id || '').startsWith('health-'));   // those two have their own banners; the health banner shows the health- items
-      if (!crit.length) { if (bar) bar.remove(); layoutBanners(); return; }
-      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-readiness-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9996;background:var(--banner-setup-bg);color:var(--on-color-text);padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
-      bar.innerHTML = `Setup needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-ready-section'); return false" style="color:var(--on-color-text);text-decoration:underline">Open the setup checklist</a>.`;
-      layoutBanners();
-    }
-    // Banner for admins while the nightly health check has a critical problem (a full disk...). The sign-in items are
-    // left out: the setup checklist's own banner covers them. An error or a non-200 answer leaves the bar as it is.
-    function healthBannerItems(view) {
-      return ((view && view.items) || []).filter(i => i && i.level === 'critical' && !String(i.id || '').startsWith('health-signin-'));
-    }
-    async function paintHealthBanner() {
-      const me = window.hubMe;
-      let bar = document.getElementById('hub-health-notice');
-      if (!me || !me.isAdmin || !me.user) { if (bar) { bar.remove(); layoutBanners(); } return; }
-      let d = null;
-      try { const r = await fetch('/api/system-health', { credentials: 'include' }); if (!r.ok) return; d = await r.json(); } catch { return; }
-      bar = document.getElementById('hub-health-notice');
-      const crit = healthBannerItems(d);
-      if (!crit.length) { if (bar) bar.remove(); layoutBanners(); return; }
-      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-health-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9995;background:var(--banner-critical-bg);color:var(--on-color-text);padding:6px 14px;font-weight:700;box-sizing:border-box'; document.body.prepend(bar); }
-      bar.innerHTML = `Health: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-health-section'); return false" style="color:var(--on-color-text);text-decoration:underline">Open Settings → Status</a>`;
-      for (const i of crit) { const b = typeof ClaudeSignin !== 'undefined' && ClaudeSignin.healthButton(i); if (b) bar.appendChild(b); }
-      layoutBanners();
-    }
+    // The setup and health banners are gone (P4-15): their conditions are "Fix now" items in For your review and the ONE banner (reviewPaintBanner) shows them.
     // The notices fixed at the top stack in this order, whichever painted first: the phone-layout bar
-    // (showMobileBanner), no AI provider yet, the setup checklist, health, security. Each one sits below the ones above it, so
+    // (showMobileBanner), the Quiet Page line, then the one review banner. Each one sits below the ones above it, so
     // none covers another (or its X), and the page moves down by their height (--banner-h), so they never cover the
     // header and its Settings button.
     // The one-time Quiet Page line (lib/ui-simple.js themeNotice): normal mode, Quiet Page, a dark theme, not yet seen by this account.
@@ -4277,7 +4726,7 @@
     for (const ev of ['mm-look-change', 'mm-theme-change', 'mm-theme-resolved']) document.addEventListener(ev, () => { try { themeNoticeSync(); } catch { /* the one-time line is optional */ } });
     function layoutBanners() {
       let top = 0;
-      for (const id of ['hub-phone-layout-notice', 'hub-no-accounts-notice', 'hub-recovery-notice', 'hub-setup-notice', 'hub-theme-notice', 'hub-readiness-notice', 'hub-health-notice', 'hub-security-notice']) {
+      for (const id of ['hub-phone-layout-notice', 'hub-theme-notice', 'hub-review-banner']) {
         const n = document.getElementById(id);
         if (!n) continue;
         n.style.top = `${top}px`;
@@ -4308,7 +4757,7 @@
         if (state) state.textContent = `${d.critical ? `${d.critical} critical` : 'nothing critical'}${d.warnings ? `, ${d.warnings} warning(s)` : ''}${d.infos ? `, ${d.infos} note(s)` : ''}; ${d.cached ? 'last run' : 'checked'} ${new Date(d.checkedAt).toLocaleString()}.${skipped}`;
         stSum('status', 'security', d.critical ? `Security: ${d.critical} critical` : d.warnings ? `Security: ${d.warnings} warning${d.warnings === 1 ? '' : 's'}` : 'Security: all good', !!d.critical);
         if (d.critical) stOpenGroup('status');
-        paintSecurityBanner().catch(() => {});   // a Run now that resolves or finds something updates the banner at once
+        reviewRefresh().catch(() => {});   // a Run now that resolves or finds something updates the list, the count and the banner at once
       } catch (e) { el.textContent = 'Could not run the security check: ' + e.message; if (state) state.textContent = ''; stSum('status', 'security', 'Security: could not check'); }
     }
     // Memory (lib/memory-health): agents needing attention first, each with what was found; the fine ones folded away.
@@ -4739,61 +5188,11 @@
         const r = await (await fetch(api, { method, headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: method === 'POST' ? '{}' : undefined })).json();
         if (btn) btn.textContent = r.ok ? (r.fixed ? `Done: ${r.fixed.length} file(s)` : 'Done') : (r.error || 'Failed');
         setTimeout(() => loadSecurityCheck(true), 800);
+        setTimeout(() => (typeof reviewRefresh === "function" ? reviewRefresh() : Promise.resolve()).catch(() => {}), 2500);
       } catch (e) { if (btn) btn.textContent = 'Failed: ' + e.message; }
     }
-    // Banner for admins from the last security check (below the setup banner when both show).
-    // Critical: red, cannot be dismissed; it goes away once the check no longer finds it (Run now, or the next run).
-    // Warnings only: dark yellow with an X. Dismissing hides it in this browser until the set of warnings changes:
-    // a different set (a new warning, or one fixed and back) shows it again, and a critical finding always does.
-    const SEC_DISMISS_KEY = 'hub-security-warn-dismissed';
-    let secPaintSeq = 0, secShownSeq = 0;   // paints overlap (page load, the check in Settings): an answer older than the one shown is dropped
-    function securityWarnKey(items) { return items.map(i => i.id).sort().join(','); }
-    function dismissSecurityBanner() {
-      const bar = document.getElementById('hub-security-notice');
-      if (!bar || bar.dataset.level !== 'warn') return;   // a critical banner cannot be dismissed
-      try { localStorage.setItem(SEC_DISMISS_KEY, bar.dataset.key || ''); } catch {}
-      bar.remove();
-      layoutBanners();
-    }
-    async function paintSecurityBanner() {
-      const seq = ++secPaintSeq;
-      const me = window.hubMe;
-      if (!me || !me.isAdmin || !me.user) {
-        secShownSeq = seq;   // and no earlier answer still on its way may draw
-        const old = document.getElementById('hub-security-notice'); if (old) { old.remove(); layoutBanners(); }
-        return;
-      }
-      let d = null;
-      try {
-        const r = await fetch('/api/security-check', { credentials: 'include' });
-        if (!r.ok) return;   // an error is not "all clear": whatever shows stays
-        d = await r.json();
-      } catch { return; }
-      if (!d || !Array.isArray(d.items)) return;
-      if (seq < secShownSeq || window.hubMe !== me) return;   // a newer answer already shows, or the signed-in user changed
-      secShownSeq = seq;
-      let bar = document.getElementById('hub-security-notice');   // after the wait: it may have gone, or been made
-      const items = d.items.filter(i => i.id !== 'accounts');   // no-accounts has its own banner
-      const crit = items.filter(i => i.level === 'critical');
-      const warn = items.filter(i => i.level === 'warn');
-      const key = securityWarnKey(warn);
-      let dismissed = ''; try { dismissed = localStorage.getItem(SEC_DISMISS_KEY) || ''; } catch {}
-      if (dismissed && dismissed !== key) { dismissed = ''; try { localStorage.removeItem(SEC_DISMISS_KEY); } catch {} }   // the set changed
-      if (!crit.length && (!warn.length || dismissed === key)) { if (bar) bar.remove(); layoutBanners(); return; }
-      if (!bar) { bar = document.createElement('div'); bar.id = 'hub-security-notice'; document.body.prepend(bar); }
-      const level = crit.length ? 'critical' : 'warn';
-      bar.dataset.level = level;
-      bar.dataset.key = level === 'warn' ? key : '';
-      bar.style.cssText = `position:fixed;top:0;left:0;right:0;z-index:9995;background:${level === 'critical' ? 'var(--banner-critical-bg)' : 'var(--banner-warn-bg)'};color:var(--on-color-text);padding:6px 44px 6px 14px;font-weight:600;box-sizing:border-box`;
-      const link = `<a href="#" onclick="openSettingsAt('st-sec-section'); return false" style="color:var(--on-color-text);text-decoration:underline">Open the security check</a>`;
-      bar.innerHTML = level === 'critical'
-        ? `Security needs attention: ${crit.map(i => esc(i.title)).join('; ')}. ${link}.`
-        : `Security: ${warn.length} warning${warn.length === 1 ? '' : 's'} to review. ${link}.`
-          + `<button type="button" class="sec-dismiss" aria-label="Dismiss security warnings" title="Hide until the warnings change" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:0;color:var(--on-color-text);font-size:20px;line-height:1;cursor:pointer;padding:2px 6px">&times;</button>`;
-      const x = bar.querySelector('.sec-dismiss');
-      if (x) x.addEventListener('click', () => dismissSecurityBanner());
-      layoutBanners();
-    }
+    // The security banner is gone (P4-15): a critical finding is a "Fix now" item in For your review (the one banner shows it) and a warning is
+    // "Worth doing" there (never a banner, never counted), so the old X that hid the warnings has nothing left to hide.
     // ── Update available (lib/update-check): the server looks at GitHub once a day. While an update waits, admins see
     // a card at the bottom right (Update now / Later) and a chip in the sidebar; the chip stays after Later and brings
     // the card back. "Update now" is the Update dialog's own update and restart, for the current channel. ──
@@ -4829,7 +5228,7 @@
         ? `<div class="uc-warn">This hub has ${s.ahead ? `${s.ahead} commit${s.ahead === 1 ? '' : 's'} of its own that GitHub doesn't have` : `${s.dirty} changed file${s.dirty === 1 ? '' : 's'} that ${s.dirty === 1 ? "isn't" : "aren't"} committed`}, so it can't update by itself. Open Details to choose what to do.</div>`
         : busy.length ? `<div class="uc-warn">${busy.length === 1 ? `${esc(agentDisplayName(busy[0]))} is` : `${busy.length} agents are`} working. Updating restarts the hub and cuts ${busy.length === 1 ? 'that reply' : 'those replies'} short.</div>` : '';
       card.innerHTML = `<div class="uc-head">⬇️ ${esc(s.headline || 'An update is ready')}</div>
-        <div class="uc-sub">${have}${s.security ? ' <span class="uc-sec">Includes a security fix.</span>' : ''}</div>
+        <div class="uc-sub">${have}${s.security ? ' <span class="uc-sec">Includes a security fix.</span>' : ''} <a href="#" class="uc-details" id="uc-settings" onclick="openSettingsAt('st-updates-section'); return false">Update settings</a></div>
         ${notes ? `<div class="uc-label">What's new</div><ul class="uc-notes">${notes}</ul>` : ''}${warn}
         <div class="uc-msg" id="uc-msg"></div>
         <div class="uc-actions">${s.blocked
@@ -4861,10 +5260,10 @@
       }
       if (msg) msg.innerHTML = `<div class="uc-ok">✓ Updated. Restarting the hub…</div>`;
       // The Update dialog's own restart: flush the active replies, restart, wait for the new boot.
-      const rbtn = document.getElementById('restart-hub-btn');
+      const rbtn = document.getElementById('restart-hub-btn') || document.createElement('button');   // the button lives in Settings → Upkeep: a closed dialog has none
       let refused = null;
       try { const pr = await postRestart(); if (pr.cancelled) refused = 'cancelled'; else if (!pr.r.ok) refused = pr.r.status; } catch { /* expected: the server goes away */ }
-      if (refused) { if (msg) msg.innerHTML = `<div class="uc-err">Updated, but your Maestro was not restarted (${refused === 'cancelled' ? 'you chose to wait' : 'HTTP ' + refused}). Restart it from the ⋯ menu to finish.</div>`; return; }
+      if (refused) { if (msg) msg.innerHTML = `<div class="uc-err">Updated, but your Maestro was not restarted (${refused === 'cancelled' ? 'you chose to wait' : 'HTTP ' + refused}). Restart it from Settings, under Upkeep, to finish.</div>`; return; }
       setTimeout(() => pollForRestart(rbtn), 8000);
     }
     // Settings → Status → Updates.
@@ -5693,6 +6092,70 @@
         <div class="st-hint">A test: helpers and readers get the hub's own web search as well as the one they have. Leave it on the usual search unless you are comparing results.</div>
       </div>`;
     }
+    // Research an agent needs for its own work (admin): how long a research question waits for an answer, and how many runs agents may start
+    // without asking (settings.researchOfferWaitSeconds, settings.researchAgentCaps { perAgent, install }). Each control saves at once.
+    // The phone's Settings frame is this same Settings page, so the phone needs nothing more.
+    function researchOwnWorkBlockHtml(data) {
+      const w = Number(data && data.researchOfferWaitSeconds);
+      const wait = Number.isInteger(w) && w >= 0 && w <= 600 ? w : 120;
+      const waits = [[0, "Don't wait"], [30, '30 seconds'], [60, '1 minute'], [120, '2 minutes'], [300, '5 minutes'], [600, '10 minutes']];
+      if (!waits.some(o => o[0] === wait)) waits.push([wait, `${wait} seconds`]);
+      const c = (data && data.researchAgentCaps && typeof data.researchAgentCaps === 'object') ? data.researchAgentCaps : {};
+      const cap = (k, hi, d) => { const n = Number(c[k]); return Number.isInteger(n) && n >= 0 && n <= hi ? n : d; };
+      const perAgent = cap('perAgent', 100, 3), install = cap('install', 1000, 10);
+      return `<div id="st-research-ownwork">
+        <div class="st-row"><label><b>Research started by agents</b></label></div>
+        <div class="st-row">
+          <label for="st-ro-wait">Wait for an answer</label>
+          <select id="st-ro-wait" data-saved="${wait}" onchange="saveResearchOwnWork('researchOfferWaitSeconds', this)">${waits.map(([v, l]) => `<option value="${v}"${v === wait ? ' selected' : ''}>${l}</option>`).join('')}</select>
+        </div>
+        <div class="st-hint">How long a research question waits for you. After that the agent starts a quick run and says so in its report.</div>
+        <div class="st-row">
+          <label for="st-ro-per-agent">Per agent, per day</label>
+          <input type="number" id="st-ro-per-agent" min="0" max="100" step="1" value="${perAgent}" data-saved="${perAgent}" style="max-width:90px" onchange="saveResearchOwnWork('perAgent', this)">
+        </div>
+        <div class="st-row">
+          <label for="st-ro-install">All agents, per day</label>
+          <input type="number" id="st-ro-install" min="0" max="1000" step="1" value="${install}" data-saved="${install}" style="max-width:90px" onchange="saveResearchOwnWork('install', this)">
+        </div>
+        <div class="st-hint">How many research runs agents may start without asking. 0 means no limit.</div>
+        <div class="st-hint" id="st-ro-today" hidden></div>
+      </div>`;
+    }
+    async function researchCapsLoad() {
+      const el = document.getElementById('st-ro-today');
+      if (!el) return;
+      try {
+        const r = await fetch('/api/research/caps', { credentials: 'include' });
+        const d = r.ok ? await r.json() : null;
+        if (d && !d.today && typeof d.error === 'string' && d.error) { el.textContent = d.error; el.hidden = false; return; }   // the count can't be read: say so
+        const n = d && d.today && Number(d.today.install);
+        if (!Number.isFinite(n)) { el.hidden = true; return; }
+        el.textContent = `Today: ${n} started by agents`;
+        el.hidden = false;
+      } catch { el.hidden = true; }
+    }
+    let researchOwnWorkSaving = false;
+    async function saveResearchOwnWork(key, el) {
+      const saved = el.dataset.saved;
+      if (researchOwnWorkSaving) { el.value = saved; hubToast('Another setting is saving. Try again in a moment.'); return; }
+      const value = Number(el.value);
+      const hi = key === 'researchOfferWaitSeconds' ? 600 : key === 'perAgent' ? 100 : 1000;
+      if (el.value === '' || !Number.isInteger(value) || value < 0 || value > hi) { el.value = saved; hubToast(`Enter a whole number from 0 to ${hi}.`); return; }
+      const other = (id, d) => { const o = document.getElementById(id); const n = o ? Number(o.dataset.saved) : NaN; return Number.isInteger(n) ? n : d; };
+      const patch = key === 'researchOfferWaitSeconds' ? { researchOfferWaitSeconds: value }
+        : { researchAgentCaps: { perAgent: key === 'perAgent' ? value : other('st-ro-per-agent', 3), install: key === 'install' ? value : other('st-ro-install', 10) } };   // both keys, as the server stores the pair
+      researchOwnWorkSaving = true;
+      try {
+        const r = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(patch) });
+        if (!r.ok) { let m = 'HTTP ' + r.status; try { const j = await r.json(); if (j && j.error) m = j.error; } catch {} throw new Error(m); }
+        el.dataset.saved = String(value);
+        hubToast('Saved.');
+      } catch (e) {
+        el.value = saved;
+        hubToast('Could not save: ' + e.message);
+      } finally { researchOwnWorkSaving = false; }
+    }
     let researchThoroughSaving = false;
     async function saveResearchSetting(key, el) {
       const saved = el.dataset.saved;
@@ -5923,7 +6386,8 @@
         const ag = (typeof AGENTS !== 'undefined' && AGENTS.find(x => x.name === a)) || null;
         const shown = (ag && (ag.display || ag.displayName)) || capName(a);
         return `<div class="st-row"><label>${esc(shown)}</label><span class="st-hint" style="margin:0;flex:1">${NOTIFY_AGENT_KINDS.map(([k, label]) => `${label}: ${p.agents[a][k] ? notifyModeLabel(p.agents[a][k]) : 'my default'}`).join(' · ')}</span>
-          <button class="st-test-btn" onclick="notifyAgentReset(${esc(JSON.stringify(a)).replace(/'/g, '&#39;')})" aria-label="Reset ${esc(shown)} to my default">Reset</button></div>`;
+          <button class="st-test-btn" onclick="notifyAgentReset(${esc(JSON.stringify(a)).replace(/'/g, '&#39;')})" aria-label="Reset ${esc(shown)} to my default">Reset</button>
+          ${ag ? `<button class="st-test-btn" data-open-agent="${esc(a)}" onclick="openAgentSettings(${esc(JSON.stringify(a)).replace(/'/g, '&#39;')}, event)" aria-label="Open ${esc(shown)}'s card">Open card</button>` : ''}</div>`;
       }).join('') : '<div class="st-hint" style="margin-left:0">None. Use the 🔔 in an agent\'s chat header to give one its own setting.</div>';
       box.innerHTML = `<h5 style="margin:10px 0 6px">Your notifications</h5>
         <div class="st-hint" style="margin-left:0">For you, on all your devices.</div>${rows}
@@ -6280,7 +6744,7 @@
       const pct = pctOf(main);
       let text = main.weekly ? `ChatGPT ${pct}%` : `ChatGPT ${main.label || 'usage'} ${pct}%`;
       const shorts = live.filter(w => w.short && w !== main && pctOf(w) > 50);
-      if (shorts.length) { const s = best(shorts); text += ` · ${String(s.label || '5-hour').replace(/-hour$/, 'h')} ${pctOf(s)}%`; }
+      if (shorts.length) { const s = best(shorts); text += ` · ${s.label || '5-hour'} ${pctOf(s)}%`; }
       const passed = lv.filter(l => pct >= l);
       const cls = pct >= 100 ? 'refused' : passed.length && passed.length === lv.length ? 'hot' : passed.length ? 'warn' : '';
       const when = subsWhen(main.resetsAt) || 'the reset';
@@ -6419,7 +6883,72 @@
       const s = planState(w, levels);
       return s.extra ? `${s.pct}% · extra usage` : `${s.pct}%`;
     }
+    function planBadgeView(d, family, choice, subsOn, levels) {
+      const rank = (c) => (c === 'refused' ? 3 : c === 'hot' ? 2 : c === 'warn' ? 1 : 0);
+      const read = ((d && d.weekly) || []).filter(w => w && w.utilization != null);
+      const f5 = d && d.windows && d.windows.five_hour;
+      const wins = {
+        plan: read.find(w => w.family == null) || null,
+        family: family ? read.find(w => w.family === family) || null : null,
+        five: f5 && f5.utilization != null ? Object.assign({}, f5, { resetsAt: f5.resetsAt || f5.resets_at }) : null,
+      };
+      const avail = ['plan', 'family', 'five'].filter(k => wins[k]);
+      if (!wins.plan && !wins.family) return null;
+      const mk = (kind) => ({ kind, w: wins[kind] });
+      const mainKind = avail.includes(choice) ? choice : wins.plan ? 'plan' : 'family';
+      const main = mk(mainKind);
+      const mainPct = planState(main.w, levels).pct;
+      const extras = avail.filter(k => k !== mainKind).filter((k) => {
+        const w = wins[k], s = planState(w, levels);
+        if (k === 'five') return planUsedUp(w) || s.cls !== '' || (!!subsOn && Number(w.utilization) > 50);
+        return planUsedUp(w) || s.extra || s.cls !== '' || s.pct > mainPct;
+      }).map(mk);
+      const cls = avail.reduce((c, k) => { const x = planState(wins[k], levels).cls; return rank(x) > rank(c) ? x : c; }, '');
+      return { main, extras, cls, avail, wins };
+    }
+    function planUsedUp(w) { return !!w.rejected || (Number(w.utilization) >= 100 && !w.extraUsage); }
     // ── plan state helpers (end) ──
+    // What a badge says for one window: "used up" when the plan refuses it, else its percent (with the extra-usage words).
+    function badgeAmount(w, levels) {
+      return planUsedUp(w) ? 'used up' : planPctText(w, levels);
+    }
+    // ── the Claude usage badge in the chat header: what it shows (the plan, the agent's model family, or the 5-hour
+    // window) is the person's choice, made in a small popup under the badge. Kept per person (/api/me/prefs planBadge),
+    // with a copy on this device (localStorage 'mm-plan-badge') for when the hub has none or is an older version.
+    const PLAN_BADGE_KEY = 'mm-plan-badge';
+    const planBadgeOk = (v) => v === 'plan' || v === 'family' || v === 'five';
+    let planBadgeMem = null;   // a choice made on this page and not yet saved for the person
+    function planBadgeChoice() {
+      if (planBadgeOk(planBadgeMem)) return planBadgeMem;
+      let dev = null;
+      try { dev = localStorage.getItem(PLAN_BADGE_KEY); } catch { /* storage blocked */ }
+      const mine = window.hubMe && window.hubMe.planBadge;
+      if (planBadgeOk(mine)) {
+        if (dev !== mine) { try { localStorage.setItem(PLAN_BADGE_KEY, mine); } catch { /* storage blocked */ } }
+        return mine;
+      }
+      return planBadgeOk(dev) ? dev : null;
+    }
+    // At most one save in flight: a pick shows and is kept on this device at once, and planBadgeMem is the newest pick.
+    // When a save settles and the newest pick is a different value, that one is sent next, so the server hears the picks in order.
+    let planBadgeSaving = false;
+    async function planBadgePick(v) {
+      if (!planBadgeOk(v)) return;
+      planBadgeMem = v;
+      try { localStorage.setItem(PLAN_BADGE_KEY, v); } catch { /* storage blocked */ }
+      paintPlanBadges();
+      if (planBadgeSaving) return;
+      planBadgeSaving = true;
+      let sent = v;
+      while (sent) {
+        try {
+          const r = await fetch('/api/me/prefs', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planBadge: sent }) });
+          if (r && r.ok && planBadgeMem === sent) { if (window.hubMe) window.hubMe.planBadge = sent; planBadgeMem = null; }
+        } catch { /* an older hub answers 400 until it restarts: the device copy stays */ }
+        sent = planBadgeMem && planBadgeMem !== sent ? planBadgeMem : null;
+      }
+      planBadgeSaving = false;
+    }
     function planFamilyOf(model) {
       const id = String(model || '').replace(/^claude-sdk\//, '').replace(/\[1m\]$/i, '').replace(/^claude-/, '').toLowerCase();
       if (!id) return null;
@@ -6430,18 +6959,150 @@
       if (/^haiku/.test(id)) return 'haiku';
       return null;
     }
-    function planWindowFor(model, d = planLast) {
+    function planLevels(d) { return d && d.warn && Array.isArray(d.warn.at) ? d.warn.at : []; }
+    function planViewFor(model, d = planLast) {
       if (!d || !/^claude-sdk\//.test(String(model || ''))) return null;
-      const fam = planFamilyOf(model);
-      const wins = (d.weekly || []).filter(w => w.utilization != null && (w.family == null || (fam && w.family === fam)));
-      return wins.length ? wins.reduce((a, b) => (Number(b.utilization) > Number(a.utilization) ? b : a)) : null;
+      return planBadgeView(d, planFamilyOf(model), planBadgeChoice(), subsEnabled(), planLevels(d));
+    }
+    // The badge words: the main window ("Claude plan 18% this week", "Fable 19% this week", "5-hour 70%"), then the extras.
+    function planBadgeText(view, levels) {
+      return [view.main, ...view.extras].map((x, i) => (x.kind === 'five' ? `5-hour ${badgeAmount(x.w, levels)}` : `${x.kind === 'plan' ? 'Claude plan' : x.w.label} ${badgeAmount(x.w, levels)}` + (i === 0 ? ' this week' : ''))).join(' · ');
+    }
+    // The hover: one sentence per window shown, main first. Each describes only its own window: used up -> used up;
+    // extra usage paying -> the extra-usage sentence.
+    function planBadgeHover(view, levels) {
+      const part = (x, main) => {
+        const w = x.w, s = planState(w, levels);
+        if (x.kind === 'five') return planUsedUp(w) ? `5-hour window is used up until ${planWhen(w.resetsAt)}` : `5-hour window ${s.pct}%`;
+        const who = x.kind === 'plan' ? 'Your Claude plan' : w.label;
+        if (planUsedUp(w)) return `${who} is used up for this week until ${planWhen(w.resetsAt)}`;
+        return s.extra
+          ? `${who} is used up for this week until ${planWhen(w.resetsAt)}; extra usage is paying for Claude replies until then`
+          : `${who} has used ${s.pct}%${main ? " of this week's allowance" : ''} (resets ${planWhen(w.resetsAt)})`;
+      };
+      return [view.main, ...view.extras].map((x, i) => part(x, i === 0)).join('; ') + '. Click to choose what this shows.';
+    }
+    let planChooser = null;   // { box, badge, onDoc, onResize } while the popup is open
+    function planChooserClose(returnFocus) {
+      const c = planChooser;
+      if (!c) return;
+      planChooser = null;
+      document.removeEventListener('pointerdown', c.onDoc, true);
+      window.removeEventListener('resize', c.onResize);
+      c.box.remove();
+      c.badge.setAttribute('aria-expanded', 'false');
+      if (returnFocus) c.badge.focus();
+    }
+    const planChooserLabel = (k, w) => (k === 'plan' ? 'Claude plan (all models)' : k === 'family' ? (w.label || 'Model family') : '5-hour window');
+    // The rows of the chooser, built from a badge view: used when it opens and again when the badge repaints under it.
+    function planChooserFill(c, view, levels) {
+      c.list.textContent = '';
+      c.rows = [];
+      c.view = view;
+      const rows = c.rows, list = c.list;
+      for (const k of view.avail) {
+        const w = view.wins[k];
+        const row = document.createElement('div');
+        const current = k === view.main.kind;
+        row.className = 'pc-row' + (current ? ' current' : '');
+        row.setAttribute('role', 'option');
+        row.setAttribute('aria-selected', current ? 'true' : 'false');
+        row.setAttribute('tabindex', '-1');
+        const check = document.createElement('span');
+        check.className = 'pc-check';
+        check.setAttribute('aria-hidden', 'true');
+        check.textContent = current ? '✓' : '';
+        const label = planChooserLabel(k, w);
+        const hasWhen = Number.isFinite(Date.parse(w.resetsAt || ''));
+        const text = document.createElement('span');
+        text.className = 'pc-text';
+        text.textContent = [label, k === 'five' ? badgeAmount(w, levels) : `${badgeAmount(w, levels)} this week`, hasWhen ? `resets ${planWhen(w.resetsAt)}` : ''].filter(Boolean).join(' · ');
+        row.append(check, text);
+        row.addEventListener('click', () => { planChooserClose(true); planBadgePick(k); });
+        list.appendChild(row);
+        rows.push({ el: row, kind: k });
+      }
+    }
+    // The badge repainted while the chooser is open (new readings, another model or choice): rebuild its rows from the new
+    // view, keep focus on the row of the same window (the current row when that window is gone), leave it where it is.
+    function planChooserRefresh(view, levels) {
+      const c = planChooser;
+      if (!c) return;
+      // nothing the rows show has changed: leave them (a pointer pressed on a row keeps its row)
+      const sig = (v) => v.avail.map(k => `${k}:${planChooserLabel(k, v.wins[k])}:${badgeAmount(v.wins[k], levels)}:${v.wins[k].resetsAt || ''}`).join('|') + '#' + v.main.kind;
+      if (c.view && sig(c.view) === sig(view)) { c.view = view; return; }
+      const was = c.rows.find(r => r.el === document.activeElement);
+      planChooserFill(c, view, levels);
+      if (was) (c.rows.find(r => r.kind === was.kind) || c.rows.find(r => r.kind === view.main.kind) || c.rows[0]).el.focus();
+    }
+    function planChooserOpen(badge, chatId) {
+      if (planChooser) { const same = planChooser.badge === badge; planChooserClose(true); if (same) return; }
+      const chat = chats[chatId];
+      const view = chat && planViewFor(chatModelOf(chat));
+      if (!view) return;
+      const box = document.createElement('div');
+      box.id = 'plan-badge-chooser';
+      box.className = 'plan-chooser';
+      const list = document.createElement('div');
+      list.className = 'pc-list';
+      list.setAttribute('role', 'listbox');
+      list.setAttribute('aria-label', 'What the Claude usage badge shows');
+      const subs = document.createElement('button');
+      subs.type = 'button';
+      subs.className = 'pc-subs';
+      subs.textContent = 'All subscriptions…';
+      subs.addEventListener('click', () => { planChooserClose(false); openSubsSettings(); });
+      const c = { box, badge, list, rows: [], view, onDoc: null, onResize: null };
+      planChooserFill(c, view, planLevels(planLast));
+      box.append(list, subs);
+      // The last line opens the agent card at its Model row (P3-8); the chooser itself is unchanged.
+      let lastBtn = subs;
+      if (window.hubAgentCard && chat && chat.agent) {
+        lastBtn = document.createElement('button');
+        lastBtn.type = 'button';
+        lastBtn.className = 'pc-subs pc-card';
+        lastBtn.textContent = agentCardLastLine(chat.agent);
+        lastBtn.addEventListener('click', () => { planChooserClose(false); openAgentCard(chat.agent, 'OPT-0047'); });
+        box.append(lastBtn);
+      }
+      box.addEventListener('keydown', (e) => {
+        const rows = c.rows;
+        const at = document.activeElement, i = rows.findIndex(r => r.el === at), n = rows.length;
+        if (e.key === 'Escape') { e.preventDefault(); planChooserClose(true); }
+        else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          const step = e.key === 'ArrowDown' ? 1 : -1;
+          rows[i >= 0 ? (i + step + n) % n : (step > 0 ? 0 : n - 1)].el.focus();
+        } else if ((e.key === 'Enter' || e.key === ' ') && i >= 0) { e.preventDefault(); planChooserClose(true); planBadgePick(rows[i].kind); }
+        else if (e.key === 'Tab') {
+          if (at === lastBtn && !e.shiftKey) planChooserClose(true);
+          else if (at === lastBtn) { e.preventDefault(); (lastBtn !== subs ? subs : (rows.find(r => r.kind === c.view.main.kind) || rows[0]).el).focus(); }
+          else if (at === subs && !e.shiftKey) { e.preventDefault(); lastBtn.focus(); }
+          else if (at === subs) { e.preventDefault(); (rows.find(r => r.kind === c.view.main.kind) || rows[0]).el.focus(); }
+          else if (e.shiftKey) planChooserClose(true);
+          else { e.preventDefault(); subs.focus(); }
+        }
+      });
+      document.body.appendChild(box);
+      const r = badge.getBoundingClientRect(), bw = box.offsetWidth || 300, bh = box.offsetHeight || 0;
+      const left = Math.max(8, Math.min(r.right - bw, window.innerWidth - bw - 8));
+      const below = r.bottom + 4;
+      box.style.left = `${Math.round(left)}px`;
+      box.style.top = `${Math.round(below + bh > window.innerHeight - 8 && r.top - bh - 4 >= 8 ? r.top - bh - 4 : below)}px`;
+      const onDoc = (e) => { if (!box.contains(e.target) && !badge.contains(e.target)) planChooserClose(false); };
+      const onResize = () => planChooserClose(false);
+      c.onDoc = onDoc; c.onResize = onResize;
+      planChooser = c;
+      document.addEventListener('pointerdown', onDoc, true);
+      window.addEventListener('resize', onResize);
+      badge.setAttribute('aria-expanded', 'true');
+      (c.rows.find(x => x.kind === view.main.kind) || c.rows[0]).el.focus();
     }
     function paintPlanBadges() {
-      const levels = (planLast && planLast.warn && Array.isArray(planLast.warn.at)) ? planLast.warn.at : [];
+      const levels = planLevels(planLast);
       for (const [id, chat] of Object.entries(chats)) {
         const el = document.getElementById(`plan-badge-${id}`);
         if (!el) continue;
-        el.onclick = () => openPlanSettings();
         if (chat && !chat.isGroup && chat.agent && subsIsCodex(chatModelOf(chat))) {
           let b = subsEnabled() ? codexBadge(codexLast, null, Date.now()) : null;
           // An admin with a Codex chat open: a missing or old reading is asked for (no turn spent), and until one
@@ -6450,6 +7111,8 @@
             if (codexShouldRead(codexLast, Date.now(), codexAskAt)) codexAskRead();
             if (!b) b = codexPendingBadge(codexLast);
           }
+          if (planChooser && planChooser.badge === el) planChooserClose(false);
+          el.removeAttribute('aria-haspopup'); el.removeAttribute('aria-expanded'); el.removeAttribute('aria-label');
           if (!b) { el.hidden = true; el.textContent = ''; continue; }
           el.textContent = b.text;
           el.className = 'plan-badge' + (b.cls ? ' ' + b.cls : '');
@@ -6458,19 +7121,19 @@
           el.hidden = false;
           continue;
         }
-        const w = chat && !chat.isGroup && chat.agent ? planWindowFor(chatModelOf(chat)) : null;
-        if (!w) { el.hidden = true; el.textContent = ''; continue; }
-        const { pct, extra, cls } = planState(w, levels);
-        el.textContent = `${w.family ? w.label : 'Plan'} ${planPctText(w, levels)} this week`;
-        const fiveW = planLast.windows && planLast.windows.five_hour;
-        const five5 = subsEnabled() && fiveW && fiveW.utilization != null && Number(fiveW.utilization) > 50 ? Math.round(Number(fiveW.utilization)) : null;
-        if (five5 != null) el.textContent += ` · 5h ${five5}%`;
-        el.className = 'plan-badge' + (cls ? ' ' + cls : '');
-        const all = (planLast.weekly || []).find(x => x.family == null);
-        const five = planLast.windows && planLast.windows.five_hour;
-        if (extra) { el.title = `${w.family ? w.label : 'Your Claude plan'} is used up for this week until ${planWhen(w.resetsAt)}; extra usage is paying for Claude replies until then. Click to choose models (Settings → Claude plan).`; el.hidden = false; continue; }
-        el.title = `${w.family ? `${w.label} has` : 'Your Claude plan has'} used ${pct}% of this week's allowance (resets ${planWhen(w.resetsAt)})` +
-          (all && w.family ? `; all models ${Math.round(Number(all.utilization))}%` : '') + (five && five.utilization != null ? `; 5-hour window ${Math.round(Number(five.utilization))}%` : '') + '. Click to choose models (Settings → Claude plan).';
+        const view = chat && !chat.isGroup && chat.agent ? planViewFor(chatModelOf(chat)) : null;
+        if (!view) {
+          if (planChooser && planChooser.badge === el) planChooserClose(false);
+          el.hidden = true; el.textContent = ''; el.removeAttribute('aria-label'); continue;
+        }
+        el.textContent = planBadgeText(view, levels);
+        el.className = 'plan-badge' + (view.cls ? ' ' + view.cls : '');
+        el.title = planBadgeHover(view, levels);
+        el.setAttribute('aria-haspopup', 'listbox');
+        if (planChooser && planChooser.badge === el) planChooserRefresh(view, levels);
+        el.setAttribute('aria-expanded', planChooser && planChooser.badge === el ? 'true' : 'false');
+        el.setAttribute('aria-label', `Claude usage: ${el.textContent}. Press to choose what this shows.`);
+        el.onclick = () => planChooserOpen(el, id);
         el.hidden = false;
       }
     }
@@ -6547,7 +7210,7 @@
       const rows = [];
       const five = d.windows && d.windows.five_hour;
       if (five && five.utilization != null) rows.push({ label: '5-hour window', utilization: five.utilization, resetsAt: five.resets_at, extraUsage: !!five.extraUsage && !five.rejected });
-      for (const w of (d.weekly || [])) rows.push({ label: w.family ? `${w.label} (weekly)` : 'All models (weekly)', utilization: w.utilization, resetsAt: w.resetsAt, rejected: w.rejected, extraUsage: !!w.extraUsage && !w.rejected, weekly: true });
+      for (const w of (d.weekly || [])) rows.push({ label: w.family ? `${w.label} (weekly)` : 'Claude plan (weekly)', utilization: w.utilization, resetsAt: w.resetsAt, rejected: w.rejected, extraUsage: !!w.extraUsage && !w.rejected, weekly: true });
       const extraRow = rows.find(w => w.extraUsage && w.weekly);   // the hint speaks of the weekly plan
       // The usage bars live in one place: Settings → Subscriptions, above. Only with Subscription usage turned off are
       // they drawn here, as before that section existed.
@@ -6748,28 +7411,89 @@
       const agentInp = document.getElementById('st-cap-agent');
       const hubInp = document.getElementById('st-cap-hub');
       // A cap typed but not saved (or refused) keeps what was typed: the repaint fills only unchanged fields.
-      if (agentInp && document.activeElement !== agentInp && !dialogGuard.changed(agentInp)) agentInp.value = caps.perAgentDailyUsd ? String(caps.perAgentDailyUsd) : '';
-      if (hubInp && document.activeElement !== hubInp && !dialogGuard.changed(hubInp)) hubInp.value = caps.hubDailyUsd ? String(caps.hubDailyUsd) : '';
+      // Each box remembers what the server holds (data-loaded): Save sends only a cap the person changed since, and a box stays
+      // disabled until its stored value has loaded, so a Save can never clear a cap it has not read.
+      capLoaded(agentInp, caps.perAgentDailyUsd ? String(caps.perAgentDailyUsd) : '');
+      capLoaded(hubInp, caps.hubDailyUsd ? String(caps.hubDailyUsd) : '');
+      paintMonthlyCap(t.monthly);
+    }
+    // Monthly spending cap: the row, the "Spent this month" line and the Money group summary.
+    function monthDateText(iso, zone) {
+      try { return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: zone || undefined }); } catch { return String(iso).slice(0, 10); }
+    }
+    function capLoaded(inp, text) {
+      if (!inp) return;
+      if (!inp.dataset.editWired) { inp.dataset.editWired = '1'; inp.addEventListener('input', () => { inp.dataset.inputs = String((Number(inp.dataset.inputs) || 0) + 1); const value = inp.value.trim().replace(/^\$/, ''); if (value === inp.dataset.loaded) delete inp.dataset.edited; else inp.dataset.edited = '1'; }); }
+      inp.dataset.loaded = text; inp.disabled = false;
+      // Not edited by the person: the server's value shows, focused or not. Edited: their value stays, only the baseline moves.
+      if (inp.dataset.edited !== '1') inp.value = text;
+    }
+    // The value to send for a cap box: only one the person edited and that differs from what the server held.
+    function capChanged(inp) { return !!inp && inp.dataset.edited === '1' && inp.dataset.loaded !== undefined && !inp.disabled && inp.value.trim().replace(/^\$/, '') !== inp.dataset.loaded; }
+    function paintMonthlyCap(m, only) {   // only: { cap, day } limits which boxes take the value (a Save acknowledgment); omitted = both
+      const line = document.getElementById('st-month-spend');
+      const capInp = document.getElementById('st-cap-month');
+      const dayInp = document.getElementById('st-cap-month-day');
+      if (!line) return;
+      if (!m) { line.textContent = ''; stSum('money', 'month', ''); return; }   // an older hub: no monthly figures
+      if (!only || only.cap) capLoaded(capInp, m.cap ? String(m.cap) : '');
+      if (!only || only.day) capLoaded(dayInp, m.resetDay && m.resetDay !== 1 ? String(m.resetDay) : '');
+      const resets = monthDateText(m.until, m.zone);
+      const unpriced = (m.unpriced || 0) > 0 ? ` (plus ${m.unpriced} call${m.unpriced === 1 ? '' : 's'} with no known price)` : '';
+      line.textContent = m.cap
+        ? `Spent this month: ${usd(m.total)} of ${usd(m.cap)} (${m.pct}%) · resets ${resets}${unpriced}${m.over ? ' · used up: pay-per-use agents wait until the reset or a higher cap' : ''}`
+        : `Spent this month: ${usd(m.total)} · no monthly cap · month resets ${resets}${unpriced}`;
+      line.style.color = m.over ? 'var(--error)' : '';
+      stSum('money', 'month', m.cap ? `monthly cap ${usd(m.cap)}: ${usd(m.total)} spent (${m.pct}%)` : 'no monthly cap', !!m.over);
     }
     async function saveSpendCaps(opts = {}) {
       let result = true;
-      const saved = dialogGuard.savePoint(['st-cap-agent', 'st-cap-hub'].map(id => document.getElementById(id)));
+      const saved = dialogGuard.savePoint(['st-cap-agent', 'st-cap-hub', 'st-cap-month', 'st-cap-month-day'].map(id => document.getElementById(id)));
       const btn = document.getElementById('st-caps-save');
       const val = (id) => { const v = (document.getElementById(id)?.value || '').trim().replace(/^\$/, ''); return v === '' ? null : Number(v); };
-      const perAgentDailyUsd = val('st-cap-agent');
-      const hubDailyUsd = val('st-cap-hub');
-      for (const v of [perAgentDailyUsd, hubDailyUsd]) if (v !== null && !(Number.isFinite(v) && v >= 0)) {
+      // Only what the person changed since it loaded goes to the hub; a blank that was never changed is not "clear this cap".
+      const send = {};
+      for (const [key, id] of [['perAgentDailyUsd', 'st-cap-agent'], ['hubDailyUsd', 'st-cap-hub']]) if (capChanged(document.getElementById(id))) send[key] = val(id);
+      if (capChanged(document.getElementById('st-cap-month'))) send.monthlyUsd = (document.getElementById('st-cap-month').value || '').trim().replace(/^\$/, '');   // blank = no monthly cap; the hub checks the amount and the day
+      if (capChanged(document.getElementById('st-cap-month-day'))) send.monthlyResetDay = (document.getElementById('st-cap-month-day').value || '').trim();
+      for (const v of [send.perAgentDailyUsd, send.hubDailyUsd]) if (v !== undefined && v !== null && !(Number.isFinite(v) && v >= 0)) {
         const m = 'Caps must be a dollar amount, or blank for unlimited.';
         if (!opts.quiet) alert(m);
         return m;
       }
       if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
       try {
-        const r = await stSaveFetch('/api/ledger/caps', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ perAgentDailyUsd, hubDailyUsd }) });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        saved();
+        // Only the boxes in this POST are tracked; a counter that only the person's own input events move tells a typed change from a background repaint.
+        const capSnapshot = [['perAgentDailyUsd', 'st-cap-agent'], ['hubDailyUsd', 'st-cap-hub'], ['monthlyUsd', 'st-cap-month'], ['monthlyResetDay', 'st-cap-month-day']]
+          .filter(([key]) => key in send).map(([, id]) => document.getElementById(id)).filter(Boolean).map(el => ({ el, inputs: el.dataset.inputs || '0' }));
+        const r = await stSaveFetch('/api/ledger/caps', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(send) });
         const d = await r.json().catch(() => null);
-        if (d && d.caps && spendToday) spendToday.caps = d.caps;
+        if (!r.ok) throw new Error((d && d.error) || `HTTP ${r.status}`);
+        saved();
+        // Only boxes still holding what was sent are no longer edited; a change typed while the request was in flight stays edited.
+        // A box changed meanwhile is marked against the value the hub acknowledged (normalised as capChanged does), so capLoaded below keeps the draft.
+        const acked = {};
+        if (d && d.caps) { acked['st-cap-agent'] = d.caps.perAgentDailyUsd ? String(d.caps.perAgentDailyUsd) : ''; acked['st-cap-hub'] = d.caps.hubDailyUsd ? String(d.caps.hubDailyUsd) : ''; }
+        if (d && d.monthly) { acked['st-cap-month'] = d.monthly.cap ? String(d.monthly.cap) : ''; acked['st-cap-month-day'] = d.monthly.resetDay && d.monthly.resetDay !== 1 ? String(d.monthly.resetDay) : ''; }
+        for (const { el, inputs } of capSnapshot) {
+          if ((el.dataset.inputs || '0') === inputs) delete el.dataset.edited;
+          else if (acked[el.id] !== undefined) { if (el.value.trim().replace(/^\$/, '') === acked[el.id]) delete el.dataset.edited; else el.dataset.edited = '1'; }
+        }
+        // The acknowledgment merges only the fields that were submitted (form and page cache); a box not in the POST is left to the regular refresh, so a stale response cannot move its baseline.
+        if (d && d.caps) {
+          for (const [key, id] of [['perAgentDailyUsd', 'st-cap-agent'], ['hubDailyUsd', 'st-cap-hub']]) {
+            if (!(key in send)) continue;
+            if (spendToday) spendToday.caps = { ...(spendToday.caps || {}), [key]: d.caps[key] };
+            capLoaded(document.getElementById(id), d.caps[key] ? String(d.caps[key]) : '');
+          }
+        }
+        // The monthly inputs follow the same only-submitted rule. The "Spent this month" summary is not painted from the acknowledgment (it can be stale):
+        // when a monthly field was submitted, one fresh read of the ledger repaints cap, spend, percentage and reset date from a single snapshot; otherwise it is left alone.
+        if (d && d.monthly && ('monthlyUsd' in send || 'monthlyResetDay' in send)) {
+          if ('monthlyUsd' in send) capLoaded(document.getElementById('st-cap-month'), d.monthly.cap ? String(d.monthly.cap) : '');
+          if ('monthlyResetDay' in send) capLoaded(document.getElementById('st-cap-month-day'), d.monthly.resetDay && d.monthly.resetDay !== 1 ? String(d.monthly.resetDay) : '');
+          await refreshSpendToday();
+        }
         if (btn) { btn.className = 'st-test-btn ok'; btn.textContent = 'Saved'; }
         if (!opts.quiet) {
           document.getElementById('st-saved')?.classList.add('show');
@@ -6878,7 +7602,7 @@
       { label: 'Sandbox defaults', fields: () => ['st-sb-member', 'st-sb-admin', 'st-tools-default'].map(id => document.getElementById(id)), save: (o) => saveSandboxDefaults(o) },
       { label: 'Command lockbox default', fields: () => [document.getElementById('st-lb-default')], save: (o) => saveLockboxDefault(o) },
       { label: 'Plan usage warning', fields: () => [document.getElementById('st-plan-warn')], save: (o) => savePlanWarn(o) },
-      { label: 'Spend caps', fields: () => ['st-cap-agent', 'st-cap-hub'].map(id => document.getElementById(id)), save: (o) => saveSpendCaps(o) },
+      { label: 'Spend caps', fields: () => ['st-cap-agent', 'st-cap-hub', 'st-cap-month', 'st-cap-month-day'].map(id => document.getElementById(id)), save: (o) => saveSpendCaps(o) },
       { label: 'API credit', fields: () => ['st-credit-provider', 'st-credit-amount', 'st-credit-day'].map(id => document.getElementById(id)), save: (o) => saveCredit(o) },
       { label: 'System health', fields: () => hlFieldEls(), save: (o) => saveHealthSettings(o) },
       { label: 'Self-check', fields: () => scFieldEls(), save: (o) => saveSelfCheckSettings(o) },
@@ -7033,7 +7757,7 @@
     // ── Agent Dreaming ──
     async function startDream() {
       if (!confirm('Start agent dreaming?\n\nAgents will review their recent activity and consolidate learnings into long-term memory.\n\nUses Sonnet 5 — cost ~$0.30 total.')) return;
-      const btn = document.getElementById('dream-btn');
+      const btn = document.getElementById('dream-btn') || document.createElement('button');   // the button lives in Settings → Upkeep
       btn.classList.add('restarting');
 
       let overlay = document.getElementById('dream-overlay');
@@ -7200,43 +7924,9 @@
 
     // v5.1: All requests go through multi-provider LLM routing
 
-    // ── "⋯" header menu ──
-    // Things you do or open right now (About, Reload, Data connectors, Remote computers, Recordings, Wallets, Dream, Update,
-    // Restart) live in a dropdown under #more-btn; what you set is in Settings (gear). The tuning controls wired below sit in
-    // #st-tuning-body, which Settings → Agents → Tuning shows (stTuningMount); notifications for an agent and messaging
-    // channels are in Settings too, and the menu's last line says so.
-    const moreBtn = document.getElementById('more-btn');
-    const moreMenu = document.getElementById('more-menu');
-    const moreWrap = document.getElementById('more-wrap');
-    function isMoreMenuOpen() { return !!(moreMenu && moreMenu.classList.contains('open')); }
-    function openMoreMenu() {
-      if (!moreMenu) return;
-      moreMenu.classList.add('open');
-      moreBtn.setAttribute('aria-expanded', 'true');
-      const first = moreMenu.querySelector('.more-item');
-      if (first) first.focus();
-    }
-    function closeMoreMenu(refocus = false) {
-      if (!moreMenu || !isMoreMenuOpen()) return;
-      moreMenu.classList.remove('open');
-      moreBtn.setAttribute('aria-expanded', 'false');
-      if (refocus) moreBtn.focus();
-    }
-    function toggleMoreMenu() { if (isMoreMenuOpen()) closeMoreMenu(true); else openMoreMenu(); }
-    if (moreMenu) {
-      // Clicking anywhere outside the button + menu closes it.
-      document.addEventListener('click', (e) => {
-        if (isMoreMenuOpen() && moreWrap && !moreWrap.contains(e.target)) closeMoreMenu();
-      });
-      // Escape closes (and hands focus back to the button); Tab moves through the items as usual.
-      document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && isMoreMenuOpen()) { e.preventDefault(); closeMoreMenu(true); }
-      });
-      // Focus leaving the menu (Tab past the last item) closes it too.
-      moreWrap.addEventListener('focusout', (e) => {
-        if (isMoreMenuOpen() && e.relatedTarget && !moreWrap.contains(e.relatedTarget)) closeMoreMenu();
-      });
-    }
+    // The top-bar ⋯ menu is gone (P4-11): About, Dream, Update and Restart are in Settings → Upkeep ("This Maestro"),
+    // Recordings in Voice and calls, Wallets and the connectors in Tools and connections. The tuning controls wired below sit in
+    // #st-tuning-body, which Settings → Agents → Tuning shows (stTuningMount).
 
     // ── Pre-scan toggle ──
     const prescanToggle = document.getElementById('prescan-toggle');
@@ -7518,21 +8208,102 @@
 
     const settingsWindows = {};  // agentName -> popup Window reference
 
-    function openAgentSettings(agentName, event) {
-      event.stopPropagation();
-      if (settingsWindows[agentName] && !settingsWindows[agentName].closed) {
-        settingsWindows[agentName].focus();
-        return;
+    // ── The agent card (lib/ui-agent-card.js): the card is the way in to an agent's settings; the popup page below is the fallback ──
+    // The card gets this page's own event handling (it opens no stream of its own) and this page's agent list.
+    const agentCardSubs = {};   // event type -> Set of listeners the card registered
+    function agentCardSubscribe(type, fn) {
+      const set = agentCardSubs[type] || (agentCardSubs[type] = new Set());
+      set.add(fn);
+      return () => set.delete(fn);
+    }
+    function agentCardEmit(type, ev) {
+      const set = agentCardSubs[type];
+      if (set) for (const fn of [...set]) { try { fn(ev); } catch { /* one listener must not stop the others */ } }
+    }
+    try { if (window.hubAgentCard && typeof window.hubAgentCard.configure === 'function') window.hubAgentCard.configure({ subscribe: agentCardSubscribe, agentsList: () => (typeof AGENTS !== 'undefined' ? AGENTS : []) }); } catch { /* the card is optional */ }
+    // The last line of a chip's control: "All settings for <agent>…" (the text one place, so the chips say the same).
+    function agentCardLastLine(agentName) {
+      const a = (typeof AGENTS !== 'undefined' ? AGENTS : []).find(x => x && x.name === agentName);
+      return `All settings for ${(a && a.display) || capName(agentName)}…`;
+    }
+    const CARD_PICK = '__card__';   // the value of the last line in a picker; never sent anywhere
+    // Opens the card on an agent, at a row (a record id such as OPT-0047) or at its top; true when the card is there to open.
+    function openAgentCard(agentName, row) {
+      const card = window.hubAgentCard;
+      if (!agentName || !card || typeof card.open !== 'function') return false;
+      try {
+        const p = card.open(agentName, row ? { row } : {});
+        // The old popup page is for admins; a member whose card will not open is told so, as on the phone.
+        const fallback = () => { if (isHubAdmin()) openAgentSettingsPopup(agentName); else hubToast('This agent\'s settings are not open to you.'); };
+        if (p && typeof p.then === 'function') p.then(ok => { if (ok === 'superseded') return; /* a later open or a close took over: nothing to do */ if (ok === false) fallback(); }, fallback);
+        return true;
+      } catch { return false; }
+    }
+    // The agent's name in the chat header opens the card. The chat is found from the picker beside the name (id model-pick-<chatId>).
+    document.addEventListener('click', (e) => {
+      const t = e.target && e.target.closest ? e.target.closest('.agent-name-text') : null;
+      if (!t) return;
+      const wrap = t.closest('.agent-name'), pick = wrap && wrap.querySelector ? wrap.querySelector('.model-pick') : null;
+      const chat = pick && /^model-pick-/.test(pick.id || '') ? chats[pick.id.slice('model-pick-'.length)] : null;
+      if (chat && chat.agent && !chat.isGroup) openAgentCard(chat.agent);
+    });
+    // The desktop voice chip (shown only while voice is on for the install and the person is an admin) is an indicator of this agent's
+    // voice setting: "Voice: same as all" or "Voice: its own". "Its own" is the card's definition (hasOwnVoice in
+    // lib/ui-agent-card-basics.js, one place); pressing the chip opens the card at its Voice row, where the setting is changed.
+    // The dots beside it are the last line, "All settings for <agent>…", opening the card at the same row.
+    function voiceAgentOwn(agentName) {
+      const a = (typeof AGENTS !== 'undefined' ? AGENTS : []).find(x => x && x.name === agentName);
+      const basics = window.hubAgentCardBasics;
+      return !!(a && basics && typeof basics.hasOwnVoice === 'function' && basics.hasOwnVoice(a));
+    }
+    function voiceAgentChipPaint(onlyAgent) {
+      let ready = false;
+      try { ready = typeof voiceReady === 'function' && !!voiceReady(); } catch { ready = false; }
+      for (const [chatId, chat] of Object.entries(chats)) {
+        if (!chat || !chat.agent) continue;
+        if (onlyAgent && chat.agent !== onlyAgent) continue;
+        const wrap = document.getElementById(`vagent-wrap-${chatId}`), btn = document.getElementById(`vagent-${chatId}`), dots = document.getElementById(`vagent-card-${chatId}`);
+        if (!wrap || !btn) continue;
+        const show = ready && isHubAdmin() && !!window.hubAgentCard;
+        wrap.hidden = !show;
+        const own = voiceAgentOwn(chat.agent);
+        btn.textContent = own ? 'Voice: its own' : 'Voice: same as all';
+        btn.title = own ? 'This agent has its own voice. Press to change it on the agent card.' : 'This agent uses the same voice as all agents. Press to change it on the agent card.';
+        if (dots) { dots.setAttribute('aria-label', agentCardLastLine(chat.agent)); dots.title = agentCardLastLine(chat.agent); }
       }
-      const popup = window.open(
-        `/agent-settings.html?agent=${encodeURIComponent(agentName)}`,
-        `settings-${agentName}`,
-        'width=700,height=600,resizable=yes,scrollbars=yes'
-      );
-      if (popup) {
-        settingsWindows[agentName] = popup;
-        popup.addEventListener('beforeunload', () => { delete settingsWindows[agentName]; });
+    }
+    function voiceAgentCardOpen(chatId) { const chat = chats[chatId]; if (chat && chat.agent) openAgentCard(chat.agent, 'OPT-0023'); }
+    // The model picker's last line says "All settings for <agent>…": put the agent's current name in it again.
+    function modelPickCardLineRefill(agentName) {
+      for (const [chatId, chat] of Object.entries(chats)) {
+        if (!chat || chat.agent !== agentName) continue;
+        const sel = document.getElementById(`model-pick-${chatId}`);
+        const opt = sel && sel.options ? [...sel.options].find(o => o.value === CARD_PICK) : null;
+        if (opt) opt.textContent = agentCardLastLine(chat.agent);
       }
+    }
+    // An agent_updated event repaints the chip and the picker's line for that agent only, once for a burst of events.
+    const voiceChipPending = new Set();
+    let voiceChipTimer = null;
+    agentCardSubscribe('agent_updated', (ev) => {
+      if (!ev || !ev.agent) return;
+      voiceChipPending.add(ev.agent);
+      if (voiceChipTimer) clearTimeout(voiceChipTimer);
+      voiceChipTimer = setTimeout(() => {
+        voiceChipTimer = null;
+        const names = [...voiceChipPending]; voiceChipPending.clear();
+        for (const n of names) { voiceAgentChipPaint(n); modelPickCardLineRefill(n); }
+      }, 600);
+    });
+    // A new agent and a clone open the card; if the card script did not load, the page itself opens on the card (the hash door).
+    function openAgentSettings(agentName, event, row) {
+      if (event && event.stopPropagation) event.stopPropagation();
+      if (openAgentCard(agentName, row)) return;
+      openAgentSettingsPopup(agentName);
+    }
+    function openAgentSettingsPopup(agentName) {
+      if (!agentName) return;
+      window.location.href = `/#agent-card=${encodeURIComponent(agentName)}`;
     }
 
     function openCreateAgent(event) {
@@ -7770,7 +8541,7 @@
         AGENTS = data.agents || [];
         window.__qsRoster = response.ok && data && Array.isArray(data.agents) ? 'ready' : 'failed';   // ⌘K switcher: "No agents yet." only for a real empty list
         if (typeof voiceWakeRecheck === 'function') voiceWakeRecheck();   // an agent's recognizer can have changed
-        { const ri = document.getElementById('recordings-item'); if (ri) ri.style.display = AGENTS.some(a => a && a.recordings && a.recordings.canDownload === true) ? '' : 'none'; }   // ⋯ menu: Recordings only for a person on at least one agent's download list
+        { const ri = document.getElementById('st-door-recordings'); if (ri) ri.style.display = recordingsDoorShown() ? '' : 'none'; }   // Settings → Voice and calls: the Recordings door only for a person on at least one agent's download list
         for (const a of AGENTS) { if (a.owner) agentOwnerCache.set(a.name, a.owner); else agentOwnerCache.delete(a.name); }
         if (!CYBER_MODELS.size) loadCyberModels();
         // Newer hubs report busy/busySince/activity/pendingQuestion per agent; older ones do not (then no dots are drawn).
@@ -7963,11 +8734,40 @@
       refreshSpendToday();
       refreshPlanChip();
       showMobileBanner();
+      askLeadStart();   // "Ask Maestro about this" from another page: /#ask-lead=<text> fills the lead's box
+      settingsDoorStart();   // /#settings-for=OPT-xxxx: Settings opens at that record
       // Check for pending restart action on page load (user may have refreshed)
       setTimeout(() => checkPendingRestartAction(), 1500);
       // Check if this page load is after a manual restart
       setTimeout(() => checkManualRestartComplete(), 2000);
     });
+
+    // "Ask Maestro about this" (the ⓘ panel, lib/ui-settings-help.js): open the lead agent's chat and put the question in its message
+    // box, WITHOUT sending. From this page the panel calls window.mmAskLead; from agent-settings.html or users.html (another page)
+    // it opens /#ask-lead=<text>, which askLeadStart handles on load and on hashchange, then drops the hash.
+    function askLeadEnv() {
+      return {
+        findLead: () => (Array.isArray(AGENTS) ? AGENTS.find((a) => a && a.lead) : null) || null,
+        // Settings goes through its own guard (unsaved changes are asked about); the chat opens only once it has really closed (false = Keep editing)
+        beforeOpen: async () => {
+          const o = document.getElementById('st-overlay');
+          if (o && !(await window.hubSettingsHelp.closeGuarded(o, (el) => dialogRequestClose(el), { doc: document }))) return false;
+          simpleCloseSettings();
+          return true;
+        },
+        openChat: (name) => { const a = AGENTS.find((x) => x.name === name); return startSoloChat(name, (a && a.model) || ''); },
+        getBox: (name) => { const c = findSoloChat(name); return c ? document.getElementById('input-' + c.id) : null; },
+        clearHash: () => history.replaceState(history.state, '', location.pathname + location.search),
+      };
+    }
+    function askLeadStart() {
+      const H = window.hubSettingsHelp;
+      if (!H || SETTINGS_ONLY) return;
+      window.mmAskLead = (text) => H.askFill(text, askLeadEnv());   // set only on the full page: the phone's Settings frame sends its parent instead
+      const run = () => { H.handleAskHash(location.hash, askLeadEnv()).catch(() => {}); };
+      window.addEventListener('hashchange', run);
+      run();
+    }
 
     // Shown on a phone by the screen test in lib/ui-phone-layout.js (works when the browser requests the desktop site),
     // and on narrow windows as before; a phone moves to /mobile by itself, so it sees the bar only after "Use the full site" or "?desktop=once".
@@ -8435,10 +9235,9 @@
       } catch (e) { console.warn('loadCyberModels failed', e.message); }
     }
 
-    // ── Row menu (⋯) and Build team (All Agents and Teams rows) ──
-    // One always-visible ⋯ per row opens ONE shared menu: Settings, and Build team for a main agent with no team (admins).
-    // No entries (a member, Simple mode) means no button. In All Agents the row is itself a <button>, so the ⋯ and the
-    // Build team link there are <span role="button"> (a button cannot sit inside a button); Teams rows use real buttons.
+    // ── Build team (All Agents and Teams rows) ──
+    // The rows have no ⋯ menu any more: the agent card opens from the name (Enter on the row's name opens it) and holds Build team and Optimize team.
+    // In All Agents the row is itself a <button>, so the Build team link there is a <span role="button"> (a button cannot sit inside a button); Teams rows use real buttons.
     const buildTeamPending = new Set();   // main agents whose Build team request is in flight from this page
     function teamBuilding(name) {
       if (buildTeamPending.has(name)) return true;
@@ -8449,10 +9248,8 @@
     function agentCanBuildTeam(a, inSimple) {
       return !!a && isHubAdmin() && (!!inSimple || !simpleOn()) && hubTeams.isMain(a) && !hubTeams.hasTeam(a.name, AGENTS);
     }
-    // Optimize team (admins): a main agent WITH a team shows this instead of Build team. Its sublabel is the size of what the review reads,
-    // fetched once per menu opening from GET /api/agents/:name/optimize-team/estimate.
+    // Optimize team (admins): a main agent WITH a team; the card's Role and team section carries the control and the size of what the review reads.
     const optimizeTeamPending = new Set();   // main agents whose Optimize team request is in flight from this page
-    const optimizeEstimates = {};            // name -> { days, turns, handOffs } once fetched (kept until the next menu opening refreshes it)
     function teamReviewing(name) {
       if (optimizeTeamPending.has(name)) return true;
       for (const s of Object.values(agentStatus)) if (s && s.reviewingTeamFor === name) return true;   // the reviewer's status carries it while the turn runs
@@ -8461,25 +9258,19 @@
     function agentCanOptimizeTeam(a) {
       return !!a && isHubAdmin() && !simpleOn() && hubTeams.isMain(a) && hubTeams.hasTeam(a.name, AGENTS);
     }
-    function optimizeSubText(name) {
-      const e = optimizeEstimates[name];
-      if (!e) return 'reads the last 30 days';
-      return `reads ${Number(e.days) || 30} days: ${Number(e.turns) || 0} turns, ${Number(e.handOffs) || 0} hand-offs`;
-    }
-    function agentMenuEntries(a) {
-      if (!a || !isHubAdmin() || simpleOn()) return [];
-      const out = [{ key: 'settings', label: 'Settings' }];
-      if (agentCanBuildTeam(a)) out.push(teamBuilding(a.name) ? { key: 'build', label: 'Building…', disabled: true } : { key: 'build', label: 'Build team' });
-      if (agentCanOptimizeTeam(a)) out.push(teamReviewing(a.name) ? { key: 'optimize', label: 'Reviewing…', disabled: true } : { key: 'optimize', label: 'Optimize team', sub: optimizeSubText(a.name) });
-      return out;
-    }
-    function agentMenuBtnHtml(a, tag) {
-      if (!agentMenuEntries(a).length) return '';
+    // Keyboard way into the card from a row: the name inside the row is role=button tabindex=0; Enter or Space on it opens the card (a click on the row still opens the chat).
+    function agentRowNameAttrs(a) {
       const label = hubEsc(a.display || capName(a.name));
-      const attrs = `class="agent-menu-btn" data-menu-agent="${hubEsc(a.name)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${label}" title="More for ${label}" onclick="agentMenuToggle(this, event)"`;
-      return tag === 'span'
-        ? `<span role="button" tabindex="0" ${attrs} onkeydown="if (event.key === 'Enter' || event.key === ' ') agentMenuToggle(this, event)">⋯</span>`
-        : `<button type="button" ${attrs}>⋯</button>`;
+      return ` role="button" tabindex="0" data-card-agent="${hubEsc(a.name)}" aria-label="Settings for ${label}"`;
+    }
+    if (typeof document !== 'undefined' && document.addEventListener) {
+      document.addEventListener('keydown', e => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        const t = e.target && e.target.closest ? e.target.closest('.name-text[data-card-agent]') : null;
+        if (!t) return;
+        e.preventDefault(); e.stopPropagation();
+        openAgentCard(t.dataset.cardAgent);
+      }, true);
     }
     // The Build team control: kind 'link' (All Agents line) or 'btn' (Teams tab). data-build-team lets paintBuildControls retitle it.
     function buildTeamCtlHtml(a, kind, tag) {
@@ -8505,6 +9296,12 @@
         if (el.tagName === 'BUTTON') el.disabled = on;
         el.textContent = on ? 'Building…' : el.dataset.idle;
       });
+    }
+    // the agent card's Build team / Optimize team rows call the page's own flows (and open the chat the same way)
+    if (typeof window !== 'undefined') {
+      window.buildTeamStart = buildTeamStart;
+      window.optimizeTeamStart = optimizeTeamStart;
+      if (typeof startSoloChat === 'function') window.startSoloChat = startSoloChat;
     }
     async function buildTeamStart(name, event) {
       if (event) { event.stopPropagation(); if (event.preventDefault) event.preventDefault(); }
@@ -8546,101 +9343,6 @@
         if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
       }
     }
-    // Reads the size of the review once per menu opening and writes it into the open menu's sublabel.
-    function optimizeEstimateLoad(name, menuEl) {
-      if (typeof fetch !== 'function') return;
-      fetch(`/api/agents/${encodeURIComponent(name)}/optimize-team/estimate`, { credentials: 'include' })
-        .then(r => (r && r.ok ? r.json() : null))
-        .then(d => {
-          if (!d || typeof d !== 'object') return;
-          optimizeEstimates[name] = { days: d.days, turns: d.turns, handOffs: d.handOffs };
-          const sub = menuEl && menuEl.querySelector ? menuEl.querySelector('[data-act="optimize"] .agent-menu-sub') : null;
-          if (sub) sub.textContent = optimizeSubText(name);
-        })
-        .catch(() => { /* the sublabel stays "reads the last 30 days" */ });
-    }
-    let agentMenuEl = null, agentMenuOpener = null, agentMenuOff = null;
-    function agentMenuClose(refocus) {
-      if (agentMenuOff) { agentMenuOff(); agentMenuOff = null; }
-      if (agentMenuEl && agentMenuEl.remove) agentMenuEl.remove();
-      const op = agentMenuOpener;
-      agentMenuEl = null; agentMenuOpener = null;
-      if (op && op.setAttribute) { op.setAttribute('aria-expanded', 'false'); if (refocus && op.focus && op.isConnected !== false) op.focus({ preventScroll: true }); }
-    }
-    // Opens the shared menu for agent `name` at (x, y). Returns false (nothing opened) when the agent has no entries.
-    function agentMenuOpenAt(name, x, y, opener) {
-      const a = AGENTS.find(z => z.name === name);
-      const entries = agentMenuEntries(a);
-      agentMenuClose(false);
-      if (!entries.length) return false;
-      const el = document.createElement('div');
-      el.id = 'agent-row-menu'; el.className = 'agent-row-menu';
-      el.setAttribute('role', 'menu');
-      el.setAttribute('aria-label', `More for ${a.display || capName(a.name)}`);
-      el.innerHTML = entries.map(e => `<button type="button" role="menuitem" class="agent-menu-item" data-act="${e.key}"${e.disabled ? ' disabled' : ''}>${hubEsc(e.label)}${e.sub ? `<small class="agent-menu-sub">${hubEsc(e.sub)}</small>` : ''}</button>`).join('');
-      delete optimizeEstimates[name];   // read afresh at each opening
-      if (entries.some(e => e.key === 'optimize' && !e.disabled)) optimizeEstimateLoad(name, el);
-      el.addEventListener('click', ev => {
-        const b = ev.target && ev.target.closest ? ev.target.closest('.agent-menu-item') : null;
-        if (!b || b.disabled) return;
-        const act = b.dataset.act;
-        agentMenuClose(act === 'settings' ? false : true);
-        if (act === 'settings') openAgentSettings(name, ev);
-        else if (act === 'build') buildTeamStart(name);
-        else if (act === 'optimize') optimizeTeamStart(name);
-      });
-      el.addEventListener('keydown', ev => {
-        const items = Array.from(el.querySelectorAll('.agent-menu-item:not([disabled])'));
-        const i = items.indexOf(document.activeElement);
-        if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); agentMenuClose(true); }
-        else if (ev.key === 'Tab') { ev.preventDefault(); agentMenuClose(true); }   // leaving the menu closes it; focus goes back to the ⋯
-        else if (ev.key === 'ArrowDown' && items.length) { ev.preventDefault(); items[(i + 1) % items.length].focus(); }
-        else if (ev.key === 'ArrowUp' && items.length) { ev.preventDefault(); items[(i <= 0 ? items.length : i) - 1].focus(); }
-      });
-      document.body.appendChild(el);
-      // Placed at the pointer or under the ⋯, kept inside the window.
-      const vw = window.innerWidth || 0, vh = window.innerHeight || 0;
-      const w = el.offsetWidth || 160, h = el.offsetHeight || 60;
-      el.style.left = Math.max(4, Math.min(x, (vw || x + w + 4) - w - 4)) + 'px';
-      el.style.top = Math.max(4, Math.min(y, (vh || y + h + 4) - h - 4)) + 'px';
-      agentMenuEl = el; agentMenuOpener = opener || null;
-      if (opener && opener.setAttribute) opener.setAttribute('aria-expanded', 'true');
-      const away = ev => {
-        if (el.contains(ev.target)) return;
-        if (opener && opener.contains && opener.contains(ev.target)) return;   // the ⋯ itself toggles
-        agentMenuClose(false);
-      };
-      const gone = () => agentMenuClose(false);
-      const escKey = ev => { if (ev.key === 'Escape') { agentMenuClose(true); } };
-      document.addEventListener('mousedown', away, true);
-      document.addEventListener('keydown', escKey, true);
-      window.addEventListener('resize', gone);
-      window.addEventListener('blur', gone);
-      document.addEventListener('scroll', gone, true);
-      agentMenuOff = () => {
-        document.removeEventListener('mousedown', away, true); document.removeEventListener('keydown', escKey, true);
-        window.removeEventListener('resize', gone); window.removeEventListener('blur', gone); document.removeEventListener('scroll', gone, true);
-      };
-      const first = el.querySelector('.agent-menu-item:not([disabled])');
-      if (first && first.focus) first.focus({ preventScroll: true });
-      return true;
-    }
-    function agentMenuToggle(btn, event) {
-      if (event) { event.stopPropagation(); event.preventDefault(); }
-      if (!btn) return;
-      if (agentMenuEl && agentMenuOpener === btn) { agentMenuClose(true); return; }
-      const r = btn.getBoundingClientRect();
-      agentMenuOpenAt(btn.dataset.menuAgent, r.left, r.bottom + 2, btn);
-    }
-    // Right-click on a row opens the same menu at the pointer (nothing happens, and the browser's own menu stays, when the row has no entries).
-    if (typeof document !== 'undefined' && document.addEventListener) {
-      document.addEventListener('contextmenu', e => {
-        const row = e.target && e.target.closest ? e.target.closest('#agent-list .agent-btn[data-agent], #teams-list .teams-row[data-agent]') : null;
-        if (!row) return;
-        if (agentMenuOpenAt(row.dataset.agent, e.clientX, e.clientY, row.querySelector('.agent-menu-btn'))) e.preventDefault();
-      });
-    }
-
     function agentButton(agent) {
       const shortModel = agent.autoModel ? 'Auto' : agent.model.split('/').pop().substring(0, 24);
       const inGroup = selectedGroupAgents.some(a => a.name === agent.name);
@@ -8677,10 +9379,9 @@
         <span class="agent-status" id="agent-status-${safeName}"></span>
         <span class="agent-icon">${hubEsc(agent.icon || '🤖')}</span>
         <span class="agent-info">
-          <span class="name"><span class="name-text">${displayName}</span>${agent.lead ? '<span class="lead-badge" title="Lead agent: may schedule tasks for other agents and see, edit or cancel their tasks. Change in this agent\'s settings.">👑</span>' : ''}</span>
+          <span class="name"><span class="name-text"${agentRowNameAttrs(agent)}>${displayName}</span>${agent.lead ? '<span class="lead-badge" title="Lead agent: may schedule tasks for other agents and see, edit or cancel their tasks. Change in this agent\'s settings.">👑</span>' : ''}</span>
           ${buildLine || `<span class="model">${cyberBadge}${subtitle}${statusBadge || sizeLabel}</span>`}
         </span>
-        ${agentMenuBtnHtml(agent, 'span')}
         <span class="actions">
           <span class="action-btn add-btn" onclick="toggleGroupAgent('${safeName}', '${safeModel}', event)">${inGroup ? '−' : '+'}</span>
           <span class="action-btn sum-btn" onclick="setSummarizer('${safeName}', '${safeModel}', event)">S</span>
@@ -8956,8 +9657,7 @@
       return `<div class="teams-line rank-${rank}${deep ? ' deep' : ''}${kids ? ' has-kids' : ''}${spec ? ' is-spec' : ''}"><div class="teams-row rank-${rank}${deep ? ' deep' : ''}${spec ? ' is-spec' : ''}${l2 ? ' has-l2' : ''}" role="button" tabindex="0" data-agent="${name}" data-model="${hubEsc(a.model || '')}" data-depth="${n.depth}"${rowTip}>
         <span class="teams-dot ${dot}" title="${hubEsc(dotTip)}">${hubEsc(st.text)}</span>
         <span class="agent-icon">${hubEsc(a.icon || '🤖')}</span>
-        <span class="teams-info"><span class="name"><span class="name-text">${label}</span>${a.lead ? '<span class="lead-badge" title="Lead agent">👑</span>' : ''}${pill}${live}</span>${l2}</span>
-        ${agentMenuBtnHtml(a, 'button')}
+        <span class="teams-info"><span class="name"><span class="name-text"${agentRowNameAttrs(a)}>${label}</span>${a.lead ? '<span class="lead-badge" title="Lead agent">👑</span>' : ''}${pill}${live}</span>${l2}</span>
       </div></div>`;
     }
     // One leader (or worker, or deeper node) = ONE block: its row, then only its own people in a wrapper with the connector line.
@@ -9247,7 +9947,7 @@
     }
     
     // Deep research progress line (the hub's research_progress event, GET /api/research/status): one text line per active run
-    // above the message box, in the style of the hand-off Tasks line. Text only; gone when the run is delivered or failed.
+    // above the message box, in the style of the hand-off Tasks line. Text only; gone when the run is delivered, failed or stopped.
     const researchRuns = new Map();   // agent -> Map(run id -> { id, level, stage, label, done, total, startedAt })
     function researchLineText(run, now) {
       const lv = String((run && run.level) || 'quick');
@@ -9258,34 +9958,178 @@
       if (t0 > 0) { const mins = Math.floor(Math.max(0, (now === undefined ? Date.now() : now) - t0) / 60000); text += ' · ' + (mins < 1 ? 'just started' : `${mins} min`); }
       return text;
     }
+    // The notice for a run an agent started without asking (startedBy 'agent', 'no-answer' or 'always'): a small card with who, the question, why, the cost,
+    // the progress text and, while it runs, the buttons Stop and Make it thorough. The same words on the desktop page, the phone and Simple.
+    // Names, questions and reasons are set with textContent only. A run the person started (or made thorough) keeps the plain line.
+    const RESEARCH_NOTICE_SHOW_MS = 20000;   // how long "Stopped. ..." / "Thorough research started. ..." stays after the click
+    function researchAgentName(agent) { return typeof agentDisplayName === 'function' ? (agentDisplayName(agent) || String(agent)) : String(agent); }
+    function researchToast(text) { hubToast(text); }
+    function researchNoticePost(path, id) { return fetch(path, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }); }
+    function researchWaitWords(sec) {
+      const s = Math.max(0, Math.round(Number(sec) || 0));
+      if (s >= 60 && s % 60 === 0) { const m = s / 60; return m === 1 ? '1 minute' : `${m} minutes`; }
+      return s === 1 ? '1 second' : `${s} seconds`;
+    }
+    // 'upgrade' (a run Make it thorough started) is a notice too, so after the click the box holds one bar for it, not a line beside the old run's outcome
+    function researchNoticeOn(run) { return !!run && (run.startedBy === 'agent' || run.startedBy === 'no-answer' || run.startedBy === 'always' || run.startedBy === 'upgrade'); }
+    const RESEARCH_UPGRADE_TEXT = 'Thorough research started. Its report will come here.';
+    // In the collapsed title a long agent name is cut to 20 characters (the words after it are never cut); opened, the full name shows.
+    function researchShortName(who) { const s = String(who); return s.length > 20 ? s.slice(0, 20) + '…' : s; }
+    // A notice is one line until it is opened (▾): the title, Stop, ▾ and ×. Opened, it adds the question in full, why, the cost, the progress and
+    // Make it thorough. Which notices are open, and which were dismissed with ×, is kept by run id (so a redraw never closes or brings back one).
+    const researchOpen = new Set();        // run ids whose notice is opened
+    const researchGroupOpen = new Set();   // agents whose "N research runs started by agents" line is opened
+    const researchDismissed = new Set();   // run ids hidden with × on this page (kept for the page's life; a reload may show them again)
+    function researchNoticeTitle(run, agent, cut) {
+      const who = cut ? researchShortName(researchAgentName(agent)) : researchAgentName(agent);
+      if (run.startedBy === 'upgrade') return RESEARCH_UPGRADE_TEXT;
+      if (run.startedBy === 'always') return `${who} started a ${run.level === 'thorough' ? 'thorough' : 'quick'} research run because you chose Always yes.`;
+      if (run.startedBy === 'no-answer' && !(Number(run.waitSeconds) > 0)) return `${who} started a quick research run without asking, as your settings allow.`;   // a wait of 0 asks nobody
+      return run.startedBy === 'no-answer' ? `Nobody answered within ${researchWaitWords(run.waitSeconds)}, so ${who} started a quick research run.` : `${who} started a quick research run for its work.`;
+    }
+    function researchToggleSet(set, key) { if (set.has(key)) set.delete(key); else set.add(key); researchLinePaint(); }
+    function researchSmallButton(cls, text, label, onclick) {
+      const b = document.createElement('button'); b.type = 'button'; b.className = cls; b.textContent = text; b.onclick = onclick;
+      if (label) b.setAttribute('aria-label', label);
+      return b;
+    }
+    function researchToggleButton(open, onclick) {
+      const b = researchSmallButton('research-toggle', open ? '▴' : '▾', open ? 'Hide details' : 'Show details', onclick);
+      b.setAttribute('aria-expanded', open ? 'true' : 'false');
+      return b;
+    }
+    function researchGroupEl(count, agent) {
+      const d = document.createElement('div');
+      d.className = 'ho-card research-notice research-group';
+      d.setAttribute('role', 'status');
+      const head = document.createElement('div'); head.className = 'research-head'; d.appendChild(head);
+      const t = document.createElement('div'); t.className = 'ho-title'; t.textContent = `${count} research runs started by agents`; head.appendChild(t);
+      head.appendChild(researchToggleButton(researchGroupOpen.has(agent), () => researchToggleSet(researchGroupOpen, agent)));
+      return d;
+    }
+    function researchNoticeEl(run, now, agent) {
+      const id = String(run.id);
+      const closed = !!run.outcome;   // after Stop or Make it thorough: one line and ×
+      const open = !closed && researchOpen.has(id);
+      const d = document.createElement('div');
+      d.className = 'ho-card research-notice';
+      d.setAttribute('role', 'status');
+      const head = document.createElement('div'); head.className = 'research-head'; d.appendChild(head);
+      const add = (cls, text) => { const p = document.createElement('div'); p.className = cls; p.textContent = text; d.appendChild(p); return p; };
+      const btns = [];
+      const act = (to, label, cls, what) => { const b = document.createElement('button'); b.type = 'button'; b.className = cls; b.textContent = label; b.disabled = !!run.busy; b.onclick = () => researchNoticeAct(run, agent, what, btns); btns.push(b); to.appendChild(b); };
+      // collapsed: at most two lines (CSS clamp) and a long agent name cut to 20 characters; opened: the full title, not clamped
+      const title = document.createElement('div'); title.className = open ? 'ho-title' : 'ho-title research-title-clamp'; title.textContent = closed ? run.outcome : researchNoticeTitle(run, agent, !open); head.appendChild(title);
+      if (!closed && run.active !== false) act(head, 'Stop', 'wo-stop', 'stop');
+      if (!closed) head.appendChild(researchToggleButton(open, () => researchToggleSet(researchOpen, id)));
+      head.appendChild(researchSmallButton('research-x', '×', 'Dismiss', () => { researchDismissed.add(id); researchOpen.delete(id); researchLinePaint(); }));
+      if (!open) return d;
+      const q = String(run.question || '').replace(/\s+/g, ' ').trim();
+      if (q) add('research-q', '“' + q + '”');
+      const why = String(run.reason || '').replace(/\s+/g, ' ').trim();
+      if (run.startedBy === 'agent' && why) add('research-why', 'Why: ' + why);
+      if (run.costLine && run.startedBy !== 'upgrade') add('research-cost', String(run.costLine));
+      add('ho-time', researchLineText(run, now));
+      if (run.active !== false && run.upgradable === true) {
+        const row = document.createElement('div');
+        row.className = 'research-actions';
+        act(row, 'Make it thorough', 'ho-status', 'upgrade');
+        d.appendChild(row);
+      }
+      return d;
+    }
+    async function researchNoticeAct(run, agent, what, btns) {
+      const id = String(run.id);
+      const live = () => (researchRuns.get(agent) && researchRuns.get(agent).get(id)) || run;   // an event may have replaced the record meanwhile
+      if (live().busy) return;
+      live().busy = true;
+      btns.forEach(b => { b.disabled = true; });
+      try {
+        const r = await researchNoticePost('/api/research/' + what, id);
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || j.error) throw new Error((j && j.error) || ('HTTP ' + r.status));
+        // the record may have been dropped by an event that came while the request ran: put it back, closed, with the answer
+        if (!researchRuns.has(agent)) researchRuns.set(agent, new Map());
+        const m = researchRuns.get(agent);
+        const cur = m.get(id) || run;
+        cur.outcome = what === 'stop' ? `Research stopped. ${researchAgentName(agent)} was told.` : RESEARCH_UPGRADE_TEXT;
+        cur.outcomeAt = Date.now(); cur.active = false; cur.upgradable = false; cur.busy = false;
+        m.set(id, cur);
+        researchLinePaint();
+        if (typeof setTimeout === 'function') setTimeout(researchLinePaint, RESEARCH_NOTICE_SHOW_MS + 100);
+      } catch (e) {
+        live().busy = false;
+        btns.forEach(b => { b.disabled = false; });
+        researchToast((e && e.message) || 'Could not reach the hub');
+        researchLinePaint();
+      }
+    }
+    // What a status entry or a research_progress event tells about a run.
+    function researchFields(x) {
+      return { id: String(x.id), level: x.level, stage: x.stage, label: x.label, done: x.done, total: x.total, startedAt: x.startedAt, question: x.question, startedBy: x.startedBy, reason: x.reason, waitSeconds: x.waitSeconds, costLine: x.costLine, active: x.active, upgradable: x.upgradable };
+    }
     function researchLineFill(box, agent) {
       if (!box) return;
-      const runs = agent && researchRuns.has(agent) ? [...researchRuns.get(agent).values()].sort((a, b) => (Number(a.startedAt) || 0) - (Number(b.startedAt) || 0)).slice(0, 3) : [];
-      box.textContent = '';
       const now = Date.now();
-      for (const r of runs) { const d = document.createElement('div'); d.className = 'ho-strip research-line'; d.setAttribute('role', 'status'); d.textContent = researchLineText(r, now); box.appendChild(d); }
+      const all = agent && researchRuns.has(agent) ? researchRuns.get(agent) : null;
+      if (all) {   // a closed notice ("Stopped. ...") goes after a short while
+        for (const [id, r] of [...all]) if (r.outcome && now - (r.outcomeAt || 0) > RESEARCH_NOTICE_SHOW_MS) all.delete(id);
+        // the new thorough run is on the page: its notice says "Thorough research started", so the old quick run's confirmation goes (said once)
+        if ([...all.values()].some(r => r.startedBy === 'upgrade' && !r.outcome && !researchDismissed.has(String(r.id)))) for (const [id, r] of [...all]) if (r.outcome === RESEARCH_UPGRADE_TEXT) { all.delete(id); researchEndedAdd(id); }
+        if (!all.size) researchRuns.delete(agent);
+      }
+      const runs = all && all.size ? [...all.values()].filter(r => !researchDismissed.has(String(r.id))).sort((a, b) => (Number(a.startedAt) || 0) - (Number(b.startedAt) || 0)).slice(0, 3) : [];
+      const grouped = runs.filter(researchNoticeOn).length >= 2;   // two or more notices: one line, each run inside it
+      let groupDrawn = false;
+      box.textContent = '';
+      for (const r of runs) {
+        if (researchNoticeOn(r)) {
+          if (grouped && !groupDrawn) { box.appendChild(researchGroupEl(runs.filter(researchNoticeOn).length, agent)); groupDrawn = true; }
+          if (!grouped || researchGroupOpen.has(agent)) box.appendChild(researchNoticeEl(r, now, agent));
+          continue;
+        }
+        const d = document.createElement('div'); d.className = 'ho-strip research-line'; d.setAttribute('role', 'status'); d.textContent = researchLineText(r, now); box.appendChild(d);
+      }
       box.hidden = runs.length === 0;
     }
-    const researchEnded = new Set();   // ids of runs that already got a terminal event (delivered or failed); kept small
+    const researchEnded = new Set();   // ids of runs that already got a terminal event (delivered, failed or stopped); kept small
     function researchEndedAdd(id) { researchEnded.add(id); if (researchEnded.size > 200) researchEnded.delete(researchEnded.values().next().value); }
     function researchLineApply(ev) {
       if (!ev || !ev.agent || ev.id == null) return;
       const id = String(ev.id);
-      if (ev.state === 'delivered' || ev.state === 'failed') {
+      if (ev.state === 'delivered' || ev.state === 'failed' || ev.state === 'stopped') {
         researchEndedAdd(id);   // a status answer still on its way must not bring this run back
         const m = researchRuns.get(ev.agent);
-        if (m) { m.delete(id); if (!m.size) researchRuns.delete(ev.agent); }
+        if (m) { if (!(m.get(id) && m.get(id).outcome)) m.delete(id); if (!m.size) researchRuns.delete(ev.agent); }   // a closed notice keeps its "Stopped. ..." line a while
       } else {
         if (researchEnded.has(id)) return;
         const old = researchRuns.has(ev.agent) ? researchRuns.get(ev.agent).get(id) : null;
+        if (old && old.outcome) return;   // closed by Stop or Make it thorough
         if (old && Number.isFinite(old.seq) && Number.isFinite(ev.seq) && ev.seq < old.seq) return;   // an older event never overwrites a newer one
         if (!researchRuns.has(ev.agent)) researchRuns.set(ev.agent, new Map());
-        researchRuns.get(ev.agent).set(id, { id, level: ev.level, stage: ev.stage, label: ev.label, done: ev.done, total: ev.total, startedAt: ev.startedAt, seq: ev.seq, seenAt: Date.now() });
+        researchRuns.get(ev.agent).set(id, { ...researchFields(ev), busy: old ? old.busy : false, seq: ev.seq, seenAt: Date.now() });
       }
       researchLinePaint();
     }
     function researchLinePaint() {
       for (const k of Object.keys(chats)) { const c = chats[k]; if (c && !c.isGroup && !c.isWorker && c.agent) researchLineFill(document.getElementById('research-lines-' + k), c.agent); }
+    }
+    // The change strip (lib/ui-settings-help.js stripLoad): one line per change the lead made in the last 24 h, with Undo, in the lead's chat.
+    // State from GET /api/settings-journal?by=lead&since=; refreshed when the chat opens and on settings_changed.
+    function changeStripEnv() {
+      let store = null; try { store = localStorage; } catch { store = null; }
+      return { doc: document, fetch: (u, o) => fetch(u, o), storage: store };
+    }
+    function changeStripRefresh() {
+      const H = window.hubSettingsHelp;
+      const lead = Array.isArray(AGENTS) ? AGENTS.find((a) => a && a.lead) : null;
+      if (!H || !lead) return;
+      for (const k of Object.keys(chats)) {
+        const c = chats[k];
+        if (!c || c.isGroup || c.isWorker || c.agent !== lead.name) continue;
+        const h = document.getElementById('change-strip-' + k);
+        if (h) H.stripLoad(h, changeStripEnv()).catch(() => {});
+      }
     }
     async function researchLineLoad(agent) {
       if (!agent) return;
@@ -9303,13 +10147,15 @@
           const id = String(x.id);
           inAnswer.add(id);
           if (researchEnded.has(id)) continue;
+          if (x.state === 'stopped') { researchEndedAdd(id); continue; }
           const cur = m.get(id);
           const x_seq = Number(x.seq);
+          if (cur && cur.outcome) continue;
           if (cur && (Number.isFinite(cur.seq) && Number.isFinite(x_seq) ? cur.seq >= x_seq : (cur.seenAt || 0) >= t0)) continue;
-          m.set(id, { id, level: x.level, stage: x.stage, label: x.label, done: x.done, total: x.total, startedAt: x.startedAt, seq: Number.isFinite(x_seq) ? x_seq : undefined, seenAt: t0 });
+          m.set(id, { ...researchFields(x), busy: cur ? cur.busy : false, seq: Number.isFinite(x_seq) ? x_seq : undefined, seenAt: t0 });
         }
         // a run the answer does not list and no event touched since the fetch began has ended
-        for (const [id, e] of [...m]) if (!inAnswer.has(id) && (e.seenAt || 0) < t0) m.delete(id);
+        for (const [id, e] of [...m]) if (!inAnswer.has(id) && (e.seenAt || 0) < t0 && !e.outcome) m.delete(id);
         if (m.size) researchRuns.set(agent, m); else researchRuns.delete(agent);
         researchLinePaint();
       } catch { /* the line stays as it was */ }
@@ -9460,6 +10306,8 @@
           html += `<optgroup label="${esc(label)}">` + rows.map(m => `<option value="${esc(m)}"${m === cur ? ' selected' : ''}>${esc(((billing[m] && billing[m].short) || billingDisplay(m, true)) + healthNote(health && health[m]))}</option>`).join('')
             + (label.startsWith('OpenRouter') ? `<option value="${OR_MORE}">🔎 More OpenRouter models…</option>` : '') + '</optgroup>';
         }
+        // The last line of the picker opens the agent card at its Model row (P3-8); the picker itself is unchanged.
+        if (typeof window !== 'undefined' && window.hubAgentCard) html += `<optgroup label="Settings"><option value="__card__">${esc(agentCardLastLine(chat.agent))}</option></optgroup>`;   // "__card__" is CARD_PICK
         sel.innerHTML = html; sel.value = cur;
         paintAutoPick(chatId);   // an Auto agent stays on "Auto", never shown as the model it happens to be set to
         sel.dataset.filled = 'done';
@@ -9546,6 +10394,7 @@
     }
     async function changeChatModel(chatId, model, opts = {}) {
       const chat = chats[chatId];
+      if (chat && model === '__card__') { paintAutoPick(chatId); openAgentCard(chat.agent, 'OPT-0047'); return false; }   // the picker's last line (CARD_PICK)
       if (chat && model === OR_MORE) { paintAutoPick(chatId); openOrPicker(chatId); return false; }
       return queueModelChange(chatId, model, opts);
     }
@@ -9734,7 +10583,8 @@
     function effortLevelShown(chat) { const l = chat.effort || agentEffortOf(chat.agent); return l === 'ultra' && !effortUltraOf(chat) ? 'max' : l; }   // the server sends Max when the model has no Ultra
     function effortOptionsHtml(chat) {
       const level = effortLevelShown(chat);
-      return (effortUltraOf(chat) ? [...EFFORT_LEVELS, EFFORT_ULTRA] : EFFORT_LEVELS).map(([v, l]) => `<option value="${v}"${v === level ? ' selected' : ''}>${l}</option>`).join('');
+      const last = window.hubAgentCard && isHubAdmin() ? `<option value="${CARD_PICK}">${esc(agentCardLastLine(chat.agent))}</option>` : '';   // the last line opens the card at its Thinking effort row (P3-8)
+      return (effortUltraOf(chat) ? [...EFFORT_LEVELS, EFFORT_ULTRA] : EFFORT_LEVELS).map(([v, l]) => `<option value="${v}"${v === level ? ' selected' : ''}>${l}</option>`).join('') + last;
     }
     function effortPickHtml(chat, chatId) {
       const show = effortSupported(chatModelOf(chat)) && !chat.autoModel;
@@ -9750,6 +10600,7 @@
     async function changeChatEffort(chatId, level) {
       const chat = chats[chatId]; const sel = document.getElementById(`effort-pick-${chatId}`);
       if (!chat) return;
+      if (level === CARD_PICK) { refreshEffortPick(chat); openAgentCard(chat.agent, 'OPT-0057'); return; }
       const before = chat.effort || agentEffortOf(chat.agent);
       try {
         const r = await fetch(`/api/agents/${encodeURIComponent(chat.agent)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ effort: level }) });
@@ -9796,6 +10647,7 @@
       paintPlanBadges();           // plan usage next to the model (Claude subscription agents)
       soloViewPaint();             // the "Agent work" toggle shows the device's choice
       try { teamSetupChatPaint(chats[chatId]); } catch { /* cosmetic */ }   // the lead's chat: the Set up teams offer, the Undo for a team just set up
+      try { const c = chats[chatId]; if (c && c.agent && !c.isGroup && !c.isWorker && !c.isHistory) window.FeatureCard && FeatureCard.chatShown(c.agent, document.getElementById(`messages-${chatId}`)); } catch { /* cosmetic */ }   // the lead's chat: the new-features card at the end of its list
 
       // Load conversation history from server (the newest page of the chosen view; "Load earlier" fetches the rest)
       chats[chatId].historyLoaded = soloHistoryLoad(chatId);
@@ -10610,9 +11462,8 @@
       AgentDot.applyDot(document.querySelector(`#tab-${id} .status`), state, opts);
       AgentDot.applyDot(document.getElementById(`status-dot-${id}`), state, opts);
     }
-    // The ring on a ring or blue line was clicked: that agent's chat, with its "Working on" panel open.
+    // The ring on a ring or blue line was clicked: that agent's chat (its "Working on" panel starts collapsed like any chat's).
     function bgOpenChat(name) {
-      if (typeof HandOffCard !== 'undefined' && typeof HandOffCard.open === 'function') HandOffCard.open(name);
       const btn = document.getElementById('agent-btn-' + name);
       startSoloChat(name, btn && btn.dataset ? btn.dataset.model : undefined);
     }
@@ -10730,22 +11581,71 @@
       bar.querySelector('#hub-halt-text').textContent = '⛔ Hub halted: all agents stopped, nothing new will start' + (reason ? ` (${reason})` : '');
     }
     async function haltHub() {
-      if (!confirm('Halt ALL agents?\n\nEvery running turn and job is stopped and nothing new starts (chat, schedules, delegation) until you press Resume.')) return;
+      // Jobs an admin marked Keep running are not stopped: the dialog says which (same words as the lead's card).
+      // Nothing is waited for before the question: the names come only from a jobs list already read (the Active list, or the last stop-status).
+      const known = Array.isArray(activeJobList) && activeJobList.length ? activeJobList : (Array.isArray(stLastKeptJobs) ? stLastKeptJobs : []);
+      const keptJobs = known.filter((j) => j && j.status === 'running' && j.keep === true);
+      const keptLine = '\n\nJobs marked Keep running' + (keptJobs.length ? ` (${keptJobs.length}: ${keptJobs.map((j) => j.name || j.id).join(', ')})` : '') + ' stay running; everything else stops.';
+      if (!confirm('Stop ALL agents?\n\nEvery running turn, worker and research run is stopped and nothing new starts until you press Resume. Scheduled tasks that come due wait and run, one at a time, after Resume.' + keptLine)) return;
       try {
-        const r = await fetch('/api/hub/halt', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: 'halted from the desktop UI' }) });
+        const r = await fetch('/api/hub/halt', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: 'stopped from the Settings page' }) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const d = await r.json();
         paintHubHalt(true, d.reason);
-        document.getElementById('st-overlay')?.remove();
-      } catch (e) { alert(`Halt failed: ${e.message}`); }
+        if (document.getElementById('st-stop-panel')) stStopPanelStart(); else document.getElementById('st-overlay')?.remove();   // the dialog stays open to show what was stopped
+      } catch (e) { alert(`Stop failed: ${e.message}`); }
     }
     async function resumeHub() {
+      let held = 0;
+      try { const s = await (await fetch('/api/hub/stop-status', { credentials: 'include' })).json(); held = ((s.waiting && s.waiting.scheduled) || []).length; } catch {}
+      if (!confirm(`Resume all agents?\n\n${held ? `${held} scheduled task${held === 1 ? '' : 's'} that came due while stopped will run now, one at a time, at least 30 seconds apart.` : 'Agents can work again.'}`)) return;
       try {
         const r = await fetch('/api/hub/resume', { method: 'POST', credentials: 'include' });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         paintHubHalt(false);
+        stStopPanelPaint(null);
       } catch (e) { alert(`Resume failed: ${e.message}`); }
     }
+
+    // ── Stop all agents panel (Settings > Money and safety > Emergency): what was stopped, what is finishing, what waits, what was kept ──
+    let stStopPanelTimer = null;
+    function stStopPanelStart() {
+      if (stStopPanelTimer) { clearInterval(stStopPanelTimer); stStopPanelTimer = null; }
+      if (!document.getElementById('st-stop-panel') || !isHubAdmin()) return;
+      stStopPanelRefresh();
+      stStopPanelTimer = setInterval(() => {
+        if (!document.getElementById('st-stop-panel')) { clearInterval(stStopPanelTimer); stStopPanelTimer = null; return; }
+        stStopPanelRefresh();
+      }, 5000);
+    }
+    async function stStopPanelRefresh() {
+      try {
+        const r = await fetch('/api/hub/stop-status', { credentials: 'include' });
+        if (!r.ok) return stStopPanelPaint(null);
+        stStopPanelPaint(await r.json());
+      } catch { /* keep what is shown */ }
+    }
+    let stLastKeptJobs = null;   // the kept jobs of the last stop-status (a jobs list already in memory for the Stop question)
+    function stStopPanelPaint(s) {
+      if (s && s.kept && Array.isArray(s.kept.jobs)) stLastKeptJobs = s.kept.jobs.map((j) => ({ ...j, status: 'running', keep: true }));
+      const el = document.getElementById('st-stop-panel');
+      if (!el) return;
+      if (!s || !s.halted) { el.style.display = 'none'; el.innerHTML = ''; return; }
+      const names = (a, f) => (a && a.length ? a.map(f || String).join(', ') : 'none');
+      const jobName = (j) => j.name || j.id;
+      const st = s.stopped || {}, fin = s.finishing || {}, wait = s.waiting || {}, kept = s.kept || {};
+      const when = s.at ? new Date(s.at).toLocaleString() : '';
+      const counts = s.counts ? ` (${s.counts.agents || 0} agents, ${s.counts.workers || 0} workers, ${s.counts.jobs || 0} jobs, ${s.counts.research || 0} research runs)` : '';
+      const nSched = (wait.scheduled || []).length;
+      el.style.display = '';
+      el.innerHTML = `<div><b>Stopped at ${esc(when)}${s.by ? ` by ${esc(s.by)}` : ''}</b>${s.reason ? ` (${esc(s.reason)})` : ''}</div>
+        <div>Stopped: agents ${esc(names(st.agents))}; workers ${esc(names(st.workers))}; jobs ${esc(names(st.jobs, jobName))}; research runs ${esc(names(st.research, (x) => x.agent || x.id))}.${esc(counts)}</div>
+        <div>Still finishing: jobs ${esc(names(fin.jobs, jobName))}; turns ${esc(names(fin.turns))}; research reports being delivered ${esc(names(fin.research, (x) => x.agent || x.id))}.</div>
+        <div>Waiting: ${nSched} scheduled task${nSched === 1 ? '' : 's'} held (${esc(names(wait.scheduled, (t) => t.label))}); ${wait.tasksMd || 0} TASKS.md task${wait.tasksMd === 1 ? '' : 's'} paused.</div>
+        <div>Kept running: ${esc(names(kept.jobs, jobName))}.</div>
+        <div style="margin-top:6px"><button class="st-test-btn" onclick="stStopPanelResume()">Resume</button></div>`;
+    }
+    async function stStopPanelResume() { await resumeHub(); stStopPanelRefresh(); }
 
     // ── Provider pacing: amber banner while a provider runs one call at a time (after a
     // rate limit / outage) or is ramping its parallelism back up. Fed by status_snapshot
@@ -10899,12 +11799,12 @@
           const job = info.querySelector('.agent-job-line');
           if (job) info.insertBefore(bl, job); else info.appendChild(bl);
         }
-        const t = AgentDot.bgLine(n);
+        const t = agentStateWords('background', { background: n });
         if (bl.textContent !== t) bl.textContent = t;
         bl.title = AgentDot.dotLabel(state, { background: n, name });
       } else if (bl) bl.remove();
     }
-    // A click on a ring or on the blue line opens that agent's chat with the panel open (before the row's own click).
+    // A click on a ring or on the blue line opens that agent's chat, its panel collapsed like any chat's (before the row's own click).
     document.addEventListener('click', (e) => {
       // the same in the Teams view: its rows paint the ring and the line through lib/ui-agent-dot.js too
       const t = e.target && e.target.closest ? e.target.closest('.agent-btn .agent-status.bg-work, .agent-btn .agent-bg-line, .teams-row .teams-dot.bg-work, .teams-row .teams-bg-line') : null;
@@ -10915,6 +11815,23 @@
       e.stopPropagation(); e.preventDefault();
       bgOpenChat(name);
     }, true);
+    // The state words a list row shows as its visible line, from ONE place: the sidebar's line (agentLiveState, bgPaintRow)
+    // and the quick switcher both read them here, so the two never drift apart. state: 'question' | 'busy' | 'background'
+    // (AgentDot.dotState's names); anything else (free, idle) shows no words. Same case as the sidebar prints them:
+    //   question   "waiting for your answer"      (sidebar: "❓ waiting for your answer · 2m")
+    //   busy       the turn's words as given      (sidebar: "⏳ Replying to your message · 2m", a worker: "⏳ working")
+    //   background "Free · 2 in background"       (sidebar: the blue line under the name)
+    function agentStateWords(state, { words = '', background = 0 } = {}) {
+      if (state === 'question') return 'waiting for your answer';
+      if (state === 'busy') return String(words || '');
+      if (state === 'background') return AgentDot.bgLine(background);
+      return '';
+    }
+    // The busy words the sidebar prints for one agent: a named agent says what its turn is (agentDoingNow), a temporary worker its activity.
+    function agentBusyWords(name, activity) {
+      const s = agentStatus[name];
+      return agentStateWords('busy', { words: (s && s.worker) ? activity : agentDoingNow(name).words });
+    }
     // One agent's live state for every row that shows it (All Agents, Teams): the dot's class, its tooltip and text, and the
     // busy line. Rows paint from this, so a new state added here shows everywhere.
     function agentLiveState(name) {
@@ -10932,14 +11849,14 @@
       else if (busy) { dotCls = 'live-busy'; tip = `${activity}${elapsed ? ` · ${elapsed}` : ''}`; }
       else if (statusKnown) { dotCls = 'live-idle'; tip = 'Idle'; }
       const named = !question && !(s && s.worker);
-      if (question) line = `❓ waiting for your answer${elapsedShort ? ` · ${elapsedShort}` : ''}`;
+      if (question) line = `❓ ${agentStateWords('question')}${elapsedShort ? ` · ${elapsedShort}` : ''}`;
       else if (busy && named) {
         const d = agentDoingNow(name);
         const det = d.detail ? ` · ${d.detail}` : '';
-        line = `⏳ ${d.words}${elapsedShort ? ` · ${elapsedShort}` : ''}${det}`;
+        line = `⏳ ${agentStateWords('busy', { words: d.words })}${elapsedShort ? ` · ${elapsedShort}` : ''}${det}`;
         lineTitle = `${d.words}${elapsed ? ` · ${elapsed}` : ''}${det}`;
         tip = lineTitle;
-      } else if (busy) line = `⏳ ${activity}${elapsedShort ? ` · ${elapsedShort}` : ''}`;
+      } else if (busy) line = `⏳ ${agentStateWords('busy', { words: activity })}${elapsedShort ? ` · ${elapsedShort}` : ''}`;
       const needsOrigin = named && busy && !!(s && s.busy) && !busyRun[name] && !mine;
       return { busy, question, offer, dotCls, tip, text, line, lineTitle, activity, needsOrigin };
     }
@@ -11401,7 +12318,21 @@
         else if (o.kind === 'hand_off') label = o.label ? o.label.replace(/^Hand-off\b/, 'Task') : `Task from ${from || 'another agent'}`;
         else if (o.kind === 'hand_off_report') label = o.label ? o.label.replace(/^Hand-off\b/, 'Task') : 'Task finished';
         else if (o.kind === 'alert') label = 'Monitor alert';
+        else if (o.kind === 'research_report') label = 'Research finished';
         else label = 'Hub turn';
+        // A research turn says what it is once: the row reads "Research finished" (or failed / stopped / made thorough), the time, then the question in
+        // quotes (never the label again), and no "from …" line follows the reply. Both come from the turn's own message, never from the origin.
+        if (o.kind === 'research_report') {
+          const rm = /^\[Deep research (finished|failed|interrupted|stopped|made thorough)\] "([\s\S]*?)" \((?:id )?dr-[0-9a-f]{8}/.exec(typeof entry.content === 'string' ? entry.content.trimStart() : '');
+          let note = '';
+          if (rm) {
+            label = 'Research ' + rm[1];
+            const q = rm[2].replace(/\s+/g, ' ').trim();
+            const cut = q.length > 120 ? q.slice(0, 119).trimEnd() + '…' : q;
+            note = cut ? '“' + cut + '”' : '';
+          }
+          return { kind, from, label, noFrom: true, note };
+        }
         return { kind, from, label };
       }
       const text = typeof entry.content === 'string' ? entry.content.trimStart() : '';
@@ -11501,7 +12432,7 @@
         }
         const own = indexes.some((k) => autoOwnOrigin(history[k].origin));
         const open = indexes.filter((k) => history[k].role === 'assistant' && (history[k].for_owner === true || own));
-        items.push({ type: 'card', kind: last.kind, from: last.from, label: last.label, work: lastWork, ts: firstTs, indexes, open, firstLine: autoCardLine(history, indexes, last.label) });
+        items.push({ type: 'card', kind: last.kind, from: last.from, label: last.label, work: lastWork, ts: firstTs, indexes, open, firstLine: last.noFrom ? last.note || '' : autoCardLine(history, indexes, last.label), ...(last.noFrom ? { noFrom: true, note: last.note || '' } : {}) });
         i = j;
       }
       const out = [];
@@ -11559,10 +12490,12 @@
       const wrap = document.createElement('div');
       wrap.className = `auto-card auto-card-${autoCardKind(c.kind)}`;
       const { head, body } = foldHead('auto-card-head', 'auto-card-body', wrap);
-      const line = foldPart('span', 'auto-card-line', c.firstLine || c.label);
+      // A research report's row: the question in quotes (c.note) is its one line, never the label a second time
+      const fixed = c.noFrom ? String(c.note || '') : null;
+      const line = foldPart('span', 'auto-card-line', fixed !== null ? fixed : (c.firstLine || c.label));
       head.append(foldPart('span', 'auto-card-label', c.label), foldPart('span', 'auto-card-time', timeFn ? timeFn(c.ts) : foldCardTime(c.ts)), line, foldPart('span', 'auto-card-chev', '▸'));
       parent.appendChild(wrap);
-      return { wrap, head, body, setLine: (text) => { line.textContent = text || c.label; } };
+      return { wrap, head, body, noFrom: !!c.noFrom, setLine: (text) => { line.textContent = fixed !== null ? fixed : (text || c.label); } };
     }
     function foldFromLine(label) {
       return foldPart('div', 'auto-from', `from ${label}`);
@@ -11579,7 +12512,7 @@
         else draw(k, { into: built.body, notice: false });
       }
       for (const k of c.open) {
-        parent.appendChild(foldFromLine(c.label));
+        if (!c.noFrom) parent.appendChild(foldFromLine(c.label));
         draw(k, { notice: false, push: false });
       }
       return built;
@@ -11648,6 +12581,7 @@
         case 'hand_off': return `task from ${origin.from || 'another agent'}`;
         case 'hand_off_report': return `task finished: ${origin.from || 'another agent'}`;
         case 'comms': return 'message from a messaging channel';
+        case 'research_report': return 'research finished';
         default: return 'hub turn';
       }
     }
@@ -11709,7 +12643,8 @@
             card = mem.card;
             card.setLine('working…');
           } else {
-            card = foldBuildCard(panel, { kind: info.kind, label: info.label, ts: Date.now(), firstLine: 'working…' });
+            const reportBits = info.noFrom ? { noFrom: true, note: info.note || '' } : null;   // a research report: its row says it once, no "from" line
+            card = foldBuildCard(panel, { kind: info.kind, label: info.label, ts: Date.now(), firstLine: 'working…', ...reportBits });
             if (hubMain) { card.wrap.classList.add('chat-view-hidden'); card.hiddenMsgs = []; }
           }
           chat.lastAutoCard = null;
@@ -11741,6 +12676,7 @@
       }
       if (!card) appendSystemNotice(chat.id, `⚡ ${hubOriginLabel(ev.origin)} — ${hubTurnTime()}`);
       const msgId = appendMessage(chat.id, 'assistant', '…', card && card.body);
+      try { window.FeatureCard && FeatureCard.messageArrived(document.getElementById(`messages-${chat.id}`)); } catch { /* cosmetic */ }   // a live hub-started turn's reply bubble just landed
       hubTurns[ev.turnId] = { chatId: chat.id, msgId, text: '', startedAt: Date.parse(ev.startedAt), card, prompt: ev.message };
       if (card) {
         card.msgId = msgId;
@@ -12114,10 +13050,15 @@
       if (!panel || anchor.parentNode !== panel) return;
       // replies already moved out after the same block keep their order: this one goes after them
       while (anchor.nextElementSibling && anchor.nextElementSibling.dataset && anchor.nextElementSibling.dataset.autoMoved === '1') anchor = anchor.nextElementSibling;
-      const line = foldFromLine(card.label);
-      line.dataset.autoMoved = '1'; el.dataset.autoMoved = '1';
-      anchor.after(line);
-      line.after(el);
+      el.dataset.autoMoved = '1';
+      if (card.noFrom) {   // a research report says what it is in its row: no "from …" line
+        anchor.after(el);
+      } else {
+        const line = foldFromLine(card.label);
+        line.dataset.autoMoved = '1';
+        anchor.after(line);
+        line.after(el);
+      }
       card.moved = true;
     }
     function onHubForOwner(ev) {
@@ -12290,6 +13231,7 @@
         paintNotifyBtns(ev.agent);
       });
       source.addEventListener('research_progress', e => { const ev = parse(e); if (ev) researchLineApply(ev); });
+      source.addEventListener('settings_changed', e => { const ev = parse(e); if (ev) { changeStripRefresh(); reviewRefresh().catch(() => {}); } });   // the lead changed a setting: its chat's strip follows, and so does the count on the gear
       source.addEventListener('ask_user', e => {
         const ev = parse(e); if (!ev) return;
         setAgentLive(ev.agent, { busy: true, pendingQuestion: true });
@@ -12297,7 +13239,7 @@
         if (ev.request_id && Array.isArray(ev.questions)) {
           const chat = findSoloChat(ev.agent);
           const chatId = chat ? Object.keys(chats).find(k => chats[k] === chat) : null;
-          showQuestionModal({ request_id: ev.request_id, questions: ev.questions, agent: ev.agent }, chatId || null).catch(() => {});
+          showQuestionModal({ request_id: ev.request_id, questions: ev.questions, agent: ev.agent, ...(ev.fixed === true ? { fixed: true, change: ev.change } : {}) }, chatId || null).catch(() => {});
         }
       });
       // A Do it on a set-up card wrote reporting lines: the lead's chat shows "Undo this team" at once; the Teams tab and list follow.
@@ -12307,7 +13249,7 @@
         loadAgents().catch(() => {});
         teamSetupLoadSoon();
       });
-      source.addEventListener('ask_user_done', e => { const ev = parse(e); if (ev && ev.request_id) closeQuestion(ev.request_id); });
+      source.addEventListener('ask_user_done', e => { const ev = parse(e); if (ev && ev.request_id) closeQuestion(ev.request_id, ev); });
       source.addEventListener('ask_user_done', e => { const ev = parse(e); if (ev) setAgentLive(ev.agent, { pendingQuestion: false }); });
       // A hands-free call (voice phase 2) follows the events of its agent: replies, tool activity, questions, held items.
       for (const t of ['turn_start', 'turn_delta', 'turn_activity', 'turn_end', 'for_owner', 'ask_user', 'ask_user_done', 'voice_held', 'voice_held_done', 'voice_call']) {
@@ -12319,6 +13261,10 @@
       source.addEventListener('compaction_progress', e => { const ev = parse(e); if (ev) onCompactionProgress(ev); });
       source.addEventListener('compaction_end', e => { const ev = parse(e); if (ev) onCompactionEnd(ev); });
       source.addEventListener('agent_updated', e => { const ev = parse(e); if (ev) onAgentUpdated(ev); });
+      // The agent card (lib/ui-agent-card.js) follows the same events through this page's stream, not one of its own.
+      source.addEventListener('agent_updated', e => { const ev = parse(e); if (ev) agentCardEmit('agent_updated', ev); });
+      source.addEventListener('agent_renamed', e => { const ev = parse(e); if (ev) agentCardEmit('agent_renamed', ev); });
+      source.addEventListener('settings_changed', e => { const ev = parse(e); if (ev) agentCardEmit('settings_changed', ev); });
       // Plan limits: a family at its weekly limit runs on the substitute model; the plan refused a model outright.
       source.addEventListener('model_fallback', e => { const ev = parse(e); if (ev) hubToast(`${ev.agent}: ${String(ev.from || '').split('/').pop()} is at ${ev.utilization != null ? Math.round(ev.utilization) + '% of its weekly limit' : 'its limit'}; running on ${String(ev.to || '').split('/').pop()} until ${ev.resetsAt ? new Date(ev.resetsAt).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'the window resets'}`); });
       // Plan warnings and refusals (lib/plan-usage) are shown near the top, never as a pop-up over the input: the usage
@@ -12540,13 +13486,14 @@
           <button onclick="pauseRequest('${chatId}')" id="pause-${chatId}" style="display:none;" title="Pause to provide input, then continue">⏸️ Pause</button>
           <button onclick="cancelRequest('${chatId}')" id="cancel-${chatId}" style="display:none;">⏹️ Cancel</button>
 
-          <span class="agent-name"><span class="agent-name-text">${hubEsc(chat.display || capName(chat.agent))}</span> <select class="model-pick" id="model-pick-${chatId}" data-tip="Change this agent's model from here. Claude to Claude keeps the session; another provider continues from the conversation history. A change made while the agent is busy applies after this turn." title="${chat.autoModel ? AUTO_TIP : "Change this agent's model from here. Claude to Claude keeps the session; another provider continues from the conversation history. A change made while the agent is busy applies after this turn."}" aria-label="Model" onfocus="fillModelPick('${chatId}')" onmousedown="return modelPickDown(event, '${chatId}')" onchange="changeChatModel('${chatId}', this.value)"><option value="${chat.autoModel ? AUTO_PICK : esc(chat.model || '')}" selected>${chat.autoModel ? 'Auto' : esc(billingDisplay(chat.model, true))}</option></select> ${effortPickHtml(chat, chatId)}<span class="plan-badge" id="plan-badge-${chatId}" hidden onclick="openPlanSettings()"></span></span>${cyberHeaderTag(chat.model)}
+          <span class="agent-name"><span class="agent-name-text">${hubEsc(chat.display || capName(chat.agent))}</span> <select class="model-pick" id="model-pick-${chatId}" data-tip="Change this agent's model from here. Claude to Claude keeps the session; another provider continues from the conversation history. A change made while the agent is busy applies after this turn." title="${chat.autoModel ? AUTO_TIP : "Change this agent's model from here. Claude to Claude keeps the session; another provider continues from the conversation history. A change made while the agent is busy applies after this turn."}" aria-label="Model" onfocus="fillModelPick('${chatId}')" onmousedown="return modelPickDown(event, '${chatId}')" onchange="changeChatModel('${chatId}', this.value)"><option value="${chat.autoModel ? AUTO_PICK : esc(chat.model || '')}" selected>${chat.autoModel ? 'Auto' : esc(billingDisplay(chat.model, true))}</option></select> ${effortPickHtml(chat, chatId)}<button type="button" class="plan-badge" id="plan-badge-${chatId}" hidden></button></span>${cyberHeaderTag(chat.model)}
         </div>
         <div class="compaction-line" id="compaction-line-${chatId}" style="display:none" title="Context compression: the agent writes its own working brief (see the agent's settings page)"></div>
         <div class="messages" id="messages-${chatId}"></div>
         <div class="team-offer-slot" id="team-offer-slot-${chatId}" hidden></div>
         <div class="handoff-cards" id="handoff-cards-${chatId}" hidden></div>
         <div class="handoff-cards research-lines" id="research-lines-${chatId}" hidden></div>
+        <div class="change-strip" id="change-strip-${chatId}" hidden></div>
         <div class="input-area">
           <div class="input-wrapper">
             <div class="image-preview-area" id="image-preview-${chatId}"></div>
@@ -12554,7 +13501,7 @@
           </div>
           <input type="file" id="file-input-${chatId}" multiple style="display:none" onchange="handleFileSelect(event, '${chatId}')">
           <button class="attach-btn" onclick="document.getElementById('file-input-${chatId}').click()" title="Attach a file: images are sent with the message, other files are uploaded to your files and their path is added to the message" style="background:var(--bg-input); border:1px solid var(--border); padding:8px 10px; font-size:1rem; cursor:pointer;">📎</button>
-          <button type="button" onpointerdown="voiceMicPointer(false)" onpointerup="voiceMicPointer(true)" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="${voiceMicIdleLabel()}" title="${hubEsc(voiceMicIdleTitle(chatId))}">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch" style="display:none">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
+          <button type="button" onpointerdown="voiceMicPointer(false)" onpointerup="voiceMicPointer(true)" onclick="voiceMicToggle('${chatId}')" id="mic-${chatId}" class="mic-btn" style="display:none" aria-pressed="false" aria-label="${voiceMicIdleLabel()}" title="${hubEsc(voiceMicIdleTitle(chatId))}">${VOICE_MIC_SVG}</button><span class="mic-meter" id="mic-meter-${chatId}" style="display:none" aria-hidden="true"><i></i></span><span class="voice-extra" style="display:none"><span class="voice-agent-chip-wrap" id="vagent-wrap-${chatId}" hidden><button type="button" class="voice-agent-chip" id="vagent-${chatId}" onclick="voiceAgentCardOpen('${chatId}')"></button><button type="button" class="voice-agent-card" id="vagent-card-${chatId}" onclick="voiceAgentCardOpen('${chatId}')">…</button></span><button type="button" class="voice-mode-chip" id="vmode-${chatId}" onclick="voiceModeToggle()" title="Talk mode: tap to switch" style="display:none">${voiceModeLabel()}</button><button type="button" class="voice-set-btn" id="vset-${chatId}" onclick="voicePopToggle('${chatId}')" aria-label="Voice settings" aria-expanded="false" title="Voice settings">${VOICE_LEVELS_SVG}</button><div class="voice-pop" id="voice-pop-${chatId}" role="dialog" aria-label="Voice settings" hidden></div></span>
           <button onclick="toggleNotifyDone('${chatId}')" id="notify-${chatId}" class="notify-done-btn" style="display:none" aria-pressed="false" title="Get a notification on your phone when this reply is done">🔔 Notify me</button>
           <button onclick="sendSoloMessage('${chatId}')" id="send-${chatId}">Send</button>
         </div>
@@ -12679,6 +13626,7 @@
       if (document.getElementById('files-panel')) filesRefresh(); // the Files panel follows the active chat's agent
       if (opened && !opened.isGroup && !opened.isWorker && !opened.isHistory && opened.agent) qsNoteOpened(opened.agent);   // the quick switcher's recents (⌘K)
       if (opened && !opened.isGroup && !opened.isWorker && opened.agent) { researchLinePaint(); researchLineLoad(opened.agent); }   // the deep research progress line
+      if (opened && !opened.isGroup && !opened.isWorker && opened.agent) changeStripRefresh();   // what the lead changed in the last 24 h (the lead's chat only)
       if (document.getElementById('recall-panel') && chats[chatId] && !chats[chatId].isGroup && chats[chatId].agent && String(chats[chatId].agent) !== recallState.agent) openRecallPanel(chatId); // so does Recall
       document.getElementById(`input-${chatId}`)?.focus();
       if (typeof scheduleWorkerListRefresh === 'function') scheduleWorkerListRefresh();
@@ -13680,6 +14628,7 @@
 
       const msgId = chat.lastMsgId || appendMessage(chatId, 'assistant', '⏳ Thinking...');
       chat.lastMsgId = msgId;
+      try { window.FeatureCard && FeatureCard.messageArrived(document.getElementById(`messages-${chatId}`)); } catch { /* cosmetic */ }   // a live send: the person's message and the reply bubble just landed
       const sentAt = Date.now();   // after a lost connection, only history the hub saved since then can be this message
 
       try {
@@ -14262,9 +15211,24 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       for (const n of questionNotices.get(requestId) || []) retireSoon(n);
       questionNotices.delete(requestId);
     }
-    function closeQuestion(requestId) {
+    // What a question's line says once nobody answered (the same words on the phone page). A deep research card ("{Agent} asks: research this? “{Q}” …")
+    // says what was asked and how long nobody answered; any other card keeps its first sentence and adds that nobody answered.
+    function questionNoAnswerLine(text, waitedSeconds) {
+      const t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+      const m = /^(.+?) asks: research this\? “([\s\S]*?)”(?= This looks like a research question\.)/.exec(t);
+      if (m) return `${m[1]} asked whether to research “${m[2]}”. ` + (Number(waitedSeconds) > 0 ? `Nobody answered within ${researchWaitWords(waitedSeconds)}.` : 'Nobody answered in time.');
+      const first = (/^[\s\S]*?[.!?](?=\s|$)/.exec(t) || [t + '.'])[0];
+      return first + ' Nobody answered in time.';
+    }
+    function closeQuestion(requestId, ev) {
       const o = questionOverlays[requestId];
       if (o) { o.remove(); delete questionOverlays[requestId]; }
+      // nobody answered: the "❓" lines stop reading as open questions (no ❓, the muted style, what happened)
+      // only when the wait's own timer ended it (waitedSeconds); a stopped turn just retires the line as before
+      if (ev && ev.result === 'no_answer' && Number(ev.waitedSeconds) > 0) for (const n of questionNotices.get(requestId) || []) {
+        n.textContent = questionNoAnswerLine(n.dataset && n.dataset.question, ev.waitedSeconds);
+        n.className = 'system-notice notice-past';
+      }
       retireQuestionNotices(requestId);
     }
     // Plan card helpers (pure). The checklist is on questions[0]; an empty or malformed one is no checklist (a plain card).
@@ -14292,7 +15256,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         if (shownQuestions.has(request_id)) return resolve();
         shownQuestions.add(request_id);
         const esc = escapeHtmlSafe;
-        if (chatId) questionNotices.set(request_id, questions.map(q => appendSystemNotice(chatId, '❓ ' + q.question)).filter(Boolean));
+        if (chatId) questionNotices.set(request_id, questions.map(q => { const n = appendSystemNotice(chatId, '❓ ' + q.question); if (n) n.dataset.question = String(q.question == null ? '' : q.question); return n; }).filter(Boolean));
 
         const overlay = document.createElement('div');
         overlay.className = 'question-overlay';
@@ -14343,6 +15307,23 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         html += '<div class="question-actions"><span class="question-hint" id="question-hint">Pick an answer, then press Submit.</span>'
           + '<span class="question-buttons">' + (canSkip ? '<button id="question-skip" type="button">Skip</button>' : '') + '<button id="question-submit" disabled>Submit</button></span></div>';
         html += '</div>';
+        // A card the hub built for a change (fixed: true, lib/settings-tool): the change as rows and two buttons, Confirm and Cancel.
+        // No text box, no "type an answer"; the answer is exactly one of the two choices.
+        const fixedHelp = typeof window !== 'undefined' ? window.hubSettingsHelp : null;
+        const fixed = !!(fixedHelp && fixedHelp.isFixedCard(data));
+        if (fixed) {
+          const fixedBtn = (label) => ((questions[0].options || []).find(o => o && String(o.label) === label) || { label }).label;
+          html = '<div class="question-modal question-fixed"><h3>Confirm a change</h3>'
+            + `<p class="question-text">${esc(questions[0].question)}</p>`
+            + '<dl class="question-rows">' + fixedHelp.fixedRows(data.change).map(([k, v]) => (k ? `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>` : `<dd class="question-row-note">${esc(v)}</dd>`)).join('') + '</dl>'
+            + '<div class="question-actions"><span class="question-hint"></span><span class="question-buttons"><button id="question-cancel" type="button">Cancel</button><button id="question-submit" type="button">Confirm</button></span></div></div>';
+          overlay.innerHTML = html;
+          overlay.querySelector('#question-submit').addEventListener('click', () => submitAnswers({ '0': fixedBtn('Confirm') }));
+          overlay.querySelector('#question-cancel').addEventListener('click', () => submitAnswers({ '0': fixedBtn('Cancel') }));
+          document.body.appendChild(overlay);
+          setTimeout(() => { const b = overlay.querySelector('#question-submit'); if (b && b.focus) b.focus({ preventScroll: true }); }, 100);
+          return;
+        }
         overlay.innerHTML = html;
 
         function submitAnswers(answers) {
@@ -14435,7 +15416,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         refresh();
 
         document.body.appendChild(overlay);
-        setTimeout(() => { const f = checklist ? overlay.querySelector('.question-option') : customInput; if (f && f.focus) f.focus(); }, 100);
+        // The card opens at its top (the question visible): focus never scrolls, and the card's scroll container is set to its top after it is shown
+        const modalBox = overlay.querySelector('.question-modal');
+        const toTop = () => { if (modalBox) modalBox.scrollTop = 0; overlay.scrollTop = 0; };
+        toTop();
+        setTimeout(() => { const f = checklist ? overlay.querySelector('.question-option') : customInput; if (f && f.focus) f.focus({ preventScroll: true }); toTop(); }, 100);
       });
     }
 
@@ -19041,6 +20026,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       for (const b of document.querySelectorAll('.input-area .mic-btn')) b.style.display = voiceReady() ? '' : 'none';
       for (const b of document.querySelectorAll('.input-area .voice-extra')) b.style.display = voiceReady() ? '' : 'none';
       if (typeof voiceModeChipPaint === 'function') voiceModeChipPaint();   // a chat bar drawn during a call gets its pill
+      if (typeof voiceAgentChipPaint === 'function') voiceAgentChipPaint();   // this agent's voice chip (own voice / same as all)
       try { if (voiceCallS.call && voiceCallS.press && voiceCallS.chatId) voiceCallPaintBtn(voiceCallS.chatId, true); } catch { /* the press button is put on a redrawn mic button */ }
       document.body.classList.toggle('voice-on', voiceReady() || voiceDeviceFallback());
       try { voiceSummaryPaint(); voiceWaitSchedule(); voiceHintTick(); if (voiceStatus && voiceById('st-voice-status')) voicePaintSettings(voiceStatus); } catch { /* the summary, the poll, the hint and the Settings line are comforts */ }
@@ -19473,6 +20459,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       h += row('Sound route', voiceRouteBlockHtml());
       h += row('Replies', `<label style="${CHK}"><input type="checkbox" id="st-voice-readaloud" ${p.readAloud ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Read replies aloud</label>`);
       h += row('Fallback', `<label style="${CHK}"><input type="checkbox" id="st-voice-fallback" ${p.deviceVoiceFallback ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Use this device's own offline voice when the hub voice is unavailable</label><span id="st-voice-prefs-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span>`);
+      if (typeof stDoorHtml === 'function') h += stDoorHtml('recordings', 'Recordings', 'Calls you took part in, saved as audio, to play or download.', "location.href='/recordings'", { hidden: !recordingsDoorShown() });   // the guard: this block also runs on its own in tests
       return h + `</div>`;
     }
     function voicePaintSettings(st) {
@@ -19734,7 +20721,21 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     // The mood word of a turn: once per turn however it arrives (the chat stream's voice_mood chunk or the hub's turn_mood event).
     function voiceDispMood(seq, mood) { voiceDisplayHook('mood', 'seq:' + seq, mood); }
     // The voice panel's display selector, captions switch and the line about an unavailable character.
-    async function voiceDispPaintPanel(chatId) {
+    // A picker skipped because it had focus keeps the latest result and gets ONE 'blur' listener that refills it then, only if it is still
+    // connected and no newer paint happened since (isLatest()). A newer skipped result replaces the pending one; never two listeners on one select.
+    const voiceDispPendingBlur = new WeakMap();
+    function voiceDispRefillOnBlur(sel, args, isLatest) {
+      const have = voiceDispPendingBlur.get(sel);
+      if (have) { have.args = args; have.isLatest = isLatest; return; }
+      const ent = { args, isLatest };
+      voiceDispPendingBlur.set(sel, ent);
+      sel.addEventListener('blur', () => {
+        voiceDispPendingBlur.delete(sel);
+        if (sel.isConnected === false || !ent.isLatest()) return;
+        CallDisplay.fillDisplaySelect(document, sel, ent.args);
+      }, { once: true });
+    }
+    async function voiceDispPaintPanel(chatId, asked) {   // asked: the person pressed Try now (the note says "Checking…" while it runs)
       if (typeof CallDisplay === 'undefined') return;
       const ids = [`vp-display-${chatId}`, `vcb-display-${chatId}`];   // the voice panel's select and the call bar's
       const sels = ids.map((i) => voiceById(i)).filter(Boolean);
@@ -19747,19 +20748,37 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       paintBoxes(CallDisplay.loadDisplayPrefs(localStorage));
       if (!voiceDisp.paintGen) voiceDisp.paintGen = new Map();
       const my = (voiceDisp.paintGen.get(chatId) || 0) + 1; voiceDisp.paintGen.set(chatId, my);
-      let packs = [], available = [], state = 'ready';
-      try { const got = await CallDisplay.fetchFaces((...a) => fetch(...a)); packs = got.packs; available = got.available; } catch { state = 'failed'; }
+      // the last good list on this page (kept when a list arrives): an interim paint reuses it, so other installed characters never vanish during a repaint
+      const good = voiceDisp.lastGood;
+      let packs = good ? good.packs : [], available = good ? good.available : [], state = 'loading', failKind = null;
+      const fillAll = (prefs) => {
+        const names = CallDisplay.loadPackNames(localStorage);
+        const shown = state === 'loading' && good && (!prefs.choice.startsWith('pack:') || packs.some((p) => 'pack:' + p.id === prefs.choice) || available.some((a) => 'pack:' + a.id === prefs.choice)) ? 'ready' : state;   // "loading" only for a chosen pack the last good list lacks
+        for (const sel of sels) {
+          if (voiceById(sel.id) !== sel) continue;   // rebuilt meanwhile
+          const args = { choice: prefs.choice, packs, available, state: shown, names };
+          if (sel === document.activeElement) { voiceDispRefillOnBlur(sel, args, () => voiceById(sel.id) === sel && voiceDisp.paintGen.get(chatId) === my); continue; }   // an open picker is not refilled now; on blur with the latest result
+          CallDisplay.fillDisplaySelect(document, sel, args);
+        }
+      };
+      fillAll(CallDisplay.loadDisplayPrefs(localStorage));   // paint once as "loading" so the panel never shows a stale picker while the list is awaited
+      const note0 = voiceById(`vp-display-note-${chatId}`);
+      if (note0) {   // a stale note never stays through the loading paint; after Try now it says "Checking…" with the button disabled
+        note0.textContent = asked === true ? 'Checking…' : '';
+        CallDisplay.paintListRetry(document, note0, asked === true, { checking: true });
+      }
+      try { const got = await CallDisplay.fetchFaces((...a) => fetch(...a)); packs = got.packs; available = got.available; state = 'ready'; CallDisplay.rememberPackNames(localStorage, got); } catch (e) { state = 'failed'; failKind = e && e.kind; packs = []; available = []; }   // a failed list shows the chosen character as "can't check", never the cached entry
       if (voiceDisp.paintGen.get(chatId) !== my) return;   // a newer paint started meanwhile: an older answer never puts back an older choice
+      if (state === 'ready') voiceDisp.lastGood = { packs, available };   // only the newest answer updates the cache the interim paint reuses
       const prefs = CallDisplay.loadDisplayPrefs(localStorage);   // read after the wait: a choice made meanwhile counts
       paintBoxes(prefs);
-      for (const sel of sels) {
-        if (voiceById(sel.id) !== sel) continue;   // rebuilt meanwhile
-        if (sel === document.activeElement) continue;   // an open picker is not refilled
-        CallDisplay.fillDisplaySelect(document, sel, { choice: prefs.choice, packs, available });
-      }
+      fillAll(prefs);
       const note = voiceById(`vp-display-note-${chatId}`);
-      const resolved = CallDisplay.resolveDisplay({ choice: prefs.choice, agentDefault: voiceDispAgentDefault(agent), packs, available, packsState: state });
-      if (note) note.textContent = CallDisplay.displayNote(resolved);
+      const resolved = CallDisplay.resolveDisplay({ choice: prefs.choice, agentDefault: voiceDispAgentDefault(agent), packs, available, packsState: state, packsFailKind: failKind });
+      if (note) {   // nothing retries by itself here: a failed list (not a sign-in one) gets a Try now button that repaints at once
+        note.textContent = CallDisplay.displayNote(resolved, { retrying: false });
+        CallDisplay.paintListRetry(document, note, resolved.listFailed === true && failKind !== 'signin', { checking: false, onClick: () => voiceDispPaintPanel(chatId, true) });
+      }
       // a character that is on the hub's list but not installed here is downloaded now (the one download per id is shared by the whole page); its progress shows under the note
       if (resolved.downloadable === true && resolved.wanted) {
         const a = available.find((x) => x.id === resolved.wanted);
@@ -20386,7 +21405,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return `<div class="vcb-top"><span class="vcb-state ucd-dup" id="${id('state')}" aria-live="polite">Starting</span>
         <span class="voice-meter ucd-dup" aria-hidden="true"><i id="${id('level')}"></i></span>
         <label class="vcb-dnd"><input type="checkbox" id="${id('dnd')}" data-vcb="dnd"> Do not disturb</label>
-        <label class="vcb-disp ucd-dup">Display <select id="${id('display')}" data-vcb="display" aria-label="Display"><option value="follow">Follow agent default</option></select></label>
+        <label class="vcb-disp ucd-dup">Call display <select id="${id('display')}" data-vcb="display" aria-label="Call display"><option value="follow">Follow agent default</option></select></label>
         <button type="button" class="vcb-hang ucd-dup" data-vcb="hang" aria-label="Hang up">${VOICE_HANGUP_SVG}<span>Hang up</span></button></div>
         <div class="vcb-focus-hint" id="${id('focushint')}" hidden>Music playing? Pause it for a clearer call</div>
         <div class="vcb-sliders ucd-dup">
@@ -23239,9 +24258,21 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       for (const i of items) counts[i.state === 'running' ? 'running' : i.state === 'failed' ? 'failed' : 'done']++;
       return { items, gone, counts, alert: items.some(i => i.state === 'failed' && !i.failSeen) };
     }
+    // The chip reads "Workers: 3 working · 11 done" ("Workers" is what the list it opens is called); "Workers" alone when nothing is listed.
+    function workerButtonParts(counts) {
+      if (!counts.running && !counts.done && !counts.failed) return { noun: 'Workers', counts: '' };
+      return { noun: 'Workers', counts: `${counts.running} working · ${counts.done} done${counts.failed ? ` · ${counts.failed} failed` : ''}` };
+    }
     function workerButtonLabel(counts) {
-      if (!counts.running && !counts.done && !counts.failed) return 'Workers';
-      return `${counts.running} working · ${counts.done} done${counts.failed ? ` · ${counts.failed} failed` : ''}`;
+      const p = workerButtonParts(counts);
+      return p.counts ? `${p.noun}: ${p.counts}` : p.noun;
+    }
+    // Sets the chip's .wb-label: the noun and the counts in their own spans when it has them (so the noun can truncate, never the counts).
+    function setWorkerButtonLabel(el, counts) {
+      const p = workerButtonParts(counts);
+      const n = el.querySelector ? el.querySelector('.wb-noun') : null, c = el.querySelector ? el.querySelector('.wb-counts') : null;
+      if (n && c) { n.textContent = p.counts ? p.noun + ':' : p.noun; c.textContent = p.counts ? ' ' + p.counts : ''; }
+      else el.textContent = workerButtonLabel(counts);
     }
     function fmtWorkerClock(ms) {
       const t = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
@@ -23497,7 +24528,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // history views opened from the history panel go once something else is on screen
       for (const [id, chat] of Object.entries(chats)) if (chat && chat.isHistory && id !== activeChat) retireWorkerCard(id);
       if (!btn) return;
-      btn.querySelector('.wb-label').textContent = workerButtonLabel(shown);
+      setWorkerButtonLabel(btn.querySelector('.wb-label'), shown);
       btn.classList.toggle('busy', shown.running > 0);
       btn.classList.toggle('alert', alert);
       btn.title = alert ? 'A worker failed: open the list to see it' : 'Workers: what is working now, and the history of past workers';
@@ -24786,7 +25817,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return qs;
     }
     function paintReloadBusy(b) {
-      for (const id of ['reload-btn', 'reload-app-item']) {
+      for (const id of ['reload-btn']) {
         const el = document.getElementById(id);
         if (!el) continue;
         el.disabled = !!b;
@@ -24834,13 +25865,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       } catch { /* offline: the dialog says it could not load */ }
       try { stNotifyAgentWanted = new URLSearchParams(location.search).get('agent') || ''; } catch { /* none */ }   // the phone's open chat
       window.addEventListener('message', settingsOnlyMessage);
-      // a member has no Settings dialog on the desktop either (the gear is an admin control and the hub refuses its routes)
-      if (!isHubAdmin()) stModal(`<h3>&#x2699;&#xFE0F; Settings</h3><p class="st-sub">Settings are kept by the admins of this Maestro.</p><div class="st-actions"><button class="st-btn secondary" onclick="dialogRequestClose(this)">Close</button></div>`);
-      else {
-        // as the full page has them (sandbox, subscriptions); a hub slow to answer never holds the dialog back more than 5 s
-        try { await Promise.race([loadAgents(), new Promise((r) => setTimeout(r, 5000))]); } catch { /* the sections that list agents say so */ }
-        await openSettings();
-      }
+      // a member gets the one group "You and this device" (openSettings draws it); an admin all eight
+      // as the full page has them (sandbox, subscriptions); a hub slow to answer never holds the dialog back more than 5 s
+      try { await Promise.race([loadAgents(), new Promise((r) => setTimeout(r, 5000))]); } catch { /* the sections that list agents say so */ }
+      await openSettings();
+      { const gm = /^#settings-group=(review|money)$/.exec(location.hash || ''); if (gm && isHubAdmin()) { try { history.replaceState(history.state, '', location.pathname + location.search); } catch { /* the hash stays */ } stShowGroup(gm[1], false); } }   // the phone's Simple buttons: /mobile opens the frame at this group
+      if (isHubAdmin() && typeof settingsDoorStart === 'function') settingsDoorStart();   // the phone's /mobile#settings-for=OPT-xxxx arrives here as this frame's hash (admins)
       document.addEventListener('click', settingsOnlyLeaveGuard, true);
       settingsOnlyWatch();
       settingsOnlyPost('mm-settings-ready');
@@ -24862,8 +25892,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function settingsOnlyMessage(e) {
       if (!e || e.source !== window.parent || e.origin !== location.origin) return;
       const type = e.data && e.data.type;
-      if (type !== 'mm-settings-close') return;
+      if (type !== 'mm-settings-close' && type !== 'mm-settings-back') return;
       settingsOnlyGoing = '';   // Back is not the way to the page a link asked for
+      if (type === 'mm-settings-back') {   // Back first leaves a group page for the list; on the list (or with a box open over Settings) it is the close request
+        const bl = dialogGuard.layers(), bt = bl.length ? bl[bl.length - 1].el : null;
+        if ((!bt || bt === document.getElementById('st-overlay')) && stPhoneBack()) { settingsOnlyPost('mm-settings-popped'); return; }
+      }
       // Back closes the innermost layer first (a box opened over Settings, then Settings), as everywhere else
       const ls = dialogGuard.layers();
       const top = ls.length ? ls[ls.length - 1].el : document.getElementById('st-overlay');
@@ -24871,7 +25905,22 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const how = dialogGuard.requestClose(top, 'back');
       // the "Discard changes?" question, a save running, or an inner box closed with Settings still open: the sheet stays.
       // Settings itself closed: the watch says so.
+      // The parent hears the FINAL outcome: "kept" at once for a save running or an inner box; for "Discard changes?" first
+      // "asking" (the question is up: the parent stops its give-up timer), then "kept" only when it is answered Keep editing
+      // (Discard closes Settings, which the watch reports as closed).
+      if (how === 'confirm') { settingsOnlyAsk(); return; }
       if (how !== 'closed' || document.getElementById('st-overlay')) settingsOnlyPost('mm-settings-kept');
+    }
+    let settingsOnlyAsking = false;
+    function settingsOnlyAsk() {
+      settingsOnlyPost('mm-settings-asking');
+      if (settingsOnlyAsking) return;
+      settingsOnlyAsking = true;
+      const t = setInterval(() => {
+        if (document.querySelector('.dlg-discard')) return;   // the question is still up
+        clearInterval(t); settingsOnlyAsking = false;
+        if (document.getElementById('st-overlay')) settingsOnlyPost('mm-settings-kept');   // Keep editing: Settings is still open
+      }, 50);
     }
     // A link or button in the dialog that opens another page of this hub: with changes not saved anywhere in the dialog, it
     // asks first ("Discard changes?"), as Close does; with nothing to lose the page opens in the sheet.
@@ -24946,7 +25995,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const me = window.hubMe, id = me && me.user && me.user.id;
       return { key: id ? `hub-qs-recent:${id}` : null, prefix: 'hub-qs-recent', max: 30 };
     }
-    let qsList = [], qsSel = 0, qsLastQ = null;   // qsLastQ: the search text of the last paint (null: none yet), so a repaint can tell a new query from a refresh
+    let qsList = [], qsSel = 0, qsLastQ = null, qsWaiting = new Set();   // qsLastQ: the search text of the last paint (null: none yet), so a repaint can tell a new query from a refresh
     function qsRecentBox() { try { return window.sessionStorage || null; } catch { return null; } }
     function qsRecent() {
       const { key, max } = qsRecentStore();
@@ -24988,12 +26037,16 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       return best;
     }
-    function qsRank(agents, query, { recent = [], unread = new Set() } = {}) {
+    // waiting: names of agents waiting for the owner's answer; they come first, then the order described above.
+    function qsRank(agents, query, { recent = [], unread = new Set(), waiting = new Set() } = {}) {
       const q = String(query || '').trim().toLowerCase();
       const rec = new Map(recent.map((n, i) => [n, i]));
       const label = (a) => String(a.display || a.name || '').toLowerCase();
       return agents.map(a => ({ a, s: qsScore(a, q) })).filter(x => x.s !== Infinity).sort((x, y) => {
-        if (x.s !== y.s) return x.s - y.s;
+        // a typed query: the match score decides first and waiting only breaks ties; no query: waiting agents come first
+        const wx = waiting.has(x.a.name) ? 0 : 1, wy = waiting.has(y.a.name) ? 0 : 1;
+        if (q) { if (x.s !== y.s) return x.s - y.s; if (wx !== wy) return wx - wy; }
+        else { if (wx !== wy) return wx - wy; if (x.s !== y.s) return x.s - y.s; }
         if (!q) { const ux = unread.has(x.a.name) ? 0 : 1, uy = unread.has(y.a.name) ? 0 : 1; if (ux !== uy) return ux - uy; }
         const rx = rec.has(x.a.name) ? rec.get(x.a.name) : Infinity, ry = rec.has(y.a.name) ? rec.get(y.a.name) : Infinity;
         if (rx !== ry) return rx - ry;
@@ -25083,17 +26136,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       let mark = null, words = '';
       const live = agentLiveState(name), bg = bgCountOf(name);
       const ds = AgentDot.dotState({ busy: live.busy, question: live.question, background: bg });
-      if (ds === 'question') { mark = 'live-question'; words = AgentDot.dotLabel(ds); }
+      if (ds === 'question') { mark = 'live-question'; words = agentStateWords(ds); }
       else if (ds === 'busy') {
         mark = 'busy';
-        // the sidebar's words for a named (non-worker) agent, as agentLiveState builds its line; else the activity words
-        const s = agentStatus[name];
-        const d = !(s && s.worker) ? agentDoingNow(name) : null;
-        words = String((d && d.words) || live.activity || AgentDot.dotLabel(ds));
-        words = words.charAt(0).toUpperCase() + words.slice(1);
+        // the sidebar's words, as agentLiveState builds its line (agentBusyWords), same case
+        words = agentBusyWords(name, live.activity) || AgentDot.dotLabel(ds);
       }
       else if (unread) { mark = 'unread'; words = 'New replies'; }
-      else if (ds === 'background') { mark = 'bg-work'; words = AgentDot.bgLine(bg); }
+      else if (ds === 'background') { mark = 'bg-work'; words = agentStateWords(ds, { background: bg }); }
       return { mark, words };
     }
     // Writes a state into a row: creates, updates or removes its .qs-state words and aria-hidden .qs-dot marker (last in the row).
@@ -25110,12 +26160,37 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (!words.parentNode) row.appendChild(words);
       if (!dot.parentNode) row.appendChild(dot);
     }
-    // Updates the states of the rows on screen in place: no row is created, removed or moved.
+    // Updates the states of the rows on screen in place: no row is created or removed. Rows move only when the set of
+    // waiting agents among them changed: the same row nodes are re-ordered to the new ranking, the selection follows its agent.
     function qsRefreshStates() {
       const list = document.getElementById('qs-list');
       if (!list) return;
       const unread = qsUnread();
       for (const row of Array.from(list.children)) if (row.dataset.agent) qsWriteState(row, qsRowState(row.dataset.agent, unread.has(row.dataset.agent)));
+      const listed = qsList.map(a => a.name);
+      const waiting = new Set(listed.filter(n => agentLiveState(n).question));
+      const before = qsWaiting;
+      if (waiting.size === before.size && listed.every(n => waiting.has(n) === before.has(n))) return;
+      const q = document.getElementById('qs-q');
+      const rows = new Map(Array.from(list.children).filter(r => r.dataset.agent).map(r => [r.dataset.agent, r]));
+      const roster = (AGENTS || []).filter(a => a && a.name && rows.has(a.name));
+      const ranked = qsRank(roster, q ? q.value : '', { recent: qsRecent(), unread, waiting });
+      if (ranked.length !== rows.size) return;   // the roster and the rows disagree: the next full render sorts it out
+      qsWaiting = waiting;   // recorded only once the reorder can be applied
+      const keepName = qsList[qsSel] && qsList[qsSel].name;
+      const top = list.scrollTop;
+      qsList = ranked;
+      ranked.forEach((a, i) => {
+        const row = rows.get(a.name);
+        if (list.children[i] !== row) list.insertBefore(row, list.children[i] || null);
+        row.dataset.i = String(i); row.id = `qs-opt-${i}`;
+      });
+      const at = qsList.findIndex(a => a.name === keepName);
+      qsSel = at >= 0 ? at : 0;
+      qsPaintSel(false);
+      list.scrollTop = top;
+      const selRow = list.children[qsSel];   // the selected row moved out of view: bring it back, nearest edge
+      if (selRow && (selRow.offsetTop < list.scrollTop || selRow.offsetTop + selRow.offsetHeight > list.scrollTop + list.clientHeight) && selRow.scrollIntoView) selRow.scrollIntoView({ block: 'nearest' });
     }
     function renderQuickSwitcher() {
       const q = document.getElementById('qs-q'), list = document.getElementById('qs-list'), status = document.getElementById('qs-status');
@@ -25126,7 +26201,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // updated): it is looked up in the new list, so a row inserted above it does not move the selection onto another agent.
       // A changed query, or an agent that is gone, starts at the first row.
       const keepName = qsList[qsSel] && qsList[qsSel].name;
-      qsList = qsRank(roster, q.value, { recent: qsRecent(), unread });
+      const waiting = new Set(roster.filter(a => agentLiveState(a.name).question).map(a => a.name));   // the sidebar's own "waiting for your answer"
+      qsList = qsRank(roster, q.value, { recent: qsRecent(), unread, waiting });
+      qsWaiting = new Set(qsList.map(a => a.name).filter(n => waiting.has(n)));
       const same = q.value === qsLastQ;
       const at = same && keepName ? qsList.findIndex(a => a.name === keepName) : -1;
       qsSel = at >= 0 ? at : 0;
@@ -25144,8 +26221,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const ic = span('qs-ic', a.icon || '🤖'); ic.setAttribute('aria-hidden', 'true');
         row.appendChild(ic);
         row.appendChild(span('qs-name', shown));
-        // the internal name next to a different display name: only when what was typed matched it
-        if (typed && String(shown).toLowerCase() !== String(a.name).toLowerCase() && qsScore({ name: a.name }, typed) !== Infinity) row.appendChild(span('qs-id', a.name));
+        // the short name (id) only when what was typed matched the id and not the display name (a letters-in-order match of
+        // the display name does not count against the id when the id matches better); a display-name match, or no query, shows the display name alone
+        if (typed && qsScore({ name: a.name }, typed) < qsScore({ name: shown }, typed)) row.appendChild(span('qs-id', a.name));
         qsWriteState(row, qsRowState(a.name, unread.has(a.name)));
         list.appendChild(row);
       });
@@ -25248,7 +26326,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       overlay._opener = opener;
       const close = () => {
         overlay.remove();
-        const back = opener && opener.isConnected && opener.offsetParent !== null ? opener : document.getElementById('more-btn');   // the ⋯ menu has closed
+        const back = opener && opener.isConnected && opener.offsetParent !== null ? opener : document.getElementById('settings-btn');   // the Settings button, when the opener has gone
         if (back && typeof back.focus === 'function') { try { back.focus({ preventScroll: true }); } catch {} }
       };
       overlay.__dialogClose = close;   // Esc, Tab kept inside, the backdrop: dialogGuard
@@ -25456,8 +26534,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           const tok = imageTokens[Number(im[1])];
           if (tok && tok.held) { after += tok.held; tok.held = ''; }
         }
+        // A link to one of this page's own doors (an agent's card at a row, a Settings row or group) opens in place, in one press
+        const inPlace = !!u && /^\/(?:mobile)?#(?:agent-card|settings-for|settings-group)=/.test(u);
         const linkTag = (u
-          ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer" style="color: var(--link); text-decoration: underline;">${eText}</a>`
+          ? (inPlace
+            ? `<a href="${escapeHtml(u.replace(/^\/mobile#/, '/#'))}" data-door="1" style="color: var(--link); text-decoration: underline;">${eText}</a>`
+            : `<a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer" style="color: var(--link); text-decoration: underline;">${eText}</a>`)
           : `<code>[blocked link: ${eText}]</code>`) + after;
         formatted = formatted.replace(mk('L', i), () => linkTag);
       }

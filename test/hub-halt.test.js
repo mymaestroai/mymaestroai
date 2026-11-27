@@ -136,7 +136,7 @@ test('while halted /api/chat/stream is refused with 503 {error, reason}; overrid
   await sdkChat.handleChat({ agent: AGENTS[2], message: 'hi' }, r3);
   assert.strictEqual(r3.code, 503);
   const res = sdkChat.resumeHub();
-  assert.deepStrictEqual(res, { halted: false, was: true });
+  assert.deepStrictEqual(res, { halted: false, was: true, released: 0 });
   assert.ok(events.find(e => e.type === 'hub_resumed'), 'hub_resumed published');
   const r4 = fakeRes();
   await sdkChat.handleChatStream({ agent: AGENTS[2], message: 'hi' }, r4);
@@ -211,7 +211,7 @@ test('scheduler: a halted hub fires no TASKS.md task and logs "skipped: hub halt
   assert.ok(logs.some(l => /skipped: hub halted/.test(l)), logs.join('\n'));
 });
 
-test('schedule_task: due tasks are not delivered while halted (dropped as missed, recurring keeps its next run)', async () => {
+test('schedule_task: due tasks are not delivered while halted (held until Resume, recurring keeps its next run)', async () => {
   const st = L('scheduled-tasks');
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-halt-sched-'));
   const T0 = Date.parse('2026-09-29T18:00:00Z');
@@ -230,8 +230,8 @@ test('schedule_task: due tasks are not delivered while halted (dropped as missed
     assert.strictEqual(woken.length, 0, 'nothing fired while halted');
     const list = inst.list('trader');
     const once = list.find(t => t.type === 'once');
-    assert.notStrictEqual(once.status, 'pending', 'the one-off is not left pending to fire after resume');
-    assert.match(JSON.stringify(once), /skipped: hub halted/);
+    assert.strictEqual(once.status, 'held', 'the one-off is held (not dropped as missed) and runs after Resume');
+    assert.match(JSON.stringify(once), /waiting: all agents are stopped/);
     const rec = list.find(t => t.type === 'recurring');
     assert.ok(Date.parse(rec.nextRunAt) > clock.t, 'the recurring task moves on to its next run');
   } finally { inst.stop(); fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); }

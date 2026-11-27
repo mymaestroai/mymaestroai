@@ -429,7 +429,9 @@ test('mounts: share/common is mounted for admin-side agents when it exists, neve
   assert.ok(!mem.includes(common), 'a member\'s agent does not');
   // the server rebuilds the box when folders, sandbox mode or hands change
   const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  assert.ok(server.includes("['policy', 'sandbox', 'tools'].some(k => k in body)") && server.includes("require('./lib/sandbox').getSandbox().remove(rec)"));
+  // (the after-change steps live in lib/settings-apply afterAgentChange, which the PATCH route, the lead's tool and Restore all run)
+  const applySrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'settings-apply.js'), 'utf8');
+  assert.ok(server.includes('settingsApply.afterAgentChange(name, body') && applySrc.includes("['policy', 'sandbox', 'tools'].some(k => keys.includes(k))") && applySrc.includes("require('./sandbox').getSandbox().remove(rec)"));
   const sdk = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
   assert.ok(sdk.includes('boxFor: async (owner) => {') && sdk.includes('return { name, mounts: sb.mountsFor(agent) };'), 'jobs run inside the box');
 });

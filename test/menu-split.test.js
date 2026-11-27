@@ -1,7 +1,8 @@
 'use strict';
 // One home for every setting: the gear (Settings) holds what you set, the ⋯ menu what you do or open now. Each item that
 // left the ⋯ menu is listed here with its new home; the ones that stay are listed too. The phone menu: a "This device"
-// group for everyone; what an admin sets is in Settings, a member keeps it in the menu (members have no Settings).
+// group for everyone; what an admin sets is in Settings, a member keeps it in the menu AND has it in Settings, in the one group
+// "You and this device" (P4-5b: a member has the gear, the one-group dialog and the phone's Settings item).
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
@@ -9,7 +10,6 @@ const path = require('path');
 
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 const idx = read('index.html'), app = read('app.js'), mhtml = read('mobile.html'), mob = read('mobile.js');
-const moreMenu = (() => { const i = idx.indexOf('<div id="more-menu"'); return idx.slice(i, idx.indexOf('</div>\n        </div>', i)); })();
 function fnSrc(src, head) {
   const at = src.indexOf(head);
   assert.ok(at >= 0, head);
@@ -23,7 +23,7 @@ test('every item that left the ⋯ menu has its one new home in Settings', () =>
   const moved = [
     // [old ⋯ entry, gone from the menu, its home in Settings]
     ['notify-agent-item', /id="st-notify-agent"[^>]*><label for="st-nb-agent">For an agent<\/label><select id="st-nb-agent" onchange="stNotifyAgentPaint\(\)">/],
-    ['comms-btn', /id="st-comms-section"><h4>Messaging channels<\/h4>[\s\S]*?<button class="st-test-btn" onclick="openCommsPanel\(\)">Open messaging channels<\/button>/],
+    ['comms-btn', /id="st-comms-section"><h4>Messaging channels<\/h4>[\s\S]*?stDoorHtml\('comms', 'Messaging channels', '[^']+', 'openCommsPanel\(\)'\)/],
     ['more-advanced', /id="st-tuning-section"><h4>Tuning<\/h4>[\s\S]*?<div id="st-tuning-slot"><\/div>/],
     ['advanced-toggle', /id="st-tuning-section"/],
   ];
@@ -33,8 +33,11 @@ test('every item that left the ⋯ menu has its one new home in Settings', () =>
   }
   assert.ok(!idx.includes('id="more-badge"'), 'the Advanced badge went with the switch');
   // the Settings groups hold the new sections
-  assert.match(app, /\{ id: 'agents',[^}]*'st-chat-section', 'st-tuning-section'\] \}/);
-  assert.match(app, /\{ id: 'tools',[^}]*'st-comms-section', 'st-cx-section'/);   // voice entry: st-voice-section moved to its own Voice group
+  const G = require('../lib/ui-settings-groups.js');
+  assert.deepStrictEqual(G.groupOfSection('st-chat-section'), { group: 'you', more: false });
+  assert.deepStrictEqual(G.groupOfSection('st-tuning-section'), { group: 'money', more: true });
+  assert.deepStrictEqual(G.groupOfSection('st-comms-section'), { group: 'tools', more: false });
+  assert.deepStrictEqual(G.groupOfSection('st-cx-section'), { group: 'tools', more: false });
   // the tuning controls keep their ids and their page-load wiring, and live in Settings' holder (saved at once: never dirty)
   const holder = idx.slice(idx.indexOf('<div id="st-tuning-body" data-no-dirty hidden>'), idx.indexOf('<script src="/ui-voice-thinking.js">'));
   for (const c of ['prescan-toggle', 'lazy-tools-toggle', 'sdk-workers-select', 'team-guidance-select', 'caveman-toggle']) {
@@ -45,12 +48,22 @@ test('every item that left the ⋯ menu has its one new home in Settings', () =>
   assert.match(openSettings, /id="st-nb-agent-box" class="st-nb-box" data-no-dirty/);
 });
 
-test('what stays in the ⋯ menu: things you do or open now, and one line pointing to Settings', () => {
-  const stay = ['about-btn', 'reload-app-item', 'more-modules-item', 'more-remote-item', 'recordings-item', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn', 'more-moved-item'];
-  const at = stay.map((id) => moreMenu.indexOf(`id="${id}"`));
-  for (let i = 0; i < stay.length; i++) assert.ok(at[i] >= 0, stay[i]);
-  for (let i = 1; i < at.length; i++) assert.ok(at[i] > at[i - 1], `${stay[i]} after ${stay[i - 1]}`);
-  assert.match(moreMenu, /<button id="more-moved-item" class="more-item more-moved" role="menuitem" title="Open Settings" onclick="closeMoreMenu\(\); openSettingsAt\('st-notify-agent'\)">Notifications, channels and tuning are now in Settings<\/button>/);
+test('the top-bar ⋯ menu is gone (P4-11) and every item has a home in Settings', () => {
+  assert.ok(!idx.includes('id="more-menu"') && !idx.includes('id="more-btn"') && !idx.includes('id="more-wrap"'), 'no ⋯ button or menu in index.html');
+  assert.ok(!/\.more-menu|\.more-wrap|#more-btn/.test(idx), 'its CSS went too');
+  assert.ok(!/toggleMoreMenu|closeMoreMenu|openMoreMenu|isMoreMenuOpen/.test(idx + app), 'its handlers went too');
+  for (const id of ['about-btn', 'reload-app-item', 'more-modules-item', 'more-remote-item', 'recordings-item', 'wallet-btn', 'more-voice-item', 'more-moved-item']) assert.ok(!idx.includes(`id="${id}"`), `${id} is not in index.html`);
+  // Upkeep: a section "This Maestro" with About, Dream, Update and Restart calling the same functions
+  const maestro = openSettings.slice(openSettings.indexOf('id="st-maestro-section"'), openSettings.indexOf('id="st-updates-section"'));
+  for (const [id, fn] of [['about-btn', 'openAboutDialog'], ['dream-btn', 'startDream'], ['git-sync-btn', 'openGitSync'], ['restart-hub-btn', 'restartHub']]) {
+    assert.match(maestro, new RegExp(`id="${id}"[^>]*onclick="${fn}\\(\\)"`), `${id} -> ${fn}()`);
+  }
+  const G = require('../lib/ui-settings-groups.js');
+  assert.deepStrictEqual(G.groupOfSection('st-maestro-section'), { group: 'upkeep', more: false });
+  assert.strictEqual(G.GROUPS.find((g) => g.id === 'upkeep').sections[0], 'st-maestro-section', 'first in Upkeep');
+  // doors: Wallets in Tools and connections, Recordings in Voice and calls
+  assert.match(openSettings, /stDoorHtml\('wallets', 'Wallets', '[^']+', 'openWalletPanel\(\)'\)/);
+  assert.match(app, /stDoorHtml\('recordings', 'Recordings', '[^']+', "location\.href='\/recordings'"/);
   assert.ok(!/hub-advanced|advancedToggle|applyAdvanced/.test(app), 'nothing reads the old switch');
 });
 
@@ -70,7 +83,7 @@ test('Settings → For an agent: the chat on screen first, then the phone\'s ope
   env.activeChat = 'c1'; env.chats = { c1: { agent: 'beta' } };
   assert.strictEqual(run('gamma'), 'beta', 'the chat on screen wins');
   assert.match(app, /stNotifyAgentWanted = new URLSearchParams\(location\.search\)\.get\('agent'\) \|\| ''/);
-  assert.match(mob, /s\.frame\.src = SETTINGS_SHEET_URL \+ \(typeof current === 'string' && current \? '&agent=' \+ encodeURIComponent\(current\) : ''\);/);
+  assert.match(mob, /s\.frame\.src = SETTINGS_SHEET_URL \+ \(typeof current === 'string' && current \? '&agent=' \+ encodeURIComponent\(current\) : ''\) \+ \(s\.door \? '#settings-for=' \+ s\.door : s\.group \? '#settings-group=' \+ s\.group : ''\);/);
   // the same rows and the same save as the chat's bell
   const paint = fnSrc(app, 'function stNotifyAgentPaint(fetchFirst = true) {');
   assert.match(paint, /notifyBellMenuHtml\(agent, display\)/);
@@ -83,7 +96,7 @@ test('Settings → For an agent: the chat on screen first, then the phone\'s ope
   assert.ok(!idx.includes('max-context-select') && !app.includes('/api/max_context_messages'));
 });
 
-test('phone: a "This device" group for everyone; Notification settings, Notifications for this agent and Deep research stay for members only', () => {
+test('phone: a "This device" group for everyone; Notification settings, Notifications for this agent and Deep research stay in the menu for members (and are also in their Settings group)', () => {
   const g = mhtml.slice(mhtml.indexOf('<div class="menu-group" data-group="device"'), mhtml.indexOf('<button id="menu-adv-toggle"'));
   assert.match(g, /<div class="menu-group-title" id="menu-gt-device">This device<\/div>/);
   const order = ['menu-look', 'menu-look-pick', 'menu-notify', 'menu-notify-test', 'menu-fold', 'menu-active-top'].map((id) => g.indexOf(`id="${id}"`));

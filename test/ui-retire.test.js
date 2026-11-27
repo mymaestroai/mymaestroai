@@ -72,9 +72,9 @@ test('retireSoon: an element gone from the page by then is left alone; nothing t
 
 test('desktop: a question\'s "❓" lines leave once the hub confirms the answer, or closes the question', () => {
   const app = read('app.js');
-  assert.ok(app.includes("if (chatId) questionNotices.set(request_id, questions.map(q => appendSystemNotice(chatId, '❓ ' + q.question)).filter(Boolean));"));
+  assert.ok(app.includes("if (chatId) questionNotices.set(request_id, questions.map(q => { const n = appendSystemNotice(chatId, '❓ ' + q.question); if (n) n.dataset.question = String(q.question == null ? '' : q.question); return n; }).filter(Boolean));"));
   assert.match(block(app, 'function retireQuestionNotices(requestId) {', '\n    }'), /for \(const n of questionNotices\.get\(requestId\) \|\| \[\]\) retireSoon\(n\);\s*questionNotices\.delete\(requestId\);/);
-  assert.match(block(app, 'function closeQuestion(requestId) {', '\n    }'), /retireQuestionNotices\(requestId\);/, 'closed by the hub (answered elsewhere, no answer in time)');
+  assert.match(block(app, 'function closeQuestion(requestId, ev) {', '\n    }'), /retireQuestionNotices\(requestId\);/, 'closed by the hub (answered elsewhere, no answer in time)');
   const submit = block(app, 'function submitAnswers(answers) {', '\n        }');
   assert.ok(submit.includes('}).then(r => { if (r.ok) retireQuestionNotices(request_id); })'), 'answered here: only once the hub took the answer');
   assert.strictEqual(submit.split('retireQuestionNotices').length - 1, 1, 'and nowhere else in the submit (a failed send keeps the line)');
@@ -92,11 +92,11 @@ test('desktop: a finished worker\'s line leaves; a failed or stopped one stays',
 test('phone: an answered or closed question box leaves', () => {
   const m = read('mobile.js');
   // the phone's own closeQuestion, run against a stand-in box: what it says, and that it leaves
-  const close = block(m, 'function closeQuestion(requestId, how) {', '\n}') + '\n}';
+  const close = block(m, 'function closeQuestion(requestId, how, waitedSeconds, stopped) {', '\n}') + '\n}';   // changed: a stopped turn is passed on (review r6)
   const run = (html, how) => {
     const box = { innerHTML: html, querySelector: (sel) => (sel === '.done' && box.innerHTML.includes('class="done"') ? {} : null) };
     const boxes = new Map([['q', box]]); const retired = [];
-    new Function('questionBoxes', 'retireSoon', `${close}; return closeQuestion;`)(boxes, (b) => retired.push(b))('q', how);
+    new Function('questionBoxes', 'questionTexts', 'retireSoon', `${close}; return closeQuestion;`)(boxes, new Map(), (b) => retired.push(b))('q', how);   // no stored question text: the box keeps the older words
     return { text: box.innerHTML.replace(/<[^>]+>/g, ''), gone: !boxes.has('q') && retired[0] === box };
   };
   const sent = '<div class="done">Answered: Yes</div>', open = '<div class="qt">Go on?</div>';

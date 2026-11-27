@@ -74,10 +74,11 @@ test('consultGrantsFor reads the owner grant; admin-side or unowned agents have 
 
 test('wiring: member edits limited, grants sanitised and audited, consult widened, three admin surfaces', () => {
   const server = read('server.js');
-  assert.match(server, /const MEMBER_EDITABLE = new Set\(\['blurb', 'maxContextMessages', 'maxOutputTokens', 'contextBudget', 'compaction', 'minimalContext'\]\);/);
-  assert.match(server, /if \(refused\.length\) return jsonResponse\(res, 403, \{ error: `only an admin can change: \$\{refused\.join\(', '\)\}` \}\);/);
+  const applySrc = read('lib/settings-apply.js');   // the member guard and the memberPolicy cleaner moved from server.js into lib/settings-apply
+  assert.match(applySrc, /const MEMBER_EDITABLE_AGENT_FIELDS = new Set\(\['blurb', 'maxContextMessages', 'maxOutputTokens', 'contextBudget', 'compaction', 'minimalContext'\]\);/);
+  assert.match(applySrc, /if \(refused\.length\) return \{ ok: false, status: 403, error: `only an admin can change: \$\{refused\.join\(', '\)\}` \};/);
   assert.match(server, /if \(b\.grants !== undefined\) b\.grants = require\('\.\/lib\/tool-policy'\)\.sanitizeGrants\(b\.grants\);/);
-  assert.match(server, /patch\.memberPolicy = require\('\.\/lib\/tool-policy'\)\.sanitizeGrants\(\{ policy: patch\.memberPolicy \}\)\.policy \|\| \{\};/);
+  assert.match(applySrc, /patch\.memberPolicy = require\('\.\/tool-policy'\)\.sanitizeGrants\(\{ policy: patch\.memberPolicy \}\)\.policy \|\| \{\};/);
   assert.match(read('lib/auth.js'), /audit\(by \|\| id, 'user\.grants'/);
   const sdk = read('lib/sdk-chat.js');
   assert.match(sdk, /return \(await consultGrantsOf\(coordinatorName\)\)\.includes\(String\(target\)\.toLowerCase\(\)\);/);
@@ -89,8 +90,9 @@ test('wiring: member edits limited, grants sanitised and audited, consult widene
   const app = read('app.js');
   assert.match(app, /<div class="st-section" id="st-mp-section"><h4>Member agents: permissions<\/h4>/);
   assert.match(app, /body: JSON\.stringify\(\{ memberPolicy \}\)/);
-  const page = read('agent-settings.html');
-  assert.match(page, /const MEMBER_GRANTABLE = \['web', 'read_outside', 'write_outside', 'send'\];/);
-  assert.match(page, /member: \{ web: 'deny', read_outside: 'deny', write_outside: 'deny', send: 'deny', admin: 'deny', destroy: 'deny', money: 'deny' \},/);
-  assert.match(page, /never for member agents/);
+  // ported (P4-2): the old page's MEMBER_GRANTABLE / member role defaults now live in the card's access rows
+  const access = require('../lib/ui-agent-card-access.js');
+  assert.deepStrictEqual(access.MEMBER_GRANTABLE, ['web', 'read_outside', 'write_outside', 'send']);
+  assert.deepStrictEqual(access.ROLE_DEFAULTS.member, { web: 'deny', read_outside: 'deny', write_outside: 'deny', send: 'deny', admin: 'deny', destroy: 'deny' }, 'every class the card shows is denied by default for a member agent (money is not an agent-card row)');
+  assert.match(read('lib/ui-agent-card-access.js'), /memberOwned\(ctx\) && !MEMBER_GRANTABLE\.includes\(cls\)/, 'the others are never open for a member agent');
 });

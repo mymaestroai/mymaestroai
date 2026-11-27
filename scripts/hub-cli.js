@@ -36,6 +36,29 @@ const DIR = path.join(__dirname, '..');
 const PRODUCT = 'My Maestro AI';
 const argv = process.argv.slice(2);
 const cmd = argv[0] || 'help';
+// Everything this command writes to settings, agents or preferences is journaled as "cli" (lib/settings-journal, the same journal
+// file as the running hub's). After each write the store leaves a marker with the file's new stamp, so the running hub, which sees
+// the file change, does not journal the same change again as an outside edit.
+// An install's .env that exists but cannot be read: the account folder is not known. Nothing below opens or marks a store then, and the
+// command stops with the message (see the bottom of this file); help and version still work.
+let authDirError = null;
+try { require(path.join(__dirname, '..', 'lib', 'auth')).resolveAuthDir(); } catch (e) { if (e && e.path) authDirError = e; }
+// Only the commands that open the account store (auth()/createAuth, directly or through setupLink/resetPassword) stop for it.
+const STORE_COMMANDS = new Set(['reset-password', 'reset-2fa', 'restore', 'open', 'setup-link']);
+try {
+  const sj = require(path.join(__dirname, '..', 'lib', 'settings-journal'));
+  sj.enterActor({ kind: 'cli', why: `command line: ${String(cmd).replace(/[^\w-]/g, '').slice(0, 30)}` });
+  // The files the hub's stamp watch covers (users.json, connectors.json, modules.json, ...) get a marker line after each write of this
+  // command too, so the running hub does not report the command's own write as an outside edit.
+  // The account folder (lib/auth resolveAuthDir) is marked too, in the install's one journal; the same folder by two paths once.
+  // With the account folder unknown (unreadable .env) no marking starts: it would have to guess a folder.
+  if (!authDirError && typeof sj.startCliMarking === 'function') {
+    const dataC = path.join(__dirname, '..', 'data');
+    const acctC = require(path.join(__dirname, '..', 'lib', 'auth')).resolveAuthDir();
+    sj.startCliMarking({ dataDir: dataC });
+    if (!sj.sameFolder(dataC, acctC)) sj.startCliMarking({ dataDir: acctC });
+  }
+} catch { /* an older install without the journal */ }
 const arg = (name, dflt = null) => { const i = argv.indexOf(`--${name}`); return i > 0 && i + 1 < argv.length ? argv[i + 1] : dflt; };
 const flag = (...names) => names.some(n => argv.includes(n));
 const svc = () => require(path.join(DIR, 'lib', 'service-manager')).createServiceManager({ dir: DIR });
@@ -361,7 +384,7 @@ function version() {
   const channel = branch === 'main' ? 'stable' : branch === 'dev' ? 'experimental' : branch || 'unknown';
   return { v, commit, branch, channel };
 }
-function auth() { return require(path.join(DIR, 'lib', 'auth')).createAuth({ log: () => {}, dataDir: path.join(DIR, 'data') }); }
+function auth() { const a = require(path.join(DIR, 'lib', 'auth')); return a.createAuth({ log: () => {}, dataDir: a.resolveAuthDir() }); }
 // Folders where a `codex` link may sit: the one the installer put the mymaestro command in, and ~/.local/bin.
 function binDirsForCodex() {
   const dirs = [path.join(os.homedir(), '.local', 'bin')];
@@ -502,6 +525,8 @@ const commands = {
       return;
     }
     for (const step of r.steps || []) out(`  ${step}`);
+    // The unit's memory drop-in (systemd-oomd avoids the hub): written here for installs older than it; the restart below picks it up.
+    try { const o = svc().ensureOomDropIn(); if (o && o.warning) out(`  warning: ${o.warning}; the update goes on`); } catch (e) { out(`  warning: could not set up the memory drop-in (${e.message}); the update goes on`); }
     await commands.restart();
   },
   async doctor() {
@@ -795,5 +820,6 @@ module.exports = { resetPassword, connectClaude, defaultCheck, readHidden, endHi
 if (require.main === module) (async () => {
   const fn = commands[cmd] || (cmd === '--help' || cmd === '-h' ? commands.help : null);
   if (!fn) { out(`Unknown command "${cmd}".\n`); commands.help(); process.exit(2); }
+  if (authDirError && STORE_COMMANDS.has(cmd)) fail(authDirError.message, 1);   // before any store is opened; other commands run normally
   await fn();
 })().catch(e => fail(`Error: ${e.message}`));

@@ -87,13 +87,10 @@ function makeEnv(o = {}) {
   return { api, calls, store, mic, els, appended, doc, stubs, state };
 }
 
-// ── the ⋯ menu ──
-test('⋯ menu: a Voice item right after Recordings and before Wallets, closing the menu and opening Settings at Voice', () => {
-  const rec = html.indexOf('id="recordings-item"'), v = html.indexOf('id="more-voice-item"'), w = html.indexOf('id="wallet-btn"');
-  assert.ok(rec > 0 && v > rec && w > v, 'order: recordings-item, more-voice-item, wallet-btn');
-  const tag = html.slice(html.lastIndexOf('<button', v), html.indexOf('</button>', v) + 9);
-  assert.match(tag, /class="more-item" role="menuitem" id="more-voice-item" title="Voice conversations: on or off, voices and microphone" onclick="closeMoreMenu\(\); openVoiceSettings\(\)">🎙 Voice<\/button>/);
-  assert.ok(html.slice(html.indexOf('<div id="more-menu"'), v).length < 6000, 'inside the ⋯ menu');
+// ── the ⋯ menu is gone (P4-11): Voice is the gear's Voice and calls group ──
+test('no ⋯ menu Voice item any more: the voice entry is openVoiceSettings (Settings at Voice and calls)', () => {
+  assert.ok(!html.includes('id="more-voice-item"') && !html.includes('id="more-menu"'));
+  assert.match(read('app.js'), /async function openVoiceSettings\(\) \{\s*await openSettingsAt\('st-voice-section'\);/);
 });
 
 test('openVoiceSettings: opens the voice section; an admin lands on the On switch, anyone else on the heading', async () => {
@@ -111,11 +108,11 @@ test('openVoiceSettings: opens the voice section; an admin lands on the On switc
 
 // ── Settings ──
 test('Settings: a Voice group right after Appearance, not in Tools; heading "Voice"; search words; the switch words', () => {
-  const g = [...app.matchAll(/\{ id: '([a-z]+)', title: '([^']+)', sections: \[([^\]]*)\] \}/g)].map((m) => ({ id: m[1], title: m[2], sections: m[3] }));
+  const g = require('../lib/ui-settings-groups.js').GROUPS;   // eight groups now: Voice and calls is its own group, after Models and money
   const ids = g.map((x) => x.id);
-  assert.strictEqual(ids[ids.indexOf('looks') + 1], 'voice');
-  assert.strictEqual(g.find((x) => x.id === 'voice').title, '🎙 Voice');
-  assert.strictEqual(g.find((x) => x.id === 'voice').sections, "'st-voice-section'");
+  assert.strictEqual(ids[ids.indexOf('money') + 1], 'voice');
+  assert.strictEqual(g.find((x) => x.id === 'voice').title, 'Voice and calls');
+  assert.deepStrictEqual(g.find((x) => x.id === 'voice').sections, ['st-voice-section']);
   assert.ok(!g.find((x) => x.id === 'tools').sections.includes('st-voice-section'));
   const h = src('voiceSettingsHtml');
   assert.match(h, /<h4>Voice<\/h4>/);
@@ -123,7 +120,7 @@ test('Settings: a Voice group right after Appearance, not in Tools; heading "Voi
   assert.match(h, /<span class="st-search-words" hidden>voice microphone mic talk speak speech call dictation<\/span>/);
   assert.match(h, /if \(admin\) h \+= row\('Voice conversations', `<label[^\n]*id="st-voice-enabled" onchange="voiceSettingEnable\(this\)"> On for everyone on this Maestro<\/label>`\);/);
   // the search matches the section's textContent, and hidden words are part of it
-  assert.match(src('stSearch'), /s\.textContent\.toLowerCase\(\)\.includes\(q\)/);
+  assert.match(src('stSearch'), /text: `\$\{s\.textContent\} \$\{wordHits\(s\)/);   // lower-cased by STG.search
 });
 
 test('Settings: no user-facing "Settings, Voices" is left', () => {

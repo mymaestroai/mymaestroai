@@ -786,7 +786,7 @@
       // Created: its model and how it is paid stay in view ("billed per use" plainly), with the link to change it.
       const extra = tEl('div'); extra.appendChild(modelLine(e));
       const done = tEl('div', 'why', 'Created. '); extra.appendChild(done);
-      const a = tEl('a', '', 'Change'); a.href = '/agent-settings.html?agent=' + encodeURIComponent(e.name); a.target = '_blank'; a.rel = 'noopener'; done.appendChild(a);
+      const a = tEl('a', '', 'Change'); a.href = '/#agent-card=' + encodeURIComponent(e.name); a.target = '_blank'; a.rel = 'noopener'; done.appendChild(a);
       if (e.warning) done.appendChild(document.createTextNode(' ' + e.warning));
       rows.appendChild(teamRow(e, extra));
     }

@@ -197,7 +197,7 @@ test('review r1: the runner checks identities, access and earlier deliveries; a 
   assert.match(SDK, /for \(const k of \['kind', 'from', 'by', 'label', 'for', 'jobName', 'taskId', 'handOff', 'handOffReport'\]\)/, 'the conversation log keeps the ids (and, since Build Team, the main agent a build_team turn is for)');
   assert.match(SDK, /if \(handOffOfTurn\(coordinatorName\)\) return resolve\(HAND_OFF_NO_QUEUE\(agentName, 'busy'\)\);/);
   assert.match(SDK, /if \(handOffOfTurn\(coordinatorName\)\) return HAND_OFF_NO_QUEUE\(agentName, 'on a voice call'\);/);
-  assert.match(SDK, /handOffs = bc\.isOn\('hand-off-guidance'\) && !handOffOfTurn\(agentName\), ownCode = bc\.isOn\('own-code-guidance'\);/);
+  assert.match(SDK, /handOffs = bc\.isOn\('hand-off-guidance'\) && !handOffOfTurn\(agentName\), ownCode = bc\.isOn\('own-code-guidance'\), parallel = bc\.isOn\('parallel-work'\);/);
   // the only places a consultation is queued are those two gated ones
   assert.equal((SDK.match(/\.enqueue\(\{ from: coordinatorName/g) || []).length, 2, 'the 409 path and holdConsultForCall');
   assert.equal((SDK.match(/q\.enqueue\(\{ from: coordinatorName/g) || []).length, 1, 'holdConsultForCall');

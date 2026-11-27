@@ -58,6 +58,49 @@ test('reconnect with Last-Event-ID replays only what was missed', () => {
   assert.match(fresh.out[1], /"lastId":3/);
 });
 
+test('eventFilter: applied to every delivered event, live and from the replay buffer, after the other filters; an error drops the event', () => {
+  const hub = createHubEvents();
+  hub.publish('research_progress', { agent: 'a', id: 'old-run' });
+  hub.publish('research_progress', { agent: 'a', id: 'cur-run' });
+  hub.publish('turn_start', { agent: 'a' });
+  const seen = [];
+  const eventFilter = (ev) => { seen.push(ev.seq); if (ev.id === 'boom') throw new Error('x'); return !(ev.type === 'research_progress' && ev.id === 'old-run'); };
+  // replay: the first event is dropped by eventFilter, the rest pass
+  const r = fakeClient({ 'last-event-id': '0' });
+  hub.subscribe(r.req, r.res, { isAdmin: false, filter: () => true, eventFilter });
+  assert.equal(parseFrames(r.out).length, 0, 'last-event-id 0 is a fresh client');
+  const r2 = fakeClient();
+  r2.req.url = '/api/events?since=1';
+  hub.subscribe(r2.req, r2.res, { isAdmin: false, filter: () => true, eventFilter });
+  assert.deepEqual(parseFrames(r2.out).map(f => f.id), ['cur-run', 3], 'replay goes through eventFilter');
+  const r3 = fakeClient();
+  r3.req.url = '/api/events?since=0.5';
+  hub.subscribe(r3.req, r3.res, { isAdmin: false, filter: () => true, eventFilter });
+  // the replay that does reach the dropped event (seq 1): only eventFilter keeps it out (review r4)
+  assert.deepEqual(parseFrames(r3.out).map(f => f.id), ['cur-run', 3], 'replay drops the event eventFilter refuses');
+  // live
+  const c = fakeClient();
+  hub.subscribe(c.req, c.res, { isAdmin: false, filter: () => true, eventFilter });
+  hub.publish('research_progress', { agent: 'a', id: 'old-run' });
+  hub.publish('research_progress', { agent: 'a', id: 'boom' });
+  hub.publish('research_progress', { agent: 'a', id: 'cur-run' });
+  assert.deepEqual(parseFrames(c.out).map(f => f.id), ['cur-run'], 'live events go through eventFilter; a throwing one is dropped');
+  // the other filters still come first: an event the member's filter refuses never reaches eventFilter
+  const calls = [];
+  const d = fakeClient();
+  hub.subscribe(d.req, d.res, { isAdmin: false, filter: () => false, eventFilter: (ev) => { calls.push(ev.seq); return true; } });
+  hub.publish('turn_start', { agent: 'zz' });
+  assert.deepEqual(calls, []);
+  // a subscriber without opts, and one without an eventFilter, are unchanged
+  const plain = fakeClient();
+  hub.subscribe(plain.req, plain.res);
+  const noF = fakeClient();
+  hub.subscribe(noF.req, noF.res, { isAdmin: false, filter: () => true });
+  hub.publish('research_progress', { agent: 'a', id: 'old-run' });
+  assert.equal(parseFrames(plain.out).length, 1);
+  assert.equal(parseFrames(noF.out).length, 1);
+});
+
 test('tapTurn broadcasts start, throttled text snapshots and the final reply, then restores res.write', async () => {
   const hub = createHubEvents();
   const c = fakeClient();

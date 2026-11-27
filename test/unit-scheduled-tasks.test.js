@@ -246,7 +246,7 @@ test('busy agent waits (then notes it), gives up after 12h; halted hub skips; st
   assert.match(t.note, /alice stayed busy for 12 h/);
   const h = mk({ haltRefusal: () => 'halted' }), x = await mkTask(h.st);
   h.clock.t = due(x); await h.st.tick();
-  assert.deepStrictEqual([h.calls.length, h.st.list('alice', { includeDone: true })[0].note], [0, 'skipped: hub halted']);
+  assert.deepStrictEqual([h.calls.length, h.st.list('alice', { includeDone: true })[0].note, h.st.list('alice', { includeDone: true })[0].status], [0, 'waiting: all agents are stopped', 'held']);
   const r = mk({ isAgentActive: () => true }), y = await mkTask(r.st, 'alice', 'every hour');
   r.clock.t = due(y); await r.st.tick(); r.clock.t += 3600000; await r.st.tick();
   assert.deepStrictEqual([r.st.list('alice')[0].skipped, r.st.list('alice')[0].queued], [1, true]);

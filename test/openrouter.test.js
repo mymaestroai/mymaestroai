@@ -173,11 +173,10 @@ test('wiring: settings, discovery, requests, effort, ledger, context window, wor
   const srv = read('server.js');
   assert.ok(srv.includes("if (pathname === '/api/openrouter' && req.method === 'GET') {") && srv.includes("if (pathname === '/api/openrouter' && req.method === 'POST') {"));
   assert.ok(srv.includes("if (provider === 'openrouter') {   // the free key check"));
-  assert.ok(srv.includes("if (patch && patch.openrouter !== undefined) patch.openrouter = require('./lib/openrouter').cleanOpenRouterSettings(patch.openrouter);"));
+  assert.ok(read('lib/settings-apply.js').includes("if (patch.openrouter !== undefined) patch.openrouter = require('./openrouter').cleanOpenRouterSettings(patch.openrouter);"));   // the cleaners moved from server.js to lib/settings-apply
   const app = read('app.js');
   assert.ok(app.includes("{ id: 'openrouter', label: 'OpenRouter', hasKey: true, hasUrl: false },"));
   assert.ok(app.includes("openrouter: 'OpenRouter'") && app.includes("const VENDOR_ORDER = ['Anthropic', 'OpenAI', 'Google', 'Perplexity', 'OpenRouter', 'Local'];"));
   assert.ok(app.includes('<div class="st-section" id="st-or-section"><h4>OpenRouter</h4>') && app.includes('function renderOpenRouterBox(opts = {})') && app.includes("postOpenRouter({ models: null }"));
   assert.ok(read('mobile.js').includes("const MP_VENDOR_ORDER = ['Anthropic', 'OpenAI', 'Google', 'Perplexity', 'OpenRouter', 'Local'];"));
-  assert.ok(read('agent-settings.html').includes("'Perplexity · API $', 'OpenRouter · API $', 'Local'];"));
 });

@@ -147,7 +147,7 @@ function sheet() {
   env.cancel = async () => ({ status: 200, json: async () => ({ success: true }) });
   env.api = (url, opts) => (String(url).includes('/workers/') ? env.json(url, opts) : env.cancel(url, opts));
   env.aborts = [];
-  const code = `const { workerListPick, workerButtonLabel, fmtWorkerClock, hubWorkerGroups, hubWorkerCount, fmtElapsedShort } = shared;
+  const code = `const { workerListPick, workerButtonLabel, setWorkerButtonLabel, fmtWorkerClock, hubWorkerGroups, hubWorkerCount, fmtElapsedShort } = shared;
     const document = env.document, Date = { now: () => env.now, parse: (s) => globalThis.Date.parse(s) };
     const $ = (id) => env.byId[id] || null;
     let current = 'maestro', wkTimer = null, wkView = null, statusKnown = true;
@@ -230,7 +230,7 @@ test('workers running hub-wide that no card shows are listed under the agent tha
   assert.match(hub[0].textContent, /1:05/);
   assert.match(hub[0].textContent, /temporary/);
   assert.ok(body.querySelectorAll('.wk-group').some(g => /Started by Counsel/.test(g.textContent)));
-  assert.match(env.byId['chat-workers-btn'].textContent, /^2 working/);
+  assert.match(env.byId['chat-workers-btn'].textContent, /^Workers: 2 working/);
 });
 
 test('a worker whose caller has finished never stays "working", and an end the page only inferred shows how it really ended', async () => {

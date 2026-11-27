@@ -327,8 +327,9 @@ test('the section is drawn after Memory in the Status group, for admins only, wi
   for (const s of ['<h4>Self-check</h4>', 'id="st-sc-list"', 'id="st-sc-msg" class="st-hint mh-msg" role="status"', 'onclick="loadSelfCheck(true)">Run now', 'id="st-sc-state"',
     'class="st-test-btn" id="st-sc-run"', 'Run checks', 'After every start', 'type="time" id="st-sc-at"', 'Kinds of agent', 'placeholder="auto"', 'auto picks the cheapest Claude model.',
     'onclick="saveSelfCheckSettings()">Save', 'You hear about it only when something fails.']) assert.ok(sec.includes(s), s);
-  assert.match(src, /ST_GROUPS|stSum/, 'settings source loaded');
-  assert.ok(/id: 'status'[^\n]*'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section'/.test(app), 'in the Status group');
+  assert.match(src, /STG|stSum/, 'settings source loaded');
+  const G = require('../lib/ui-settings-groups.js');
+  for (const id of ['st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section']) assert.deepStrictEqual(G.groupOfSection(id), { group: 'upkeep', more: false }, `${id} in Upkeep`);
 });
 
 test('narrow screens: the rows wrap and long reasons break', () => {

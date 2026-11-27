@@ -97,15 +97,17 @@ test('r4: waitIdle ends at once when the turn is stopped', async () => {
 });
 
 test('server.js /api/settings: componentUpdates is cleaned to one of auto, notify, off', () => {
-  assert.ok(server.includes("if (patch && patch.componentUpdates !== undefined) patch.componentUpdates = { codex: ['auto', 'notify', 'off'].includes(patch.componentUpdates && patch.componentUpdates.codex) ? patch.componentUpdates.codex : 'auto' };"));
-  assert.ok(server.indexOf('patch.componentUpdates !== undefined') > server.indexOf('patch.modelOffers !== undefined'));
+  // the route's cleaners moved from server.js into lib/settings-apply cleanSettingsPatch (the lead's settings tool uses them too)
+  const applySrc = read('lib/settings-apply.js');
+  assert.ok(applySrc.includes("if (patch.componentUpdates !== undefined) patch.componentUpdates = { codex: ['auto', 'notify', 'off'].includes(patch.componentUpdates && patch.componentUpdates.codex) ? patch.componentUpdates.codex : 'auto' };"));
+  assert.ok(applySrc.indexOf('patch.componentUpdates !== undefined') > applySrc.indexOf('patch.modelOffers !== undefined'));
+  assert.ok(server.includes("require('./lib/settings-apply').cleanSettingsPatch(patch,"), 'the route calls it');
 });
 
 test('app.js: the section is in the Status group before st-updates-section, admin-gated', () => {
-  const m = app.match(/\{ id: 'status', title: '[^']*', sections: \[([^\]]*)\] \}/);
-  const ids = m[1].split(',').map((s) => s.trim().replace(/'/g, ''));
+  const ids = require('../lib/ui-settings-groups.js').GROUPS.find((g) => g.id === 'upkeep').sections;   // Upkeep holds it now
   assert.ok(ids.indexOf('st-components-section') > 0 && ids.indexOf('st-components-section') === ids.indexOf('st-updates-section') - 1);
-  assert.equal(ids[ids.length - 1], 'st-updates-section');
+  assert.ok(ids.indexOf('st-updates-section') === ids.length - 1, 'Updates is last in Upkeep (Stop all agents moved to For your review)');
   const at = app.indexOf('id="st-components-section"');
   assert.ok(at > 0);
   assert.match(app.slice(app.lastIndexOf('\n', at - 200) - 200, at), /if \(isHubAdmin\(\)\) \{\s*html \+= `<div class="st-section" $/);

@@ -30,7 +30,7 @@ test('running first, then the newest ended; finished and stopped stay 2 minutes;
   const r = L.workerListPick([e('a', 'done', 30000), e('b', 'running'), e('c', 'done', 125000), e('d', 'stopped', 1000)], NOW, null);
   assert.deepStrictEqual(r.items.map(i => [i.id, i.state]), [['b', 'running'], ['d', 'stopped'], ['a', 'done']]);
   assert.deepStrictEqual(r.gone, ['c']);
-  assert.deepStrictEqual([r.counts, r.alert, L.workerButtonLabel(r.counts)], [{ running: 1, done: 2, failed: 0 }, false, '1 working · 2 done']);
+  assert.deepStrictEqual([r.counts, r.alert, L.workerButtonLabel(r.counts)], [{ running: 1, done: 2, failed: 0 }, false, 'Workers: 1 working · 2 done']);
   assert.strictEqual(L.workerButtonLabel({ running: 0, done: 0, failed: 0 }), 'Workers');
 });
 
@@ -40,6 +40,24 @@ test('failed: until opened or 10 minutes, the newest 3; the one on screen always
   assert.deepStrictEqual(r.gone.sort(), ['old', 'seen']);
   assert.strictEqual(r.items.find(i => i.id === 'x').chat.name, 'kept');
   assert.strictEqual(r.alert, true);
-  assert.strictEqual(L.workerButtonLabel(r.counts), '1 working · 0 done · 4 failed');
+  assert.strictEqual(L.workerButtonLabel(r.counts), 'Workers: 1 working · 0 done · 4 failed');
   assert.deepStrictEqual([L.fmtWorkerClock(5000), L.fmtWorkerClock(102000), L.fmtWorkerClock(3725000)], ['0:05', '1:42', '1:02:05']);
+});
+
+test('the chip names the list ("Workers") and the counts; setWorkerButtonLabel fills the noun and counts spans; the page copies agree with lib', () => {
+  const sets = (counts) => {
+    const mk = () => ({ textContent: '' });
+    const noun = mk(), cnt = mk(), el = { querySelector: (q) => (q === '.wb-noun' ? noun : q === '.wb-counts' ? cnt : null), textContent: '' };
+    L.setWorkerButtonLabel(el, counts);
+    return noun.textContent + cnt.textContent;
+  };
+  assert.strictEqual(sets({ running: 3, done: 11, failed: 0 }), 'Workers: 3 working · 11 done');
+  assert.strictEqual(sets({ running: 3, done: 11, failed: 0 }), L.workerButtonLabel({ running: 3, done: 11, failed: 0 }));
+  assert.strictEqual(sets({ running: 0, done: 0, failed: 0 }), 'Workers');
+  const plain = { textContent: '' }; L.setWorkerButtonLabel(plain, { running: 1, done: 2, failed: 0 });
+  assert.strictEqual(plain.textContent, 'Workers: 1 working · 2 done', 'no spans: textContent still works');
+  for (const f of ['index.html', 'mobile.html']) assert.match(read(f), /<span class="wb-label"><span class="wb-noun">Workers<\/span><span class="wb-counts"><\/span><\/span>/, f);
+  assert.match(read('mobile.html'), /\.wk-chip \{ max-width: 100%; box-sizing: border-box; min-width: 0; \}/, 'the chip is never wider than its row (review r1)');
+  assert.match(read('mobile.html'), /\.wk-chip \.wb-noun \{[^}]*text-overflow: ellipsis/, 'the noun may truncate on the phone');
+  assert.match(read('mobile.html'), /\.wk-chip \.wb-counts \{ flex: none;/, 'the counts never do');
 });

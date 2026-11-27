@@ -272,7 +272,9 @@ test('setting "Show the Teams tab": a member never has it hidden by the setting'
   assert.strictEqual(w.tabs.teams.hidden, false);
 });
 test('setting "Show the Teams tab": stored server-side beside the other two (server.js and lib/settings.js), on unless false', () => {
-  assert.match(server, /if \(patch && patch\.sidebarGuide !== undefined\) patch\.sidebarGuide = patch\.sidebarGuide === true;\n\s*if \(patch && patch\.sidebarTeams !== undefined\) patch\.sidebarTeams = patch\.sidebarTeams !== false;/);
+  // the cleaners moved to lib/settings-apply cleanSettingsPatch (POST /api/settings calls it): same lines, same order
+  assert.match(server, /require\('\.\/lib\/settings-apply'\)\.cleanSettingsPatch\(patch,/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'lib', 'settings-apply.js'), 'utf8'), /if \(patch\.sidebarGuide !== undefined\) patch\.sidebarGuide = patch\.sidebarGuide === true;\n\s*if \(patch\.sidebarTeams !== undefined\) patch\.sidebarTeams = patch\.sidebarTeams !== false;/);
   assert.match(settingsSrc, /result\.sidebarGuide = s\.sidebarGuide === true;\n\s*result\.sidebarTeams = s\.sidebarTeams !== false;/);
 });
 

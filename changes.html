@@ -101,7 +101,7 @@
     el.appendChild(para('Costs', c.costs));
     el.appendChild(para('When on', c.on));
     el.appendChild(para('When off', c.off));
-    if (c.leadMay !== true) el.appendChild(para('Who can switch it', 'Only you, on this page.'));
+    if (c.leadMay !== true) el.appendChild(para('Who can switch it', 'Only you: here or on the card in your lead\'s chat.'));
     const actions = document.createElement('div'); actions.className = 'actions';
     const err = document.createElement('div'); err.className = 'err'; err.setAttribute('role', 'alert');
     const btns = [];

@@ -62,10 +62,8 @@ const view = (items, extra = {}) => ({ settings: SETTINGS, running: false, lastR
 
 // ── the section ──
 test('Health is a Status section placed right after the setup checklist, and is drawn for admins only', () => {
-  const m = app.match(/id: 'status', title: '[^']*', sections: \[([^\]]*)\]/);
-  assert.ok(m, 'status group found');
-  const list = [...m[1].matchAll(/'([^']+)'/g)].map(x => x[1]);
-  assert.strictEqual(list[list.indexOf('st-ready-section') + 1], 'st-health-section');
+  const g = require('../lib/ui-settings-groups.js').GROUPS.find((x) => x.id === 'review');   // the first group, For your review: the full checks sit under its More
+  const list = g.more; assert.strictEqual(list[list.indexOf('st-ready-section') + 1], 'st-health-section');
   const at = app.indexOf('id="st-health-section"');
   assert.ok(at > 0, 'the section is drawn');
   assert.match(app.slice(app.lastIndexOf('\n', at - 300), at), /if \(isHubAdmin\(\)\) \{/, 'drawn only inside an admin check');
@@ -222,140 +220,39 @@ test('?health=1 opens Settings at the Health section, and leaves the address onc
   assert.strictEqual(L.desktopOnlyLink('?health=1'), true);
 });
 
-// ── desktop banner ──
-function bannerRig({ me, status = 200, body, throws = false, existing = false }) {
-  const els = {};
-  if (existing) els['hub-health-notice'] = { id: 'hub-health-notice', innerHTML: 'old', style: {}, remove() { delete els['hub-health-notice']; } };
-  const document = {
-    getElementById: (id) => els[id] || null,
-    createElement: () => ({ style: {}, remove() { delete els[this.id]; } }),
-    body: { prepend: (n) => { els[n.id] = n; } },
-  };
-  const calls = []; let laid = 0;
-  const fetch = async (url) => { calls.push(url); if (throws) throw new Error('offline'); return { ok: status === 200, status, json: async () => body }; };
-  const layoutBanners = () => { laid++; };
-  const make = new Function('document', 'fetch', 'window', 'layoutBanners', `${ESC}\n${fnSrc(app, 'function healthBannerItems(view)')}\n${fnSrc(app, 'async function paintHealthBanner()')}\nreturn { healthBannerItems, paintHealthBanner };`);
-  const S = make(document, fetch, { hubMe: me }, layoutBanners);
-  return { S, els, calls, laid: () => laid };
-}
+// ── health problems in the one banner (P4-15: the desktop health bar and the phone #health-notice are gone) ──
 const ADMIN = { isAdmin: true, user: { id: 'owner' } };
+const RV = require('../lib/ui-review.js');
 
-test('desktop banner items: critical only, never health-signin-*', () => {
-  const r = bannerRig({ me: ADMIN });
-  const got = r.S.healthBannerItems(view([item('health-disk-main', 'critical'), item('health-memory', 'warn'), item('health-clock', 'unknown'), item('health-signin-claude', 'critical'), item('health-backups', 'critical')]));
-  assert.deepStrictEqual(got.map(i => i.id), ['health-disk-main', 'health-backups']);
-  assert.deepStrictEqual(r.S.healthBannerItems(null), []);
+test('health banner is gone on both pages; a critical health item (never a warning) is a Fix now item and the one banner shows it', () => {
+  for (const f of ['hub-health-notice', 'healthBannerItems', 'paintHealthBanner']) assert.ok(!app.includes(f), `${f} in app.js`);
+  for (const f of ['healthNoticeItems', 'paintHealthNotice', 'system health notice']) assert.ok(!mobile.includes(f), `${f} in mobile.js`);
+  const r = RV.build({ health: view([item('health-disk-main', 'critical', { title: 'Disk almost full' }), item('health-memory', 'warn'), item('health-clock', 'unknown'), item('health-signin-claude', 'critical'), item('health-backups', 'critical', { title: 'No backup <3 days>' })]) });
+  assert.deepStrictEqual(r.fix.map((p) => p.id), ['health:health-disk-main', 'health:health-signin-claude', 'health:health-backups']);
+  assert.deepStrictEqual(r.worth.map((p) => p.id), ['health:health-memory'], 'a health warning is Worth doing: no banner, no count');
+  assert.strictEqual(RV.bannerOf(r).text, 'Disk almost full (and 2 more to fix). Open For your review');
+  assert.strictEqual(RV.bannerOf(RV.build({ health: view([item('health-memory', 'warn')]) })), null, 'nothing critical: no banner');
 });
 
-test('desktop banner: red fixed bar with the titles and a link that opens Settings at the Health section', async () => {
-  const r = bannerRig({ me: ADMIN, body: view([item('health-disk-main', 'critical', { title: 'Disk almost full' }), item('health-backups', 'critical', { title: 'No backup <3 days>' })]) });
-  await r.S.paintHealthBanner();
-  const bar = r.els['hub-health-notice'];
-  assert.ok(bar, 'bar drawn');
-  assert.match(bar.style.cssText, /position:fixed/);
-  // looks-vars: --banner-critical-bg is #7a1212 and --on-color-text is #ffffff in index.html :root (same values)
-  assert.match(bar.style.cssText, /background:var\(--banner-critical-bg\)/);
-  assert.match(bar.style.cssText, /color:var\(--on-color-text\)/);
-  assert.match(bar.style.cssText, /font-weight:(700|bold)/);
-  assert.match(bar.innerHTML, /^Health: Disk almost full; No backup &lt;3 days&gt;\. <a /);
-  assert.match(bar.innerHTML, /openSettingsAt\('st-health-section'\)/);
-  assert.match(bar.innerHTML, />Open Settings → Status<\/a>/);
-  assert.ok(r.laid() >= 1, 'banners re-laid out');
+test('the Claude sign-in button rides on the one banner when its first item is the sign-in item', () => {
+  const r = RV.build({ health: view([item('health-claude-signedout', 'critical', { action: 'claude-signin' })]) });
+  assert.deepStrictEqual(RV.bannerOf(r).fix, { label: 'Sign in again', kind: 'claude-signin' });
+  assert.match(app, /ClaudeSignin\.healthButton\(\{ action: 'claude-signin' \}\)/);
+  assert.match(mobile, /ClaudeSignin\.healthButton\(\{ action: 'claude-signin' \}\)/);
 });
 
-test('desktop banner: nothing critical removes the bar; a non-admin never fetches; an error or non-200 leaves it as it is', async () => {
-  let r = bannerRig({ me: ADMIN, existing: true, body: view([item('health-memory', 'warn'), item('health-signin-codex', 'critical')]) });
-  await r.S.paintHealthBanner();
-  assert.strictEqual(r.els['hub-health-notice'], undefined, 'removed');
-  r = bannerRig({ me: { isAdmin: false, user: { id: 'sam' } }, existing: true });
-  await r.S.paintHealthBanner();
-  assert.deepStrictEqual(r.calls, []);
-  assert.strictEqual(r.els['hub-health-notice'], undefined, 'a non-admin sees none');
-  r = bannerRig({ me: ADMIN, existing: true, status: 500, body: {} });
-  await r.S.paintHealthBanner();
-  assert.strictEqual(r.els['hub-health-notice'].innerHTML, 'old', 'a 500 is not all clear');
-  r = bannerRig({ me: ADMIN, existing: true, throws: true });
-  await r.S.paintHealthBanner();
-  assert.strictEqual(r.els['hub-health-notice'].innerHTML, 'old', 'an error is not all clear');
-});
-
-test('layoutBanners stacks hub-health-notice right after hub-readiness-notice; it is painted wherever the readiness banner is', () => {
-  assert.match(app, /'hub-readiness-notice', 'hub-health-notice', 'hub-security-notice'\]/);
-  assert.match(app, /paintReadinessBanner\(\)\.catch\(\(\) => \{\}\);\n\s*paintHealthBanner\(\)\.catch\(\(\) => \{\}\);/);
-});
-
-test('paintReadinessBanner skips health- ids (the health banner shows them)', async () => {
-  const els = {};
-  const document = { getElementById: (id) => els[id] || null, createElement: () => ({ style: {}, remove() { delete els[this.id]; } }), body: { prepend: (n) => { els[n.id] = n; } } };
-  const fetch = async () => ({ json: async () => ({ items: [item('health-disk-main', 'critical'), item('health-signin-claude', 'critical'), item('accounts', 'critical')] }) });
-  const make = new Function('document', 'fetch', 'window', 'layoutBanners', `${ESC}\n${fnSrc(app, 'async function paintReadinessBanner()')}\nreturn paintReadinessBanner;`);
-  await make(document, fetch, { hubMe: ADMIN }, () => {})();
-  assert.strictEqual(els['hub-readiness-notice'], undefined, 'only health- and accounts items: no setup bar');
-  const fetch2 = async () => ({ json: async () => ({ items: [item('health-disk-main', 'critical'), item('docker', 'critical', { title: 'No Docker' })] }) });
-  await make(document, fetch2, { hubMe: ADMIN }, () => {})();
-  assert.match(els['hub-readiness-notice'].innerHTML, /No Docker/);
-  assert.doesNotMatch(els['hub-readiness-notice'].innerHTML, /health-disk|Title health/);
-});
-
-// ── phone banner ──
-function phoneRig({ me, status = 200, body, throws = false, existingText = '' }) {
-  const bar = { hidden: !existingText, textContent: existingText, innerHTML: existingText };
-  const calls = [];
-  const api = async (p) => { calls.push(p); if (throws) throw new Error('offline'); return { ok: status === 200, status, json: async () => body }; };
-  const listeners = [];
-  const document = { addEventListener: (n, fn) => listeners.push([n, fn]), hidden: false };
-  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const src = between(mobile, '// ── system health notice (begin) ──', '// ── system health notice (end) ──');
-  const make = new Function('$', 'api', 'esc', 'document', 'getMe', `let hubMe; Object.defineProperty(globalThis, '__x', { value: 1, configurable: true });\n${src.replace(/hubMe/g, 'getMe()')}\nreturn { healthNoticeItems, paintHealthNotice };`);
-  const S = make((id) => (id === 'health-notice' ? bar : null), api, esc, document, () => me);
-  return { S, bar, calls, listeners, document };
-}
-
-test('phone banner: the bar is at the top of the main screen, and its filter is the desktop\'s (critical, not health-signin-)', () => {
+test('the phone has one notice at the top of the agent list (#review-banner, red, wraps within 390 px), painted with the count on load and on return to the front', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'mobile.html'), 'utf8');
   const at = html.indexOf('<section id="screen-agents"');
-  assert.ok(at > 0 && html.slice(at, at + 200).includes('id="health-notice"'), 'first thing in the agents screen');
-  // looks-vars: the banner colour moved into :root as --health-notice-bg (same value)
-  assert.match(html, /#health-notice\s*\{[^}]*background: var\(--health-notice-bg\)/);
+  assert.ok(at > 0 && html.slice(at, at + 200).includes('id="review-banner"'), 'first thing in the agents screen');
+  assert.doesNotMatch(html, /id="health-notice"/);
+  assert.match(html, /#review-banner\s*\{[^}]*background: var\(--health-notice-bg\)/);
   assert.match(html, /--health-notice-bg:\s*#7a1212;/);
-  assert.match(html, /#health-notice\s*\{[^}]*overflow-wrap: anywhere/, 'text wraps within 390 px');
-  const r = phoneRig({ me: ADMIN });
-  const v = view([item('a', 'critical'), item('b', 'warn'), item('health-signin-claude', 'critical'), item('c', 'unknown')]);
-  assert.deepStrictEqual(r.S.healthNoticeItems(v).map(i => i.id), ['a']);
-  assert.deepStrictEqual(r.S.healthNoticeItems(v), require('node:vm').runInNewContext(`(${fnSrc(app, 'function healthBannerItems(view)').replace(/^function healthBannerItems/, 'function')})`)(v), 'same result as the desktop filter');
-});
-
-test('phone banner: admins only; shows "Health: <titles>." with a link to /?health=1; an error leaves it unchanged', async () => {
-  let r = phoneRig({ me: ADMIN, body: view([item('health-disk-main', 'critical', { title: 'Disk almost full' }), item('health-backups', 'critical', { title: 'No backup' })]) });
-  await r.S.paintHealthNotice();
-  assert.strictEqual(r.bar.hidden, false);
-  assert.match(r.bar.innerHTML, /^Health: Disk almost full; No backup\. <a href="\/\?health=1">Open Settings → Status<\/a>/);
-  r = phoneRig({ me: { isAdmin: false, user: { id: 'sam' } }, existingText: 'old' });
-  await r.S.paintHealthNotice();
-  assert.deepStrictEqual(r.calls, [], 'a member never asks');
-  assert.strictEqual(r.bar.hidden, true);
-  r = phoneRig({ me: null });
-  await r.S.paintHealthNotice();
-  assert.deepStrictEqual(r.calls, [], 'not signed in: no request');
-  r = phoneRig({ me: ADMIN, status: 500, body: {}, existingText: 'old' });
-  await r.S.paintHealthNotice();
-  assert.strictEqual(r.bar.innerHTML, 'old'); assert.strictEqual(r.bar.hidden, false);
-  r = phoneRig({ me: ADMIN, throws: true, existingText: 'old' });
-  await r.S.paintHealthNotice();
-  assert.strictEqual(r.bar.innerHTML, 'old'); assert.strictEqual(r.bar.hidden, false);
-  r = phoneRig({ me: ADMIN, existingText: 'old', body: view([item('health-memory', 'warn')]) });
-  await r.S.paintHealthNotice();
-  assert.strictEqual(r.bar.hidden, true, 'nothing critical: gone');
-});
-
-test('phone banner: fetched on load and when the app comes back to the foreground', async () => {
-  const r = phoneRig({ me: ADMIN, body: view([]) });
-  // wired in the source: init() calls it after loadMe, and a visibilitychange listener repaints when visible
-  const src = between(mobile, '// ── system health notice (begin) ──', '// ── system health notice (end) ──');
-  assert.match(src, /document\.addEventListener\('visibilitychange', \(\) => \{ if \(!document\.hidden\) paintHealthNotice\(\)/);
+  assert.match(html, /#review-banner\s*\{[^}]*overflow-wrap: anywhere/, 'text wraps within 390 px');
+  assert.match(mobile, /document\.addEventListener\('visibilitychange', \(\) => \{ if \(!document\.hidden\) reviewRefresh\(\)/);
   const init = mobile.slice(mobile.indexOf('async function init() {'));
-  assert.ok(init.indexOf('await loadMe();') < init.indexOf('paintHealthNotice()'), 'painted after /api/me answered');
-  assert.ok(init.indexOf('paintHealthNotice()') < init.indexOf('await loadAgents();'));
+  assert.ok(init.indexOf('await loadMe();') < init.indexOf('reviewRefresh()'), 'painted after /api/me answered');
+  assert.ok(init.indexOf('reviewRefresh()') < init.indexOf('await loadAgents();'));
 });
 
 // ── the security kind's hint ──

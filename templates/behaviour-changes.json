@@ -1,5 +1,5 @@
 {
-  "_about": "Changes that alter how agents behave. A new install starts with each one on. An install that already has agents gets each new entry switched off and waiting for its owner's decision: its lead agent reviews the change for that install and explains it, and the owner turns it on or leaves it off on the /changes page, or asks the lead in their own message to do it (behaviour_change, only for entries with leadMay true). leadMay is false for anything about security or spending limits: only the owner switches those, on the page. Add an entry here for any future change to agent behaviour; never switch one on for existing installs by itself.",
+  "_about": "Changes that alter how agents behave. A new install starts with each one on. An install that already has agents gets each new entry switched off and waiting for its owner's decision: its lead agent reviews the change for that install and explains it, and the owner turns it on or leaves it off on the /changes page, or asks the lead in their own message to do it (behaviour_change, only for entries with leadMay true). leadMay is false for anything about security or spending limits: only the owner switches those, on the page. Add an entry here for any future change to agent behaviour; never switch one on for existing installs by itself. Optional field quiet: true marks a cheap, safe feature (no spending, no security, no behaviour risk): with leadMay true it arrives ON by itself on an existing install (by quiet-update) and shows once as a one-line notice on the card in the lead's chat until the owner acknowledges it; the owner can still turn it off. quiet with leadMay false counts as not quiet (it waits for the owner's decision like any other).",
   "changes": [
     {
       "id": "team-guidance",
@@ -90,6 +90,17 @@
       "off": "Primary agents may still wait on long work inside their own turns, as before; hand_off stays available when they choose it."
     },
     {
+      "id": "parallel-work",
+      "leadMay": true,
+      "title": "Primary agents split complex work across parallel workers, never at the cost of quality",
+      "changes": "For any complex task, a primary agent first splits the work into independent parts and runs them at the same time without being asked: several workers or consultations at once, several leads or hand-offs, reviews from different companies' models side by side. It picks a model for each part from the models it may use: a cheaper one for volume where it does that part as well, the strongest where the part decides the quality; an agent whose work must stay on its own service (a medical or legal team agent, for example) keeps every worker and reviewer on its own model and works only with agents on its own service. Quality comes first: work stays in one thread where splitting would make it worse (one design or writing voice, tightly coupled changes to the same files, a chain of decisions that build on each other, the final judgement and putting the parts together), and the agent says in one line why. It checks every part that comes back and puts the parts together itself, and never splits trivial jobs or quick look-ups. Work that will take more than a few minutes still goes to a teammate with hand_off, and the agent leading it does the splitting. When the lead's other leads are all busy and work is waiting, the lead may create another lead rather than lend a specialist from another field.",
+      "benefits": "Complex jobs finish sooner without you having to ask for parallel work, the agent checks each part before using it, and work that is better done by one hand stays with one.",
+      "costs": "About 220 words more in each primary agent's instructions (about 260 for the lead). Complex jobs start several worker, consultation or review runs at once, each on the model the agent picks for its part, so a job uses more of a plan's allowance or pay-per-use budget at the same time, with some extra runs where a part is checked twice. A new lead is one more agent, on a model from what you already have. Members' main agents get it too, within the limits you set for members.",
+      "check": "Which primary agents here take on complex, many-part jobs and whether they already run parts in parallel or only when asked, which cheaper models they could use for volume, whether pay-per-use models would be picked for parallel parts, and whether the leads are often busy with work waiting.",
+      "on": "Primary agents split complex work into parallel parts by themselves, keep in one thread what splitting would hurt and say why, and check every part.",
+      "off": "Agents run work in parallel only when they decide to or are asked, as before."
+    },
+    {
       "id": "protect-own-code",
       "leadMay": false,
       "title": "Protect your Maestro's own code",
@@ -121,6 +132,17 @@
       "check": "Which agents here answer research questions, which models their helpers may use (a member's agents only the models an admin allows), whether web search works on this install, and how much pay-per-use budget a run could take.",
       "on": "Agents offer deep research on research questions; each person decides each time or once for all.",
       "off": "No agent offers deep research; agents answer research questions as before."
+    },
+    {
+      "id": "research-own-work",
+      "leadMay": false,
+      "title": "Quick research for an agent's own work",
+      "changes": "Works together with \"Agents offer deep research when a question needs it\" and does nothing while that one is off. (1) An agent that needs research for work it is doing itself, not for a question you asked, can start a quick run without asking you. It must give a one-sentence reason, it never waits for you, and it can only start the quick level: a thorough run starts only when you choose it. (2) When an agent asks you whether to research a question and you do not answer within the wait (two minutes by default; you can change it in Settings, 0 means no question is shown and a quick run starts at once), a quick run starts and the report says so on its first line. (3) When an agent asks in a turn you did not start, such as a scheduled task, it is handled like the agent's own work. Each such run shows a notice in that agent's chat and on your phone, with the question, the reason and the cost, and two buttons: Stop, and Make it thorough. The report goes to the agent, and to you only when you chose Make it thorough or when nobody answered your question. There is a daily limit on runs started this way: 3 per agent and 10 for the whole install by default, changeable in Settings (0 means no limit). A person who chose Never is never overridden, and the wait you set also applies to the question card while this change is off.",
+      "benefits": "Agents doing a long task can look things up properly instead of guessing or stopping to ask, and a question you missed while away still gets researched. You keep the last word: you can stop any run, or make it thorough, and the daily limit keeps it from running away.",
+      "costs": "Runs started without your yes use your plan allowance or pay-per-use budget like any quick run: several times a normal answer each, up to the daily limit (by default 10 a day across the install, 3 per agent).",
+      "check": "Which agents here run long tasks or scheduled work that would use research, what a quick run costs on their models (plan allowance or pay-per-use), whether the daily limits of 3 per agent and 10 for the install suit this install, and whether two minutes is a fair wait before a question starts a run by itself.",
+      "on": "Agents may start quick research for their own work within the daily limits, and an unanswered question starts a quick run after the wait.",
+      "off": "Agents cannot start research for their own work; an unanswered question gets a normal answer with a one-line offer at the end, as before."
     }
   ]
 }

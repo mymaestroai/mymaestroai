@@ -768,7 +768,7 @@ test('desktop poll: no request until the signed-in user is known; an admin that 
   await new Promise(r => setImmediate(r));
   assert.strictEqual(d.rec.fetches.length, 1, 'a known admin polls at once');
   assert.strictEqual(d.rec.timers.length, 1);
-  const lm = cut(app, 'async function loadMe()', 'paintSetupNotice();');
+  const lm = cut(app, 'async function loadMe()', 'reviewRefresh().catch(() => {});   // the count on the gear');
   assert.ok(lm.indexOf('window.hubMe = await r.json()') > 0 && lm.indexOf('window.hubMe = await r.json()') < lm.indexOf('activeJobsSync()'), 'loadMe re-runs the sync once hubMe is set');
 });
 

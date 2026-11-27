@@ -140,7 +140,8 @@ test('the loader applies the stored look at load in a browser, and a blocked sto
 });
 
 test('every page loads /ui-looks.js in its <head> before its first <style>', () => {
-  const pages = ['index', 'mobile', 'agent-settings', 'changes', 'help', 'users', 'recordings', 'tiger-team', 'local-models', 'modules', 'welcome', 'login', 'remote-desktop'];
+  // agent-settings is a redirect page now (P4-2): it draws nothing of its own and uses system colours, so it has no interface style to load
+  const pages = ['index', 'mobile', 'changes', 'help', 'users', 'recordings', 'tiger-team', 'local-models', 'modules', 'welcome', 'login', 'remote-desktop'];
   for (const p of pages) {
     const html = read(`${p}.html`);
     const tag = '<script src="/ui-looks.js"></script>';
@@ -173,7 +174,14 @@ test('static files: /ui-looks.js and the registry look stylesheets only; reachab
 
 test('the new-member default: the setting is validated, a new member gets it, an existing user is unchanged, the me-record carries it', () => {
   const server = read('server.js');
-  assert.match(server, /patch\.lookDefaultForNewMembers !== undefined && !require\('\.\/lib\/ui-looks'\)\.byId\(patch\.lookDefaultForNewMembers\)\) return jsonResponse\(res, 400/);
+  // the check moved to lib/settings-apply cleanSettingsPatch (POST /api/settings answers its status 400 with its error): test the real function
+  assert.match(server, /require\('\.\/lib\/settings-apply'\)\.cleanSettingsPatch\(patch,/);
+  { const { callSettingsApply } = require('./helpers/isolated-settings-apply');   // the real function, run in a throwaway install
+    const cleanSettingsPatch = (...a) => callSettingsApply('cleanSettingsPatch', a);
+    const bad = cleanSettingsPatch({ lookDefaultForNewMembers: 'no-such-look' }, {});
+    assert.strictEqual(bad.status, 400); assert.match(bad.errors[0], /lookDefaultForNewMembers must be one of/);
+    const good = cleanSettingsPatch({ lookDefaultForNewMembers: require('../lib/ui-looks').LOOKS[0].id }, {});
+    assert.deepStrictEqual(good.errors, []); }
   assert.match(server, /const rec = req\.hubUser \? hubAuth\.getUser\(req\.hubUser\.id\) : null; if \(rec && rec\.look\) out\.look = rec\.look;/);
   const { makeIsolatedInstall } = require('./helpers/isolated-install');
   const ISO = makeIsolatedInstall('ui-looks-iso-');
@@ -225,7 +233,7 @@ test('pickers: app.js and mobile.js choose through HubLooks, build previews from
     for (const n of names) {
       const a = src.indexOf(`function ${n}(`);
       const body = src.slice(a, a + 3500);
-      const end = body.search(/\n(?:    )?(?:function |const ST_GROUPS|\/\/ Profile)/);
+      const end = body.search(/\n(?:    )?(?:function |const STG |\/\/ Profile)/);
       const fn = end > 0 ? body.slice(0, end + 1) : body;
       assert.doesNotMatch(fn, /innerHTML|insertAdjacentHTML/, `${n} builds no markup`);
     }

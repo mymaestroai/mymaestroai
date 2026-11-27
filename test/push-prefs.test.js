@@ -450,7 +450,8 @@ test('wiring: security, access and data-safety callers pass kind: \'security\'; 
   assert.match(server, /walletLockedNotice\([\s\S]{0,400}notifyEach\(p, \{ \.\.\.o, kind: 'security' \}\)/);
   assert.match(read('lib/connector-access.js'), /adminsOnly: true, kind: 'security'/);
   assert.match(read('lib/modules/index.js'), /notify\(payload, \{ adminsOnly: true, kind: 'security' \}\)/);
-  assert.match(server, /notifyUsers\(\{\s*title: 'Recording access changed'[\s\S]{0,400}\{ kind: 'security' \}\)/);
+  // the recording-access notice moved from server.js into lib/settings-apply.js (same notice, still a security one)
+  assert.match(read('lib/settings-apply.js'), /notifyUsers\(\{\s*title: 'Recording access changed'[\s\S]{0,400}\{ kind: 'security' \}\)/);
   assert.match(read('lib/recordings/trouble.js'), /\}, ids, \{ kind: 'security' \}\)/);
   for (const f of ['lib/plan-usage.js', 'lib/memory-health.js', 'lib/update-check.js', 'lib/modules/health.js']) assert.ok(!/kind: 'security'/.test(read(f)), `${f} stays a normal notice`);
   assert.match(read('lib/push.js'), /prefs: require\('\.\/notify-prefs'\)\.getNotifyPrefs\(\)/);

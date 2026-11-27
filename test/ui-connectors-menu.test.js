@@ -13,8 +13,10 @@ const mobileJs = read('mobile.js');
 const settle = () => new Promise((res) => setImmediate(res));
 
 // Reload stays right after About (test/ui-reload-desktop.test.js pins that); the two new items follow it.
-test('index.html: ⋯ menu has Data connectors (→ /modules) right after About and Reload, then Remote computers hidden by default', () => {
-  assert.match(index, /id="about-btn"[^>]*>[^<]*About My Maestro AI<\/button>\s*<button id="reload-app-item"[^>]*>↻ Reload<\/button>\s*<button id="more-modules-item" class="more-item" role="menuitem"[^>]*onclick="closeMoreMenu\(\); location\.href = '\/modules'">🔌 Data connectors<\/button>\s*<button id="more-remote-item" class="more-item" role="menuitem"[^>]*style="display:none"[^>]*onclick="closeMoreMenu\(\); location\.href = '\/modules#remote-computers'">💻 Remote computers<\/button>/);
+test('app.js: Settings has the Data connectors and Remote computers doors (→ /modules), the Remote one hidden until the check passes', () => {
+  assert.match(app, /stDoorHtml\('modules', 'Data connectors', '[^']+', "location\.href='\/modules'"\)/);
+  assert.match(app, /stDoorHtml\('remote', 'Remote computers', "[^"]+", "location\.href='\/modules#remote-computers'", \{ hidden: remoteComputersOk !== true \}\)/);
+  assert.ok(!index.includes('id="more-menu"'), 'the ⋯ menu is gone');
 });
 
 test('index.html: the account menu has Remote computers right after Data connectors, hidden by default', () => {
@@ -43,33 +45,33 @@ test('app.js: the Remote computers items show only for an admin when /api/remote
   const a = loadMenus(ADMIN, 200);
   a.t.renderUserChip(); a.t.renderUserChip();
   assert.deepStrictEqual(a.fetches, ['/api/remote-desktop'], 'checked once');
-  assert.notStrictEqual(a.els['more-remote-item'].style.display, '', 'not shown before the answer');
+  assert.notStrictEqual(a.els['st-door-remote'].style.display, '', 'not shown before the answer');
   await settle();
-  for (const id of ['more-remote-item', 'account-remote']) assert.strictEqual(a.els[id].style.display, '', id);
+  for (const id of ['st-door-remote', 'account-remote']) assert.strictEqual(a.els[id].style.display, '', id);
   assert.strictEqual(a.els['account-modules'].style.display, '');
   for (const answer of [404, 409, 500, 'throw']) {
     const b = loadMenus(ADMIN, answer);
     b.t.renderUserChip(); await settle();
-    for (const id of ['more-remote-item', 'account-remote']) assert.strictEqual(b.els[id].style.display, 'none', `${id} after ${answer}`);
+    for (const id of ['st-door-remote', 'account-remote']) assert.strictEqual(b.els[id].style.display, 'none', `${id} after ${answer}`);
   }
   const m = loadMenus({ isAdmin: false, user: { name: 'sam', role: 'member' } }, 200);
   m.t.renderUserChip(); await settle();
   assert.deepStrictEqual(m.fetches, [], 'a member never asks');
-  assert.ok(!m.els['more-remote-item'] || m.els['more-remote-item'].style.display !== '');
+  assert.ok(!m.els['st-door-remote'] || m.els['st-door-remote'].style.display !== '');
 });
 
-test('app.js: applyMemberView hides the two new ⋯ items', () => {
+test('app.js: applyMemberView hides the admin chips', () => {
   const m = loadMenus({ isAdmin: false, user: { name: 'sam', role: 'member' } }, 200);
   m.t.applyMemberView();
-  assert.strictEqual(m.els['more-modules-item'].style.display, 'none');
-  assert.strictEqual(m.els['more-remote-item'].style.display, 'none');
+  for (const id of ['spend-today', 'update-chip', 'schedule-btn']) assert.strictEqual(m.els[id].style.display, 'none', id);
 });
 
-test('app.js: Settings has the Go to line for admins (Data connectors always, Remote computers when the check passed); the old section stays', () => {
-  assert.match(app, /window\.hubMe && window\.hubMe\.isAdmin \? `<div id="st-quick-links"[^`]*Go to: <a href="\/modules"[^>]*>🔌 Data connectors<\/a><a href="\/modules#remote-computers" id="st-remote-link"[^>]*display:\$\{remoteComputersOk === true \? '' : 'none'\}[^>]*>💻 Remote computers<\/a>(?:<a href="\/changes" id="st-changes-link"[^>]*>Changes to how agents behave<\/a>)?<\/div>` : ''\)\s*\+ ST_GROUPS\.map/);
-  assert.ok(app.indexOf('st-quick-links') < app.indexOf('ST_GROUPS.map(g =>'), 'above the groups');
-  assert.match(app, /id="st-connectors-link"/);
-  assert.ok(/Data connectors/.test(app.slice(app.indexOf('ST_GROUPS = ['))), 'the Tools and data section is still there');
+test('app.js: the "Go to:" line is gone (the doors replace it) and the groups stay; the connectors section is still in Tools and connections', () => {
+  assert.ok(!app.includes('st-quick-links') && !app.includes('st-connectors-link') && !app.includes('st-changes-link'), 'no Go to line');
+  assert.ok(!/Go to: /.test(app));
+  assert.match(app, /const defs = stSingle \? STG\.GROUPS\.filter\(g => g\.id === 'you'\) : STG\.GROUPS;/);
+  assert.ok(app.includes("const defs = stSingle ? STG.GROUPS.filter(g => g.id === 'you') : STG.GROUPS;"));
+  assert.ok(require('../lib/ui-settings-groups.js').groupOfSection('st-modules-section').group === 'tools', 'the Data connectors section is still there, in Tools and connections');
 });
 
 test('mobile.html: menu-remote follows menu-connectors, hidden by default, no variation selector', () => {

@@ -118,7 +118,8 @@ test('Create sends the roles and models shown (and no model list), disables the 
   assert.strictEqual(p.button('Not now').disabled, true);
   await p.answer('/api/welcome/team', 200, { ok: true, created: [PLAN[0], PLAN[1]], skipped: [{ ...PLAN[2] }, { ...PLAN[3], reason: 'failed', action: 'skip', error: 'disk busy' }] });
   const links = p.card().find((n) => n.tag === 'a');
-  assert.deepStrictEqual(links.map((a) => a.href), ['/agent-settings.html?agent=challenger', '/agent-settings.html?agent=scout']);
+  assert.deepStrictEqual(links.map((a) => a.href), ['/#agent-card=challenger', '/#agent-card=scout']);
+  assert.ok(links.every((a) => !a.target), 'same tab: no target=_blank');
   assert.ok(p.card().text.includes('Created.') && p.card().text.includes('disk busy'));
   assert.strictEqual(go.disabled, false);
   assert.strictEqual(go.hidden, true, 'done: no Create button');

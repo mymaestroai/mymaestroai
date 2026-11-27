@@ -32,10 +32,11 @@ const setup = () => {
 const put = (f, doc) => fs.writeFileSync(f, typeof doc === 'string' ? doc : JSON.stringify(doc));
 const ent = (state, by = 'owner') => ({ state, by, at: '2026-01-01T00:00:00.000Z' });
 
-test('manifest: the shipped file has the eleven entries with every field; invalid ids are dropped', () => {
+test('manifest: the shipped file has the thirteen entries with every field; invalid ids are dropped', () => {
   const real = bc.manifest(path.join(REAL, 'templates', 'behaviour-changes.json'));
-  // Owner, 06:09: work-check-ins and work-suggestions joined the five. deep-research (lib/research) joined the ten.
-  assert.deepStrictEqual(real.map((e) => e.id), ['team-guidance', 'starter-team', 'member-worker-models', 'worker-proposals', 'ask-lead-for-workers', 'work-check-ins', 'work-suggestions', 'hand-off-guidance', 'protect-own-code', 'own-code-guidance', 'deep-research']);   // ten entries: protect-own-code and own-code-guidance (lib/code-protect) joined the eight;   // hand-offs (lib/hand-offs): the rule to hand long work to a build partner
+  // Owner, 06:09: work-check-ins and work-suggestions joined the five. deep-research (lib/research) joined the ten. research-own-work joined the eleven (agents' own quick research; leadMay false: it spends). parallel-work joined the twelve (primary agents split complex work; leadMay true: guidance like work-check-ins, not a limit).
+  assert.deepStrictEqual(real.map((e) => e.id), ['team-guidance', 'starter-team', 'member-worker-models', 'worker-proposals', 'ask-lead-for-workers', 'work-check-ins', 'work-suggestions', 'hand-off-guidance', 'parallel-work', 'protect-own-code', 'own-code-guidance', 'deep-research', 'research-own-work']);   // ten entries: protect-own-code and own-code-guidance (lib/code-protect) joined the eight;   // hand-offs (lib/hand-offs): the rule to hand long work to a build partner
+  assert.equal(real.find((e) => e.id === 'research-own-work').leadMay, false);
   for (const e of real) for (const k of ['title', 'changes', 'benefits', 'costs', 'check', 'on', 'off']) assert.ok(e[k], `${e.id}.${k}`);
   assert.deepStrictEqual(bc.manifest(setup().manifestFile).map((e) => e.id), ['alpha', 'beta-two']);
   assert.deepStrictEqual(bc.manifest(path.join(tempDir(), 'nope.json')), []);
@@ -254,7 +255,7 @@ test('routes: both behaviour-changes routes and the page are admin only; the pag
   assert.match(server, /pathname === '\/api\/behaviour-changes' && req\.method === 'GET'/);
   assert.match(server, /pathname\.match\(\/\^\\\/api\\\/behaviour-changes\\\/\(\[a-z\]\[a-z0-9-\]\{1,40\}\)\$\/\)/);
   assert.match(server, /pathname === '\/changes'\) \{\n\s+filePath = path\.join\(__dirname, 'changes\.html'\)/);
-  assert.match(server, /\[behaviour\] \$\{m\[1\]\} turned \$\{b\.decision\} by /);
+  assert.match(server, /\[behaviour\] \$\{m\[1\]\} \$\{b\.decision === 'on'/);
   for (const code of ['400', '404', '409']) assert.ok(server.includes(`jsonResponse(res, ${code}, `) );
   const sf = L('static-files');
   assert.strictEqual(sf.resolve('/changes.html', REAL), fs.realpathSync(path.join(REAL, 'changes.html')));
@@ -306,10 +307,11 @@ test('changes.html: pending first, then decided; each entry has the change id an
   });
 });
 
-test('Settings: the admin quick links carry the Changes link, counted when something is waiting', () => {
+test('Settings: the "Go to" line and its Changes link are gone (P4-3); the pending changes are the new features in For your review', () => {
   const app = read('app.js');
-  assert.match(app, /id="st-quick-links"[^\n]*<a href="\/changes" id="st-changes-link"[^\n]*>Changes to how agents behave<\/a>/);
-  assert.match(app, /fetch\('\/api\/behaviour-changes'\)[\s\S]{0,300}c\.state === 'pending'[\s\S]{0,200}Changes waiting for your decision \(\$\{n\}\)/);
+  assert.ok(!/st-quick-links|st-changes-link|Changes waiting for your decision/.test(app));
+  assert.match(app, /RV\.merge\(RV\.build\(input\), extra, before\)/);
+  assert.match(read('lib/ui-review.js'), /changes: '\/api\/behaviour-changes'/, 'the review reads the same answer');
 });
 
 // Review r1 (Sonnet F1; GPT-6 B3; GPT-6 B1 / Sentinel F1).

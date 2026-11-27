@@ -76,7 +76,7 @@ test('gateway and Codex paths pass the turn\'s boxed flag (and the hands\' folde
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
   assert.match(src, /handlers\.__boxed = !!hands\.sandboxed;/, 'the gateway handlers carry the turn\'s boxed flag');
   assert.match(src, /gate\.check\(\{ agentName, tool: toolName, input: parsedArgs, cwd: \(handlers && handlers\.__cwd\) \|\| process\.cwd\(\), boxed: !!\(handlers && handlers\.__boxed\),/);
-  assert.match(src, /beforeCall: \(name, args\) => readOnlyHelper && name === 'Bash' \? \{ allowed: true \} : gate\.check\(\{ agentName, tool: name, input: args, cwd: hubHands \? hands\.tools\.cwd : cwd, boxed: !!hands\.sandboxed,/);
+  assert.match(src, /beforeCall: \(name, args\) => \{ noteToolForSettings\(agentName, name\); return readOnlyHelper && name === 'Bash' \? \{ allowed: true \} : gate\.check\(\{ agentName, tool: name, input: args, cwd: hubHands \? hands\.tools\.cwd : cwd, boxed: !!hands\.sandboxed,/);
   const checks = src.match(/gate\.check\(\{[^}]*\}/g) || [];
   assert.ok(checks.length >= 2 && checks.every(c => /boxed:/.test(c)), `every gate.check in sdk-chat passes boxed: ${checks.length}`);
 });

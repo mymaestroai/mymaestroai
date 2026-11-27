@@ -180,15 +180,15 @@ test('pages: Appearance before Interface style on desktop and phone, notice plac
   const a = app.slice(app.indexOf('function lookSectionPaint'));
   assert.ok(a.indexOf('themeControl') > 0 && a.indexOf('themeControl') < a.indexOf("'Interface style for new members'"));
   assert.match(a, /host\.insertBefore\(ap\.el, picker\)/);
-  // The theme line sits in the banner stack before readiness: ui-system-health.test.js pins readiness, health, security as the stack's tail.
-  assert.match(app, /'hub-setup-notice', 'hub-theme-notice', 'hub-readiness-notice', 'hub-health-notice', 'hub-security-notice'\]\) \{/);
+  // The theme line sits in the banner stack before the one review banner (P4-15: the phone-layout bar, the theme line, then the review banner).
+  assert.match(app, /\['hub-phone-layout-notice', 'hub-theme-notice', 'hub-review-banner'\]\) \{/);
   assert.match(app, /try \{ themeNoticeShow\(\); \}/);
   const p = mob.slice(mob.indexOf('<div class="sec-section" id="prof-theme-sec" hidden>'));
   assert.ok(p.indexOf('prof-theme-sec') < p.indexOf('Interface style</div>'));
   assert.ok(mob.indexOf("simpleThemeCtl(themeNoticeChosen)") < mob.indexOf("lookPickerPaint($('prof-looks'))"));
   assert.match(mob, /themeNoticeShow\(\); \} catch/);
   // phone: inside #screen-agents next to the health notice, not in the chat screen's composer
-  assert.match(mob, /\$\('screen-agents'\), first = \$\('health-notice'\)/);
+  assert.match(mob, /\$\('screen-agents'\), first = \$\('review-banner'\)/);
 });
 
 test('inline styles take var(--on-accent, #fff); every .mm-light rule is Simple-only', () => {

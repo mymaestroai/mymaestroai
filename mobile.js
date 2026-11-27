@@ -1081,7 +1081,9 @@ function formatContent(content) {
       const tok = images[Number(im[1])];
       if (tok && tok.held) { after += tok.held; tok.held = ''; }
     }
-    const tag = (u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(pt.clean)}</a>` : `<code>[blocked link: ${esc(pt.clean)}]</code>`) + after;
+    // A link to one of the hub's own doors (an agent's card at a row, a Settings row or group) opens in place on this phone page, in one press
+    const inPlace = !!u && /^\/(?:mobile)?#(?:agent-card|settings-for|settings-group)=/.test(u);
+    const tag = (u ? (inPlace ? `<a href="${esc(u.replace(/^\/#/, '/mobile#'))}" data-door="1">${esc(pt.clean)}</a>` : `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(pt.clean)}</a>`) : `<code>[blocked link: ${esc(pt.clean)}]</code>`) + after;
     out = out.replace(mk('L', i), () => tag);
   });
   images.forEach((im, i) => {
@@ -1106,6 +1108,7 @@ function originLabel(origin) {
     case 'hand_off': return `task from ${origin.from || 'another agent'}`;
     case 'hand_off_report': return `task finished: ${origin.from || 'another agent'}`;
     case 'comms': return 'message from a messaging channel';
+    case 'research_report': return 'research finished';
     default: return 'hub turn';
   }
 }
@@ -1190,6 +1193,31 @@ async function testBeforeSwitch(model) {
 }
 // An agent on Auto (the hub picks the model and effort for each turn) reads "Auto", not the model it happens to be set to.
 const AUTO_PICK = '__auto__';
+// ── The agent card (lib/ui-agent-card.js): the way in to an agent's settings on the phone ──
+// The card gets this page's own event handling (it opens no stream of its own) and this page's agent list.
+const agentCardSubs = {};   // event type -> Set of listeners the card registered
+function agentCardSubscribe(type, fn) {
+  const set = agentCardSubs[type] || (agentCardSubs[type] = new Set());
+  set.add(fn);
+  return () => set.delete(fn);
+}
+function agentCardEmit(type, ev) {
+  const set = agentCardSubs[type];
+  if (set) for (const fn of [...set]) { try { fn(ev); } catch { /* one listener must not stop the others */ } }
+}
+try { if (window.hubAgentCard && typeof window.hubAgentCard.configure === 'function') window.hubAgentCard.configure({ subscribe: agentCardSubscribe, agentsList: () => agents, simple: () => (typeof simpleOn === 'function' && simpleOn()), guard: (typeof dialogGuard !== 'undefined' ? dialogGuard : undefined) }); } catch { /* the card is optional */ }
+const CARD_PICK = '__card__';   // the value of the last line in a picker; never sent anywhere
+function agentCardLastLine(name) { const a = agentByName(name); return `All settings for ${(a && a.display) || name}…`; }
+// Opens the card on an agent at a row (a record id such as OPT-0047) or at its top; true when the card is there to open.
+function openAgentCard(name, row) {
+  const card = window.hubAgentCard;
+  if (!name || !card || typeof card.open !== 'function') return false;
+  try {
+    const p = card.open(name, row ? { row } : {});
+    if (p && typeof p.then === 'function') p.then(ok => { if (ok === 'superseded') return; /* a later open or a close took over: nothing to do */ if (ok === false) toast('This agent\'s settings are not open to you.'); }, () => {});
+    return true;
+  } catch { return false; }
+}
 function modelText(a) { return a && a.autoModel ? 'Auto' : shortModel(a?.model); }
 async function fillModelPick() {
   const sel = $('chat-model-pick'); const wrap = sel && sel.parentElement;
@@ -1205,6 +1233,7 @@ async function fillModelPick() {
     if (cur && !a.autoModel && !models.includes(cur)) html += `<option value="${esc(cur)}">${esc(mpLabel(cur))} (current)</option>`;
     // The OpenRouter group ends with a search over OpenRouter's whole catalogue (the picker lists only the ticked models).
     for (const [label, rows] of mpGroups(models)) html += `<optgroup label="${esc(label)}">` + rows.map(m => `<option value="${esc(m)}">${esc(mpLabel(m) + healthNote(_modelHealth[m]))}</option>`).join('') + (label.startsWith('OpenRouter') ? `<option value="${OR_MORE}">🔎 More OpenRouter models…</option>` : '') + '</optgroup>';
+    if (html && typeof window !== 'undefined' && window.hubAgentCard) html += `<optgroup label="Settings"><option value="${CARD_PICK}">${esc(agentCardLastLine(a.name))}</option></optgroup>`;   // the last line opens the card at its Model row (P3-8)
     sel.innerHTML = html; sel.value = a.autoModel ? AUTO_PICK : cur; sel.dataset.agent = a.name;
     sel.hidden = !html; wrap && wrap.classList.toggle('pickable', !!html);
   } catch (e) { sel.hidden = true; wrap && wrap.classList.remove('pickable'); }
@@ -1250,8 +1279,9 @@ function fillEffortPick() {
   // a stored Ultra the model no longer has shows as Max, which is what the server sends then.
   const ultraOk = a.effortUltra === true;
   const level = a.effort === 'ultra' && !ultraOk ? 'max' : (a.effort || 'default');
-  const wantOptions = ultraOk ? 7 : 6;
-  if (sel.options.length !== wantOptions) sel.innerHTML = Object.entries(EFFORT_LABEL).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('') + (ultraOk ? `<option value="ultra">${esc(EFFORT_ULTRA_OPTION)}</option>` : '');
+  const cardLine = window.hubAgentCard && isAdmin();   // the last line opens the card at its Thinking effort row (P3-8)
+  const wantOptions = (ultraOk ? 7 : 6) + (cardLine ? 1 : 0);
+  if (sel.options.length !== wantOptions) sel.innerHTML = Object.entries(EFFORT_LABEL).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('') + (ultraOk ? `<option value="ultra">${esc(EFFORT_ULTRA_OPTION)}</option>` : '') + (cardLine ? `<option value="${CARD_PICK}">${esc(agentCardLastLine(a.name))}</option>` : '');
   sel.value = level; sel.dataset.agent = a.name; sel.disabled = !isAdmin();
   txt.textContent = level === 'ultra' ? 'Ultra effort' : (EFFORT_LABEL[level] || level);
   wrap.classList.toggle('pickable', isAdmin());
@@ -1259,6 +1289,7 @@ function fillEffortPick() {
 }
 async function changeEffortFromPick() {
   const sel = $('chat-effort-pick'); const name = sel.dataset.agent; const a = agentByName(name); const level = sel.value;
+  if (level === '__card__') { if (a) { sel.value = a.effort === 'ultra' && a.effortUltra !== true ? 'max' : (a.effort || 'default'); openAgentCard(name, 'OPT-0057'); } return; }
   if (!a || level === (a.effort || 'default')) return;
   try {
     const r = await api(`/api/agents/${encodeURIComponent(name)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ effort: level }) });
@@ -1416,7 +1447,7 @@ function codexBadge(snap, levels, now) {
   const pct = pctOf(main);
   let text = main.weekly ? `ChatGPT ${pct}%` : `ChatGPT ${main.label || 'usage'} ${pct}%`;
   const shorts = live.filter(w => w.short && w !== main && pctOf(w) > 50);
-  if (shorts.length) { const s = best(shorts); text += ` · ${String(s.label || '5-hour').replace(/-hour$/, 'h')} ${pctOf(s)}%`; }
+  if (shorts.length) { const s = best(shorts); text += ` · ${s.label || '5-hour'} ${pctOf(s)}%`; }
   const passed = lv.filter(l => pct >= l);
   const cls = pct >= 100 ? 'refused' : passed.length && passed.length === lv.length ? 'hot' : passed.length ? 'warn' : '';
   const when = subsWhen(main.resetsAt) || 'the reset';
@@ -1492,7 +1523,35 @@ function planPctText(w, levels) {
   const s = planState(w, levels);
   return s.extra ? `${s.pct}% · extra usage` : `${s.pct}%`;
 }
+function planBadgeView(d, family, choice, subsOn, levels) {
+  const rank = (c) => (c === 'refused' ? 3 : c === 'hot' ? 2 : c === 'warn' ? 1 : 0);
+  const read = ((d && d.weekly) || []).filter(w => w && w.utilization != null);
+  const f5 = d && d.windows && d.windows.five_hour;
+  const wins = {
+    plan: read.find(w => w.family == null) || null,
+    family: family ? read.find(w => w.family === family) || null : null,
+    five: f5 && f5.utilization != null ? Object.assign({}, f5, { resetsAt: f5.resetsAt || f5.resets_at }) : null,
+  };
+  const avail = ['plan', 'family', 'five'].filter(k => wins[k]);
+  if (!wins.plan && !wins.family) return null;
+  const mk = (kind) => ({ kind, w: wins[kind] });
+  const mainKind = avail.includes(choice) ? choice : wins.plan ? 'plan' : 'family';
+  const main = mk(mainKind);
+  const mainPct = planState(main.w, levels).pct;
+  const extras = avail.filter(k => k !== mainKind).filter((k) => {
+    const w = wins[k], s = planState(w, levels);
+    if (k === 'five') return planUsedUp(w) || s.cls !== '' || (!!subsOn && Number(w.utilization) > 50);
+    return planUsedUp(w) || s.extra || s.cls !== '' || s.pct > mainPct;
+  }).map(mk);
+  const cls = avail.reduce((c, k) => { const x = planState(wins[k], levels).cls; return rank(x) > rank(c) ? x : c; }, '');
+  return { main, extras, cls, avail, wins };
+}
+function planUsedUp(w) { return !!w.rejected || (Number(w.utilization) >= 100 && !w.extraUsage); }
 // ── plan state helpers (end) ──
+// What a badge says for one window: "used up" when the plan refuses it, else its percent (with the extra-usage words).
+function badgeAmount(w, levels) {
+  return planUsedUp(w) ? 'used up' : planPctText(w, levels);
+}
 function planFamilyOf(model) {
   const id = String(model || '').replace(/^claude-sdk\//, '').replace(/\[1m\]$/i, '').replace(/^claude-/, '').toLowerCase();
   if (!id) return null;
@@ -1502,6 +1561,182 @@ function planFamilyOf(model) {
   if (/^sonnet/.test(id)) return 'sonnet';
   if (/^haiku/.test(id)) return 'haiku';
   return null;
+}
+// ── the Claude usage badge in the chat header: what it shows (the plan, the agent's model family, or the 5-hour window)
+// is the person's choice, made in a small popup under the badge. Kept per person (/api/me/prefs planBadge), with a copy on
+// this device (localStorage 'mm-plan-badge') for when the hub has none or is an older version.
+const PLAN_BADGE_KEY = 'mm-plan-badge';
+const planBadgeOk = (v) => v === 'plan' || v === 'family' || v === 'five';
+let planBadgeMem = null;   // a choice made on this page and not yet saved for the person
+function planBadgeChoice() {
+  if (planBadgeOk(planBadgeMem)) return planBadgeMem;
+  let dev = null;
+  try { dev = localStorage.getItem(PLAN_BADGE_KEY); } catch { /* storage blocked */ }
+  const mine = hubMe && hubMe.planBadge;
+  if (planBadgeOk(mine)) {
+    if (dev !== mine) { try { localStorage.setItem(PLAN_BADGE_KEY, mine); } catch { /* storage blocked */ } }
+    return mine;
+  }
+  return planBadgeOk(dev) ? dev : null;
+}
+// At most one save in flight: a pick shows and is kept on this device at once, and planBadgeMem is the newest pick.
+// When a save settles and the newest pick is a different value, that one is sent next, so the server hears the picks in order.
+let planBadgeSaving = false;
+async function planBadgePick(v) {
+  if (!planBadgeOk(v)) return;
+  planBadgeMem = v;
+  try { localStorage.setItem(PLAN_BADGE_KEY, v); } catch { /* storage blocked */ }
+  paintPlan();
+  if (planBadgeSaving) return;
+  planBadgeSaving = true;
+  let sent = v;
+  while (sent) {
+    try {
+      const r = await api('/api/me/prefs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planBadge: sent }) });
+      if (r && r.ok && planBadgeMem === sent) { if (hubMe) hubMe.planBadge = sent; planBadgeMem = null; }
+    } catch { /* an older hub answers 400 until it restarts: the device copy stays */ }
+    sent = planBadgeMem && planBadgeMem !== sent ? planBadgeMem : null;
+  }
+  planBadgeSaving = false;
+}
+const planLevels = (d) => (d && d.warn && Array.isArray(d.warn.at) ? d.warn.at : []);
+const planWhenText = (w) => (Number.isFinite(Date.parse(w.resetsAt || '')) ? new Date(w.resetsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'the reset');
+// The badge words: the main window ("Claude plan 18% this week", "Fable 19% this week", "5-hour 70%"), then the extras. Same on both pages.
+function planBadgeText(view, levels) {
+  return [view.main, ...view.extras].map((x, i) => (x.kind === 'five' ? `5-hour ${badgeAmount(x.w, levels)}` : `${x.kind === 'plan' ? 'Claude plan' : x.w.label} ${badgeAmount(x.w, levels)}` + (i === 0 ? ' this week' : ''))).join(' · ');
+}
+// The hover: one sentence per window shown, main first. Each describes only its own window: used up -> used up; extra usage
+// paying -> the extra-usage sentence.
+function planBadgeHover(view, levels) {
+  const part = (x, main) => {
+    const w = x.w, s = planState(w, levels);
+    if (x.kind === 'five') return planUsedUp(w) ? `5-hour window: used up until ${planWhenText(w)}` : `5-hour window ${s.pct}%`;
+    const plan = x.kind === 'plan', who = plan ? 'Claude plan' : w.label;   // the whole plan is "Claude plan" here as on the badge
+    if (planUsedUp(w)) return `${who}: used up until ${planWhenText(w)}`;
+    return s.extra
+      ? `${who}: ${plan ? 'used up this week' : 'the weekly Claude plan is used up'} until ${planWhenText(w)}; extra usage is paying`
+      : `${who}: ${s.pct}%${main ? (plan ? " of this week's allowance" : " of this week's Claude plan allowance") : ''}`;
+  };
+  return [view.main, ...view.extras].map((x, i) => part(x, i === 0)).join('; ');
+}
+let planChooser = null;   // { box, badge, onDoc, onResize } while the popup is open
+function planChooserClose(returnFocus) {
+  const c = planChooser;
+  if (!c) return;
+  planChooser = null;
+  document.removeEventListener('pointerdown', c.onDoc, true);
+  window.removeEventListener('resize', c.onResize);
+  c.box.remove();
+  c.badge.setAttribute('aria-expanded', 'false');
+  if (returnFocus) c.badge.focus();
+}
+function planViewNow() {
+  const d = planUsageLast; const a = agentByName(current); const model = String((a && a.model) || '');
+  return d && /^claude-sdk\//.test(model) ? planBadgeView(d, planFamilyOf(model), planBadgeChoice(), subsEnabled(), planLevels(d)) : null;
+}
+// The rows of the chooser, built from a badge view: used when it opens and again when the badge repaints under it.
+const planChooserLabel = (k, w) => (k === 'plan' ? 'Claude plan (all models)' : k === 'family' ? (w.label || 'Model family') : '5-hour window');
+function planChooserFill(c, view, levels) {
+  c.list.textContent = '';
+  c.rows = [];
+  c.view = view;
+  const rows = c.rows, list = c.list;
+  for (const k of view.avail) {
+    const w = view.wins[k];
+    const row = document.createElement('div');
+    const current = k === view.main.kind;
+    row.className = 'pc-row' + (current ? ' current' : '');
+    row.setAttribute('role', 'option');
+    row.setAttribute('aria-selected', current ? 'true' : 'false');
+    row.setAttribute('tabindex', '-1');
+    const check = document.createElement('span');
+    check.className = 'pc-check';
+    check.setAttribute('aria-hidden', 'true');
+    check.textContent = current ? '✓' : '';
+    const label = planChooserLabel(k, w);
+    const hasWhen = Number.isFinite(Date.parse(w.resetsAt || ''));
+    const text = document.createElement('span');
+    text.className = 'pc-text';
+    text.textContent = [label, k === 'five' ? badgeAmount(w, levels) : `${badgeAmount(w, levels)} this week`, hasWhen ? `resets ${planWhenText(w)}` : ''].filter(Boolean).join(' · ');
+    row.append(check, text);
+    row.addEventListener('click', () => { planChooserClose(true); planBadgePick(k); });
+    list.appendChild(row);
+    rows.push({ el: row, kind: k });
+  }
+}
+// The badge repainted while the chooser is open (new readings, another model or choice): rebuild its rows from the new
+// view, keep focus on the row of the same window (the current row when that window is gone), leave it where it is.
+function planChooserRefresh(view, levels) {
+  const c = planChooser;
+  if (!c) return;
+  // nothing the rows show has changed: leave them (a pointer pressed on a row keeps its row)
+  const sig = (v) => v.avail.map(k => `${k}:${planChooserLabel(k, v.wins[k])}:${badgeAmount(v.wins[k], levels)}:${v.wins[k].resetsAt || ''}`).join('|') + '#' + v.main.kind;
+  if (c.view && sig(c.view) === sig(view)) { c.view = view; return; }
+  const was = c.rows.find(r => r.el === document.activeElement);
+  planChooserFill(c, view, levels);
+  if (was) (c.rows.find(r => r.kind === was.kind) || c.rows.find(r => r.kind === view.main.kind) || c.rows[0]).el.focus();
+}
+function planChooserOpen(badge) {
+  if (planChooser) { const same = planChooser.badge === badge; planChooserClose(true); if (same) return; }
+  const view = planViewNow();
+  if (!view) return;
+  const box = document.createElement('div');
+  box.id = 'plan-badge-chooser';
+  box.className = 'plan-chooser';
+  const list = document.createElement('div');
+  list.className = 'pc-list';
+  list.setAttribute('role', 'listbox');
+  list.setAttribute('aria-label', 'What the Claude usage badge shows');
+  const subs = document.createElement('button');
+  subs.type = 'button';
+  subs.className = 'pc-subs';
+  subs.textContent = 'All subscriptions…';
+  subs.addEventListener('click', () => { planChooserClose(false); openSubsSheet(); });
+  const c = { box, badge, list, rows: [], view, onDoc: null, onResize: null };
+  planChooserFill(c, view, planLevels(planUsageLast));
+  box.append(list, subs);
+  // The last line opens the agent card at its Model row (P3-8); the chooser itself is unchanged.
+  let lastBtn = subs;
+  if (window.hubAgentCard && current) {
+    const agentName = current;
+    lastBtn = document.createElement('button');
+    lastBtn.type = 'button';
+    lastBtn.className = 'pc-subs pc-card';
+    lastBtn.textContent = agentCardLastLine(agentName);
+    lastBtn.addEventListener('click', () => { planChooserClose(false); openAgentCard(agentName, 'OPT-0047'); });
+    box.append(lastBtn);
+  }
+  box.addEventListener('keydown', (e) => {
+    const rows = c.rows;
+    const at = document.activeElement, i = rows.findIndex(r => r.el === at), n = rows.length;
+    if (e.key === 'Escape') { e.preventDefault(); planChooserClose(true); }
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      rows[i >= 0 ? (i + step + n) % n : (step > 0 ? 0 : n - 1)].el.focus();
+    } else if ((e.key === 'Enter' || e.key === ' ') && i >= 0) { e.preventDefault(); planChooserClose(true); planBadgePick(rows[i].kind); }
+    else if (e.key === 'Tab') {
+      if (at === lastBtn && !e.shiftKey) planChooserClose(true);
+      else if (at === lastBtn) { e.preventDefault(); (lastBtn !== subs ? subs : (rows.find(r => r.kind === c.view.main.kind) || rows[0]).el).focus(); }
+      else if (at === subs && !e.shiftKey) { e.preventDefault(); lastBtn.focus(); }
+      else if (at === subs) { e.preventDefault(); (rows.find(r => r.kind === c.view.main.kind) || rows[0]).el.focus(); }
+      else if (e.shiftKey) planChooserClose(true);
+      else { e.preventDefault(); subs.focus(); }
+    }
+  });
+  document.body.appendChild(box);
+  const host = $('chat-meta') || badge;
+  box.style.left = '8px';
+  box.style.right = '8px';
+  box.style.top = `${Math.round(Math.max(host.getBoundingClientRect().bottom, badge.getBoundingClientRect().bottom) + 4)}px`;
+  const onDoc = (e) => { if (!box.contains(e.target) && !badge.contains(e.target)) planChooserClose(false); };
+  const onResize = () => planChooserClose(false);
+  c.onDoc = onDoc; c.onResize = onResize;
+  planChooser = c;
+  document.addEventListener('pointerdown', onDoc, true);
+  window.addEventListener('resize', onResize);
+  badge.setAttribute('aria-expanded', 'true');
+  (c.rows.find(x => x.kind === view.main.kind) || c.rows[0]).el.focus();
 }
 function paintPlan() {
   const el = $('chat-plan'); if (!el) return;
@@ -1514,6 +1749,8 @@ function paintPlan() {
       if (codexShouldRead(codexUsageLast, Date.now(), codexAskAt)) codexAskRead();
       if (!b) b = codexPendingBadge(codexUsageLast);
     }
+    el.removeAttribute('aria-haspopup'); el.removeAttribute('aria-expanded'); el.removeAttribute('aria-label'); el.onclick = () => openSubsSheet();   // as the desktop's ChatGPT badge: the subscriptions
+    if (planChooser && planChooser.badge === el) planChooserClose(false);
     if (!b) { el.hidden = true; el.textContent = ''; return; }
     el.textContent = b.text;
     el.className = 'sub' + (b.cls ? ' ' + b.cls : '');
@@ -1521,19 +1758,17 @@ function paintPlan() {
     el.hidden = false;
     return;
   }
-  const fam = planFamilyOf(model);
-  const wins = d && /^claude-sdk\//.test(model) ? (d.weekly || []).filter(w => w.utilization != null && (w.family == null || (fam && w.family === fam))) : [];
-  if (!wins.length) { el.hidden = true; el.textContent = ''; return; }
-  const w = wins.reduce((x, y) => (Number(y.utilization) > Number(x.utilization) ? y : x));
-  const levels = (d.warn && Array.isArray(d.warn.at)) ? d.warn.at : [];
-  const { pct, extra, cls } = planState(w, levels);
-  el.textContent = `${w.family ? w.label : 'Plan'} ${planPctText(w, levels)}`;
-  const five = d.windows && d.windows.five_hour;
-  if (subsEnabled() && five && five.utilization != null && Number(five.utilization) > 50) el.textContent += ` · 5h ${Math.round(Number(five.utilization))}%`;
-  el.className = 'sub' + (cls ? ' ' + cls : '');
-  el.title = extra
-    ? `${w.family ? w.label : 'All models'}: the weekly Claude plan is used up until ${Number.isFinite(Date.parse(w.resetsAt || '')) ? new Date(w.resetsAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'the reset'}; extra usage is paying`
-    : `${w.family ? w.label : 'All models'}: ${pct}% of this week's Claude plan allowance`;
+  const levels = planLevels(d);
+  const view = planViewNow();
+  if (!view) { if (planChooser && planChooser.badge === el) planChooserClose(false); el.hidden = true; el.textContent = ''; el.removeAttribute('aria-label'); return; }
+  el.textContent = planBadgeText(view, levels);
+  el.className = 'sub' + (view.cls ? ' ' + view.cls : '');
+  el.title = planBadgeHover(view, levels);
+  if (planChooser && planChooser.badge === el) planChooserRefresh(view, levels);
+  el.setAttribute('aria-haspopup', 'listbox');
+  el.setAttribute('aria-expanded', planChooser && planChooser.badge === el ? 'true' : 'false');
+  el.setAttribute('aria-label', `Claude usage: ${el.textContent}. Press to choose what this shows.`);
+  el.onclick = () => planChooserOpen(el);
   el.hidden = false;
 }
 
@@ -1606,6 +1841,16 @@ async function applyModelChange(name, choice, opts, stale) {
       paintChatStatus(); fillEffortPick();
     }
   }
+}
+// The model picker's last line ("All settings for <agent>…"): puts the picker back and opens the card at the Model row. It is registered
+// before changeModelFromPick and stops the event, so the line is never read as a model.
+function modelPickCardLine(e) {
+  const sel = $('chat-model-pick');
+  if (!sel || sel.value !== '__card__') return;
+  if (e && e.stopImmediatePropagation) e.stopImmediatePropagation();
+  const name = sel.dataset.agent; const a = agentByName(name);
+  sel.value = a && a.autoModel ? AUTO_PICK : (a ? a.model : '');
+  if (a) openAgentCard(name, 'OPT-0047');
 }
 async function changeModelFromPick() {
   const sel = $('chat-model-pick');
@@ -1889,7 +2134,6 @@ function onBackgroundEvent(ev) {
 
 function paintStatus() {
   if (screen === 'agents') renderAgents();
-  if (typeof menuTeamSync === 'function') menuTeamSync();
   paintChatStatus();
   if (typeof simpleAgentsDots === 'function') simpleAgentsDots();   // Simple: the open agent sheet's busy dots
 }
@@ -2123,7 +2367,8 @@ function paintNotifyAgentSheet() {
     ${replying ? `<div class="sec-section"><button type="button" data-nk="done" class="${armed ? 'on' : ''}">${armed ? '🔔 You will be told when this reply is done' + armedNote + ' (tap to cancel)' : '🔔 Notify me when this reply is done'}</button></div>` : ''}
     ${kinds}
     <div class="sec-hint" style="margin-top:8px">Applies to all your devices. Change what you get for every agent in the ⋮ menu → Notification settings.</div>
-    <div class="sec-actions" style="margin-top:10px"><button type="button" data-nk="close">Close</button></div>`;
+    ${typeof window !== 'undefined' && window.hubAgentCard ? `<div class="sec-section"><button type="button" data-nk="card">${esc(agentCardLastLine(agent))}</button></div>` : ''}
+    <div class="sec-actions" style="margin-top:10px"><button type="button" data-nk="close">Close</button></div>`;   // the last line opens the card at its Notifications row (P3-8)
 }
 function openNotifyAgentSheet(agent = current) {
   if (!agent || !current) return;
@@ -2139,6 +2384,7 @@ async function onNotifyAgentSheetClick(e) {
   if (!b) return;
   if (b.dataset.nk === 'close') { d.close(); return; }
   if (d._agent !== current) { d.close(); return; }   // the open chat changed while the sheet was open: do not act on another agent
+  if (b.dataset.nk === 'card') { const agent = d._agent; d.close(); openAgentCard(agent, 'OPT-0168'); return; }
   if (b.dataset.nk === 'done') { d.close(); toggleNotifyDone(); }
 }
 async function onNotifyAgentSheetChange(e) {
@@ -2328,7 +2574,7 @@ function researchSimplePaint(d) {
   const old = d.querySelector('#ss-research-sec');
   if (old) old.remove();
   if (!researchPrefOn) return;
-  const anchor = d.querySelector('#ss-style-sec');
+  const anchor = d.querySelector('#ss-notes-sec') || d.querySelector('#ss-style-sec');   // under the Notifications heading
   if (!anchor) return;
   const sec = document.createElement('div'); sec.className = 'ss-sec'; sec.id = 'ss-research-sec';
   const t = document.createElement('div'); t.className = 'ss-title'; t.textContent = 'Deep research';
@@ -2342,7 +2588,7 @@ function researchSimplePaint(d) {
   }
   const hint = document.createElement('div'); hint.className = 'ss-rhint'; hint.textContent = RESEARCH_HINT;
   sec.appendChild(t); sec.appendChild(seg);
-  if (researchPrefChoice === 'always') { const lseg = document.createElement('div'); lseg.className = 'ss-rseg'; lseg.setAttribute('role', 'group'); lseg.setAttribute('aria-label', 'Always yes runs'); researchLevelButtons(lseg, true); sec.appendChild(lseg); }
+  if (researchPrefChoice === 'always') { const lseg = document.createElement('div'); lseg.className = 'ss-rseg'; lseg.setAttribute('role', 'group'); lseg.setAttribute('aria-label', 'Always yes runs'); lseg.setAttribute('data-setting', 'OPT-1037'); researchLevelButtons(lseg, true); sec.appendChild(lseg); }
   sec.appendChild(hint);
   anchor.after(sec);
 }
@@ -2497,10 +2743,9 @@ function bgCountOf(name) {
 function bgStateOf(name, busy, question) {
   return AgentDot.dotState({ busy: !!busy, question: !!question, background: bgCountOf(name) });
 }
-// Tapping a ring or the blue line (or the blue chip): that agent's chat with the "Working on" panel opened.
+// Tapping a ring or the blue line (or the blue chip): that agent's chat (its "Working on" panel starts collapsed like any chat's).
 function bgOpenChat(name) {
   if (!name) return;
-  if (window.HandOffCard && typeof HandOffCard.open === 'function') HandOffCard.open(name);
   navigate('chat', name);
 }
 // The second chip (blue): agents that are free but have background work. Hidden in Simple (CSS) and when there is none.
@@ -2741,34 +2986,12 @@ function buildTeamActivate(bt) { if (!bt.disabled && bt.getAttribute('aria-disab
 function buildSubHtml(name) {
   return `<div class="agent-model agent-build-sub">Solo · ${buildTeamBtnHtml(name, 'build-team-link', 'Build team', true)}</div>`;
 }
-// ── Optimize team (admins): a main agent WITH a team; the chat ⋮ menu entry, sublabel from the estimate ──
+// ── Optimize team (admins): a main agent WITH a team; the agent card's Role and team section starts it ──
 function reviewingTeam(name) { return Object.values(live).some((s) => s && s.reviewingTeamFor === name); }
 const optimizeTeamPending = new Set();   // requests on their way from this page
-const optimizeEstimates = {};            // name -> { days, turns, handOffs }, read once per menu opening
-function optimizeHasTeam() {
-  const s = new Set();
-  if (!isAdmin() || !window.hubTeams) return s;
-  for (const m of window.hubTeams.tree(agents, live).mains) if (m.size) s.add(m.agent.name);
-  return s;
-}
-function optimizeSubText(name) {
-  const e = optimizeEstimates[name];
-  if (!e) return 'reads the last 30 days';
-  return 'reads ' + (Number(e.days) || 30) + ' days: ' + (Number(e.turns) || 0) + ' turns, ' + (Number(e.handOffs) || 0) + ' hand-offs';
-}
-async function optimizeEstimateLoad(name) {
-  delete optimizeEstimates[name];
-  menuTeamSync();
-  try {
-    const r = await api('/api/agents/' + encodeURIComponent(name) + '/optimize-team/estimate');
-    const d = r && r.ok ? await r.json() : null;
-    if (d && typeof d === 'object') { optimizeEstimates[name] = { days: d.days, turns: d.turns, handOffs: d.handOffs }; menuTeamSync(); }
-  } catch { /* the sublabel stays "reads the last 30 days" */ }
-}
 async function optimizeTeamStart(name) {
   if (!name || reviewingTeam(name) || optimizeTeamPending.has(name)) return;
   optimizeTeamPending.add(name);
-  menuTeamSync();
   try {
     const r = await api('/api/agents/' + encodeURIComponent(name) + '/optimize-team', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     let d = null;
@@ -2779,7 +3002,6 @@ async function optimizeTeamStart(name) {
     toast(`Could not start the review: ${err.message}`, 5000);
   } finally {
     optimizeTeamPending.delete(name);
-    menuTeamSync();
   }
 }
 async function buildTeamStart(name) {
@@ -3273,6 +3495,67 @@ function applyRoute(state) {
   else show(state.screen === 'activity' ? 'activity' : 'agents');
 }
 
+// "Ask Maestro about this" (the ⓘ sheet, lib/ui-settings-help.js): open the lead agent's chat and put the question in its message
+// box, WITHOUT sending. The sheet calls window.mmAskLead; the Settings frame (a separate page) opens /mobile#ask-lead=<text>,
+// which askLeadStart handles on load and on hashchange, then drops the hash.
+// Closes the Settings frame's sheet through its own guard and says whether it really closed: true once the frame reports
+// closed (or the sheet had nothing of Settings in it); false when the frame keeps Settings open ("Discard changes?", a save
+// running) or does not answer. Nothing is navigated before that.
+function askCloseSettingsSheet() {
+  return new Promise((resolve) => {
+    const s = settingsSheet;
+    if (!s) { resolve(true); return; }
+    let t = null, asking = false;
+    const t0 = Date.now();
+    const fin = (v) => { clearInterval(t); window.removeEventListener('message', on); resolve(v); };
+    const on = (e) => {
+      if (!settingsSheet || e.source !== s.frame.contentWindow || e.origin !== location.origin) return;
+      const type = e.data && e.data.type;
+      if (type === 'mm-settings-asking') asking = true;   // "Discard changes?" is up: wait for the answer, with no limit
+      else if (type === 'mm-settings-kept') fin(false);   // the final outcome: Keep editing, a save running, an inner box closed
+    };
+    window.addEventListener('message', on);
+    settingsSheetRequestClose();
+    if (!settingsSheet) { fin(true); return; }
+    // Discard closes the sheet (the frame says closed); a frame that says nothing at all is given up on after 9 s
+    t = setInterval(() => { if (!settingsSheet) fin(true); else if (!asking && Date.now() - t0 > 9000) fin(false); }, 50);
+  });
+}
+function askLeadEnv() {
+  return {
+    tries: 60,   // the chat may fetch its history before the box is there
+    findLead: () => agents.find((a) => a && a.lead) || null,
+    beforeOpen: async () => {   // the Settings frame and any open sheet go through their own guards (unsaved changes are asked about); the chat opens only once they have really closed
+      if (settingsSheet && !(await askCloseSettingsSheet())) return false;
+      for (const d of [...document.querySelectorAll('dialog[open]')]) {
+        if (d.classList.contains('dlg-discard')) continue;
+        if (!(await window.hubSettingsHelp.closeGuarded(d, (el) => dialogGuard.requestClose(el, 'close'), { doc: document }))) return false;
+      }
+      return true;
+    },
+    openChat: (name) => { navigate('chat', name); },
+    getBox: (name) => (current === name ? $('msg-input') : null),
+    clearHash: () => window.history.replaceState(window.history.state, '', location.pathname + location.search),
+  };
+}
+function askLeadStart() {
+  const H = window.hubSettingsHelp;
+  if (!H) return;
+  window.mmAskLead = (text) => H.askFill(text, askLeadEnv());
+  const run = () => { H.handleAskHash(location.hash, askLeadEnv()).catch(() => {}); };
+  window.addEventListener('hashchange', run);
+  run();
+}
+// The ⓘ help in the phone-native sheets: each is one element that is painted again when it opens, so the buttons are put in as rows arrive.
+function helpMountPhone() {
+  const H = window.hubSettingsHelp;
+  if (!H) return;
+  for (const id of ['notify-prefs-sheet', 'notify-agent-sheet', 'research-sheet', 'profile-sheet', 'security-sheet', 'voice-panel', 'rsn-sheet']) {
+    const el = $(id);
+    if (el) H.mount(el, 'phone').catch(() => {});
+  }
+}
+
 function routeFromHash() {
   const h = location.hash || '';
   const m = h.match(/^#chat=(.+)$/);
@@ -3705,7 +3988,21 @@ function autoInfoOf(entry) {
     else if (o.kind === 'hand_off') label = o.label ? o.label.replace(/^Hand-off\b/, 'Task') : `Task from ${from || 'another agent'}`;
     else if (o.kind === 'hand_off_report') label = o.label ? o.label.replace(/^Hand-off\b/, 'Task') : 'Task finished';
     else if (o.kind === 'alert') label = 'Monitor alert';
+    else if (o.kind === 'research_report') label = 'Research finished';
     else label = 'Hub turn';
+    // A research turn says what it is once: the row reads "Research finished" (or failed / stopped / made thorough), the time, then the question in
+    // quotes (never the label again), and no "from …" line follows the reply. Both come from the turn's own message, never from the origin.
+    if (o.kind === 'research_report') {
+      const rm = /^\[Deep research (finished|failed|interrupted|stopped|made thorough)\] "([\s\S]*?)" \((?:id )?dr-[0-9a-f]{8}/.exec(typeof entry.content === 'string' ? entry.content.trimStart() : '');
+      let note = '';
+      if (rm) {
+        label = 'Research ' + rm[1];
+        const q = rm[2].replace(/\s+/g, ' ').trim();
+        const cut = q.length > 120 ? q.slice(0, 119).trimEnd() + '…' : q;
+        note = cut ? '“' + cut + '”' : '';
+      }
+      return { kind, from, label, noFrom: true, note };
+    }
     return { kind, from, label };
   }
   const text = typeof entry.content === 'string' ? entry.content.trimStart() : '';
@@ -3805,7 +4102,7 @@ function autoGroupHistory(history, from = 0, { stackMin = AUTO_STACK_MIN } = {})
     }
     const own = indexes.some((k) => autoOwnOrigin(history[k].origin));
     const open = indexes.filter((k) => history[k].role === 'assistant' && (history[k].for_owner === true || own));
-    items.push({ type: 'card', kind: last.kind, from: last.from, label: last.label, work: lastWork, ts: firstTs, indexes, open, firstLine: autoCardLine(history, indexes, last.label) });
+    items.push({ type: 'card', kind: last.kind, from: last.from, label: last.label, work: lastWork, ts: firstTs, indexes, open, firstLine: last.noFrom ? last.note || '' : autoCardLine(history, indexes, last.label), ...(last.noFrom ? { noFrom: true, note: last.note || '' } : {}) });
     i = j;
   }
   const out = [];
@@ -8311,7 +8608,7 @@ function renderAutoCard(it, times, host = chatEl(), list = chatHistory, timeFn =
   const open = new Set(it.open);
   withRenderTarget(card.body, () => { for (const i of it.indexes) if (!open.has(i)) renderEntry(list[i], times[i]); });
   withRenderTarget(host === chatEl() ? null : host, () => {
-    for (const i of it.open) { addFromLine(it.label); renderEntry(list[i], times[i]); }
+    for (const i of it.open) { if (!it.noFrom) addFromLine(it.label); renderEntry(list[i], times[i]); }
   });
 }
 
@@ -8491,9 +8788,11 @@ async function openChat(name) {
   current = name; if (typeof voiceHintSync === 'function') voiceHintSync();   // a chat switch takes the hint down
   try { if (window.HandOffCard && typeof HandOffCard.follow === 'function') HandOffCard.follow(); } catch { /* the timer tick follows */ }   // the "Working on" panel follows the chat at once
   teamSetupSlotPaint();   // the lead's chat: the Set up teams offer, the Undo for a team just set up
+  try { window.FeatureCard && FeatureCard.chatShown(name, $('messages')); } catch { /* cosmetic */ }   // the lead's chat: the new-features card at the end of the list
   localStorage.setItem('hub-mobile-last', name);
   voiceStatusRefresh();   // the mic button shows only while the hub voice is on and ready
   researchLinePaint(); researchLineLoad(name);   // the deep research progress line
+  changeStripLoad();   // what the lead changed in the last 24 h (only in the lead's chat)
   if (!same && $('files-sheet')?.open) filesRefresh(); // the Files sheet follows the open agent
   $('chat-icon').textContent = a?.icon || '🤖';
   $('chat-name').textContent = a?.display || name;
@@ -9214,9 +9513,21 @@ function workerListPick(entries, now, activeId) {
   for (const i of items) counts[i.state === 'running' ? 'running' : i.state === 'failed' ? 'failed' : 'done']++;
   return { items, gone, counts, alert: items.some(i => i.state === 'failed' && !i.failSeen) };
 }
+// The chip reads "Workers: 3 working · 11 done" ("Workers" is what the list it opens is called); "Workers" alone when nothing is listed.
+function workerButtonParts(counts) {
+  if (!counts.running && !counts.done && !counts.failed) return { noun: 'Workers', counts: '' };
+  return { noun: 'Workers', counts: `${counts.running} working · ${counts.done} done${counts.failed ? ` · ${counts.failed} failed` : ''}` };
+}
 function workerButtonLabel(counts) {
-  if (!counts.running && !counts.done && !counts.failed) return 'Workers';
-  return `${counts.running} working · ${counts.done} done${counts.failed ? ` · ${counts.failed} failed` : ''}`;
+  const p = workerButtonParts(counts);
+  return p.counts ? `${p.noun}: ${p.counts}` : p.noun;
+}
+// Sets the chip's .wb-label: the noun and the counts in their own spans when it has them (so the noun can truncate, never the counts).
+function setWorkerButtonLabel(el, counts) {
+  const p = workerButtonParts(counts);
+  const n = el.querySelector ? el.querySelector('.wb-noun') : null, c = el.querySelector ? el.querySelector('.wb-counts') : null;
+  if (n && c) { n.textContent = p.counts ? p.noun + ':' : p.noun; c.textContent = p.counts ? ' ' + p.counts : ''; }
+  else el.textContent = workerButtonLabel(counts);
 }
 function fmtWorkerClock(ms) {
   const t = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
@@ -9547,7 +9858,7 @@ function wkRefresh() {
   const btn = $('chat-workers-btn');
   if (btn) {
     btn.hidden = !items.length && !hubCount;
-    btn.querySelector('.wb-label').textContent = workerButtonLabel({ ...counts, running: counts.running + hubCount });
+    setWorkerButtonLabel(btn.querySelector('.wb-label'), { ...counts, running: counts.running + hubCount });
     btn.classList.toggle('busy', counts.running + hubCount > 0);
     btn.classList.toggle('alert', alert);
   }
@@ -11045,21 +11356,57 @@ function voiceCallSseReadFull(rec, turnId) {
   vc.readFull = g.state;
   if (g.action === 'set') vc.call.onReadFull();   // a late chunk of an earlier turn is ignored
 }
-async function voiceDispPaintPanel() {
+// A picker skipped because it had focus keeps the latest result and gets ONE 'blur' listener that refills it then, only if it is still
+// connected and no newer paint happened since (isLatest()). A newer skipped result replaces the pending one; never two listeners on one select.
+const voiceDispPendingBlur = new WeakMap();
+function voiceDispRefillOnBlur(sel, args, isLatest) {
+  const have = voiceDispPendingBlur.get(sel);
+  if (have) { have.args = args; have.isLatest = isLatest; return; }
+  const ent = { args, isLatest };
+  voiceDispPendingBlur.set(sel, ent);
+  sel.addEventListener('blur', () => {
+    voiceDispPendingBlur.delete(sel);
+    if (sel.isConnected === false || !ent.isLatest()) return;
+    CallDisplay.fillDisplaySelect(document, sel, ent.args);
+  }, { once: true });
+}
+async function voiceDispPaintPanel(asked) {   // asked === true: the person pressed Try now (the note says "Checking…" while it runs)
   const sels = [$('vp-display'), $('cp-display')].filter(Boolean);   // the voice sheet's select and the call panel's
   if (!sels.length || typeof CallDisplay === 'undefined') return;
   const paintBoxes = (p) => { const cap = $('vp-captions'); if (cap) cap.checked = !!p.captions; const intr = $('vp-interrupt'); if (intr) intr.checked = p.interrupt === true; };   // set at once, and again after the wait
   paintBoxes(CallDisplay.loadDisplayPrefs(localStorage));
   const my = voiceDisp.paintGen = (voiceDisp.paintGen || 0) + 1;
-  let packs = [], available = [], state = 'ready';
-  try { const got = await CallDisplay.fetchFaces((...a) => fetch(...a)); packs = got.packs; available = got.available; } catch { state = 'failed'; }
+  // the last good list on this page (kept when a list arrives): an interim paint reuses it, so other installed characters never vanish during a repaint
+  const good = voiceDisp.lastGood;
+  let packs = good ? good.packs : [], available = good ? good.available : [], state = 'loading', failKind = null;
+  const fillAll = (prefs) => {
+    const names = CallDisplay.loadPackNames(localStorage);
+    const shown = state === 'loading' && good && (!prefs.choice.startsWith('pack:') || packs.some((p) => 'pack:' + p.id === prefs.choice) || available.some((a) => 'pack:' + a.id === prefs.choice)) ? 'ready' : state;   // "loading" only for a chosen pack the last good list lacks
+    for (const sel of sels) {
+      if (sel.isConnected === false) continue;
+      const args = { choice: prefs.choice, packs, available, state: shown, names };
+      if (document.activeElement === sel) { voiceDispRefillOnBlur(sel, args, () => voiceDisp.paintGen === my); continue; }   // an open picker is not refilled now; on blur with the latest result
+      CallDisplay.fillDisplaySelect(document, sel, args);
+    }
+  };
+  fillAll(CallDisplay.loadDisplayPrefs(localStorage));   // paint once as "loading" so the panel never shows a stale picker while the list is awaited
+  const note0 = $('vp-display-note');
+  if (note0) {   // a stale note never stays through the loading paint; after Try now it says "Checking…" with the button disabled
+    note0.textContent = asked === true ? 'Checking…' : '';
+    CallDisplay.paintListRetry(document, note0, asked === true, { checking: true });
+  }
+  try { const got = await CallDisplay.fetchFaces((...a) => fetch(...a)); packs = got.packs; available = got.available; state = 'ready'; CallDisplay.rememberPackNames(localStorage, got); } catch (e) { state = 'failed'; failKind = e && e.kind; packs = []; available = []; }   // a failed list shows the chosen character as "can't check", never the cached entry
   if (voiceDisp.paintGen !== my) return;   // a newer paint started meanwhile: an older answer never puts back an older choice
+  if (state === 'ready') voiceDisp.lastGood = { packs, available };   // only the newest answer updates the cache the interim paint reuses
   const prefs = CallDisplay.loadDisplayPrefs(localStorage);   // read after the wait: a choice made meanwhile counts
   paintBoxes(prefs);
-  for (const sel of sels) if (sel.isConnected !== false && document.activeElement !== sel) CallDisplay.fillDisplaySelect(document, sel, { choice: prefs.choice, packs, available });
+  fillAll(prefs);
   const note = $('vp-display-note');
-  const resolved = CallDisplay.resolveDisplay({ choice: prefs.choice, agentDefault: voiceDispAgentDefault(current), packs, available, packsState: state });
-  if (note) note.textContent = CallDisplay.displayNote(resolved);
+  const resolved = CallDisplay.resolveDisplay({ choice: prefs.choice, agentDefault: voiceDispAgentDefault(current), packs, available, packsState: state, packsFailKind: failKind });
+  if (note) {   // nothing retries by itself here: a failed list (not a sign-in one) gets a Try now button that repaints at once
+    note.textContent = CallDisplay.displayNote(resolved, { retrying: false });
+    CallDisplay.paintListRetry(document, note, resolved.listFailed === true && failKind !== 'signin', { checking: false, onClick: () => voiceDispPaintPanel(true) });
+  }
   // a character on the hub's list but not installed is downloaded now (one download per id for the page); its progress shows under the note
   if (resolved.downloadable === true && resolved.wanted) {
     const a = available.find((x) => x.id === resolved.wanted);
@@ -12882,6 +13229,7 @@ async function sendMessage(fallback) {
   const userEl = fallback ? fallback.userEl : addUserBubble(text, images);
   if (!fallback) setBubbleTime(userEl, msgTimeLabel(Date.now()));
   const bubble = addAssistantBubble();
+  try { window.FeatureCard && FeatureCard.messageArrived($('messages')); } catch { /* cosmetic */ }   // a live send: the person's message and the reply bubble just landed
   bubble.body.innerHTML = '<span style="opacity:.6">⏳ Thinking…</span>';
   scrollChat(true);
 
@@ -13314,11 +13662,29 @@ function retireSoon(el, ms = RETIRE_AFTER_MS) {
 // ── retire helpers (end) ──
 
 // An answered or closed question box says how it ended, then leaves a few seconds later (lib/ui-retire.js).
-function closeQuestion(requestId, how) {
+const questionTexts = new Map();   // request_id -> the question texts of that box (for the line that says nobody answered)
+// What a question says once nobody answered (the same words on the desktop page). A deep research card ("{Agent} asks: research this? “{Q}” …")
+// says what was asked and how long nobody answered; any other card keeps its first sentence and adds that nobody answered.
+function questionNoAnswerLine(text, waitedSeconds) {
+  const t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+  const m = /^(.+?) asks: research this\? “([\s\S]*?)”(?= This looks like a research question\.)/.exec(t);
+  if (m) return `${m[1]} asked whether to research “${m[2]}”. ` + (Number(waitedSeconds) > 0 ? `Nobody answered within ${researchWaitWords(waitedSeconds)}.` : 'Nobody answered in time.');
+  const first = (/^[\s\S]*?[.!?](?=\s|$)/.exec(t) || [t + '.'])[0];
+  return first + ' Nobody answered in time.';
+}
+function closeQuestion(requestId, how, waitedSeconds, stopped) {
   const box = questionBoxes.get(requestId);
+  const texts = questionTexts.get(requestId);
+  questionTexts.delete(requestId);
   if (!box) return;
+  if (how === 'no_answer' && Number(waitedSeconds) > 0 && texts && texts.length) {
+    // nobody answered: each question line says what happened (one muted line per question)
+    box.textContent = '';
+    for (const t of texts) { const d = document.createElement('div'); d.className = 'done'; d.textContent = questionNoAnswerLine(t, waitedSeconds); box.appendChild(d); }
+  } else
   // The hub's outcome, unless it confirms the answer this box already shows ("Answered: …", sent from here)
-  if (how !== 'answered' || !box.querySelector('.done')) box.innerHTML = `<div class="done">${how === 'no_answer' ? 'No answer in time; the agent carried on' : how === 'skipped' ? 'Skipped' : 'Answered elsewhere'}</div>`;
+  // a question the stopped turn closed was not left unanswered by anyone: say what happened
+  if (how !== 'answered' || !box.querySelector('.done')) box.innerHTML = `<div class="done">${how === 'no_answer' ? (stopped === true ? 'Question closed when the turn stopped' : 'No answer in time; the agent carried on') : how === 'skipped' ? 'Skipped' : 'Answered elsewhere'}</div>`;
   questionBoxes.delete(requestId);
   retireSoon(box);
 }
@@ -13335,6 +13701,7 @@ function showQuestion(data, onAnswered) {
   const box = document.createElement('div');
   box.className = 'question';
   questionBoxes.set(request_id, box);
+  questionTexts.set(request_id, questions.map(q => String((q && q.question) == null ? '' : q.question)));
   if (typeof voiceHintSync === 'function') voiceHintSync();   // a question appearing takes the hint down
   const submit = (answers, label, checked) => {
     if (onAnswered) onAnswered();
@@ -13348,6 +13715,43 @@ function showQuestion(data, onAnswered) {
       .catch(err => toast(`Could not send answer: ${err.message}`));
     box.innerHTML = `<div class="done">Answered: ${esc(label)}</div>`;   // kept in questionBoxes until the hub confirms or closes it
   };
+  // A card the hub built for a change (fixed: true, lib/settings-tool): the change as rows, Confirm and Cancel; no text box.
+  // The answer is exactly one of the two choices.
+  const FH = typeof window !== 'undefined' ? window.hubSettingsHelp : null;
+  if (FH && FH.isFixedCard(data) && questions[0]) {
+    const pick = (label) => ((questions[0].options || []).find((o) => o && String(o.label) === label) || { label }).label;
+    box.classList.add('question-fixed');
+    const t = document.createElement('div');
+    t.className = 'qt';
+    t.textContent = questions[0].question || '';
+    box.appendChild(t);
+    const rows = document.createElement('dl');
+    rows.className = 'qrows';
+    for (const [k, v] of FH.fixedRows(data.change)) {
+      if (k) { const dt = document.createElement('dt'); dt.textContent = k; rows.appendChild(dt); }
+      const dd = document.createElement('dd');
+      if (!k) dd.className = 'qrow-note';
+      dd.textContent = v;
+      rows.appendChild(dd);
+    }
+    box.appendChild(rows);
+    const acts = document.createElement('div');
+    acts.className = 'qactions';
+    const grp = document.createElement('span');
+    grp.className = 'qbuttons';
+    const cancel = document.createElement('button');
+    cancel.type = 'button'; cancel.className = 'qcancel'; cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => submit({ '0': pick('Cancel') }, 'Cancel'));
+    const confirm = document.createElement('button');
+    confirm.type = 'button'; confirm.className = 'qsubmit'; confirm.textContent = 'Confirm';
+    confirm.addEventListener('click', () => submit({ '0': pick('Confirm') }, 'Confirm'));
+    grp.appendChild(cancel); grp.appendChild(confirm);
+    acts.appendChild(grp);
+    box.appendChild(acts);
+    chatEl().appendChild(box);
+    scrollChat();
+    return;
+  }
   // The hub's "Skip" choice (ask_user allow_skip) is a Skip button beside Submit that answers at once; with several
   // questions each keeps its own Skip choice and the button skips them all (as on the desktop page).
   const isSkip = (o) => o && String(o.label || '').trim().toLowerCase() === 'skip';
@@ -13463,6 +13867,13 @@ function showQuestion(data, onAnswered) {
   refresh();
   chatEl().appendChild(box);
   scrollChat();
+  // A box taller than the chat's visible area would have scrolled past its question: it opens with its top at the top of that area instead,
+  // and the chat stops following new text (stick), so a later delta does not scroll past it again (review r8: the viewport is #chat-scroll)
+  const view = typeof $ === 'function' ? $('chat-scroll') : null;
+  if (view && box.offsetHeight > view.clientHeight && box.getBoundingClientRect && view.getBoundingClientRect) {
+    view.scrollTop += box.getBoundingClientRect().top - view.getBoundingClientRect().top;
+    stick = false;
+  }
 }
 
 // ── Action approvals: tool calls the agent's policy marks "ask" ─────────────
@@ -14126,12 +14537,13 @@ function connectEvents() {
   on('for_owner', onForOwner);
   on('turn_notify', onTurnNotify);
   on('research_progress', researchLineApply);
-  on('hello', () => { if (screen === 'chat' && current) researchLineLoad(current); });   // after a reconnect: the runs as they are now
+  on('settings_changed', () => { changeStripLoad(); reviewRefresh().catch(() => {}); });   // the lead changed a setting: the strip in its chat follows
+  on('hello', () => { if (screen === 'chat' && current) { researchLineLoad(current); changeStripLoad(); } });   // after a reconnect: the runs as they are now
   on('ask_user', (ev) => {
     setLive(ev.agent, { busy: true, pendingQuestion: true }); paintStatus();
     // The question itself: shown now if that chat is open, else kept until it is (dedup by request id in showQuestion).
     if (ev.request_id && Array.isArray(ev.questions)) {
-      const q = { request_id: ev.request_id, questions: ev.questions, agent: ev.agent };
+      const q = { request_id: ev.request_id, questions: ev.questions, agent: ev.agent, ...(ev.fixed === true ? { fixed: true, change: ev.change } : {}) };
       if (chatOpenFor(ev.agent)) showQuestion(q);
       else {
         pendingQuestionsByAgent.set(ev.agent, q);
@@ -14139,7 +14551,7 @@ function connectEvents() {
       }
     }
   });
-  on('ask_user_done', (ev) => { if (!ev) return; pendingQuestionsByAgent.delete(ev.agent); if (ev.request_id) closeQuestion(ev.request_id, ev.result); });
+  on('ask_user_done', (ev) => { if (!ev) return; pendingQuestionsByAgent.delete(ev.agent); if (ev.request_id) closeQuestion(ev.request_id, ev.result, ev.waitedSeconds, ev.stopped); });
   on('ask_user_done', (ev) => { setLive(ev.agent, { pendingQuestion: false }); paintStatus(); });
   // A Do it on a set-up card wrote reporting lines: the lead's chat shows "Undo this team" at once; the lists follow.
   on('team_setup_recorded', (ev) => { if (!ev) return; if (ev.id) teamSetupRecent.add(String(ev.id)); loadAgents(); teamSetupLoadSoon(); });
@@ -14160,7 +14572,13 @@ function connectEvents() {
   on('compaction_progress', onCompactionProgress);
   on('compaction_end', onCompactionEnd);
   on('agent_updated', onAgentUpdated);
+  // The agent card (lib/ui-agent-card.js) follows the same events through this page's stream, not one of its own.
+  on('agent_updated', (ev) => { agentCardEmit('agent_updated', ev); });
+  on('agent_renamed', (ev) => { agentCardEmit('agent_renamed', ev); });
+  on('settings_changed', (ev) => { agentCardEmit('settings_changed', ev); });
+  $('chat-model-pick')?.addEventListener('change', modelPickCardLine);
   $('chat-model-pick')?.addEventListener('change', changeModelFromPick);
+  $('chat-name')?.addEventListener('click', (e) => { if (current && agentByName(current) && openAgentCard(current)) e.stopPropagation(); });   // the name opens the agent's card (the ⋮ menu's "Agent settings" item is gone); the status line under it still shows what the agent is doing
   $('chat-title')?.addEventListener('click', showChatStatus);   // the name or the status under it: what the agent is doing, in full
   $('chat-effort-pick')?.addEventListener('change', changeEffortFromPick);
   on('model_fallback', (ev) => toast(`${displayName(ev.agent)}: ${String(ev.from || '').split('/').pop()} at its weekly limit; running on ${String(ev.to || '').split('/').pop()} until ${ev.resetsAt ? new Date(ev.resetsAt).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'it resets'}`));
@@ -14224,7 +14642,7 @@ function resyncClick() {
 }
 
 // Deep research progress line (the hub's research_progress event, GET /api/research/status): one text line per active run
-// above the message box, in the style of the hand-off Tasks line. Text only; gone when the run is delivered or failed.
+// above the message box, in the style of the hand-off Tasks line. Text only; gone when the run is delivered, failed or stopped.
 const researchRuns = new Map();   // agent -> Map(run id -> { id, level, stage, label, done, total, startedAt })
 function researchLineText(run, now) {
   const lv = String((run && run.level) || 'quick');
@@ -14235,33 +14653,170 @@ function researchLineText(run, now) {
   if (t0 > 0) { const mins = Math.floor(Math.max(0, (now === undefined ? Date.now() : now) - t0) / 60000); text += ' · ' + (mins < 1 ? 'just started' : `${mins} min`); }
   return text;
 }
+// The notice for a run an agent started without asking (startedBy 'agent', 'no-answer' or 'always'): a small card with who, the question, why, the cost,
+// the progress text and, while it runs, the buttons Stop and Make it thorough. The same words on the desktop page, the phone and Simple.
+// Names, questions and reasons are set with textContent only. A run the person started (or made thorough) keeps the plain line.
+const RESEARCH_NOTICE_SHOW_MS = 20000;   // how long "Stopped. ..." / "Thorough research started. ..." stays after the click
+function researchAgentName(agent) { return typeof displayName === 'function' ? (displayName(agent) || String(agent)) : String(agent); }
+function researchToast(text) { toast(text); }
+function researchNoticePost(path, id) { return api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }); }
+function researchWaitWords(sec) {
+  const s = Math.max(0, Math.round(Number(sec) || 0));
+  if (s >= 60 && s % 60 === 0) { const m = s / 60; return m === 1 ? '1 minute' : `${m} minutes`; }
+  return s === 1 ? '1 second' : `${s} seconds`;
+}
+// 'upgrade' (a run Make it thorough started) is a notice too, so after the click the box holds one bar for it, not a line beside the old run's outcome
+function researchNoticeOn(run) { return !!run && (run.startedBy === 'agent' || run.startedBy === 'no-answer' || run.startedBy === 'always' || run.startedBy === 'upgrade'); }
+const RESEARCH_UPGRADE_TEXT = 'Thorough research started. Its report will come here.';
+// In the collapsed title a long agent name is cut to 20 characters (the words after it are never cut); opened, the full name shows.
+function researchShortName(who) { const s = String(who); return s.length > 20 ? s.slice(0, 20) + '…' : s; }
+// A notice is one line until it is opened (▾): the title, Stop, ▾ and ×. Opened, it adds the question in full, why, the cost, the progress and
+// Make it thorough. Which notices are open, and which were dismissed with ×, is kept by run id (so a redraw never closes or brings back one).
+const researchOpen = new Set();        // run ids whose notice is opened
+const researchGroupOpen = new Set();   // agents whose "N research runs started by agents" line is opened
+const researchDismissed = new Set();   // run ids hidden with × on this page (kept for the page's life; a reload may show them again)
+function researchNoticeTitle(run, agent, cut) {
+  const who = cut ? researchShortName(researchAgentName(agent)) : researchAgentName(agent);
+  if (run.startedBy === 'upgrade') return RESEARCH_UPGRADE_TEXT;
+  if (run.startedBy === 'always') return `${who} started a ${run.level === 'thorough' ? 'thorough' : 'quick'} research run because you chose Always yes.`;
+  if (run.startedBy === 'no-answer' && !(Number(run.waitSeconds) > 0)) return `${who} started a quick research run without asking, as your settings allow.`;   // a wait of 0 asks nobody
+  return run.startedBy === 'no-answer' ? `Nobody answered within ${researchWaitWords(run.waitSeconds)}, so ${who} started a quick research run.` : `${who} started a quick research run for its work.`;
+}
+function researchToggleSet(set, key) { if (set.has(key)) set.delete(key); else set.add(key); researchLinePaint(); }
+function researchSmallButton(cls, text, label, onclick) {
+  const b = document.createElement('button'); b.type = 'button'; b.className = cls; b.textContent = text; b.onclick = onclick;
+  if (label) b.setAttribute('aria-label', label);
+  return b;
+}
+function researchToggleButton(open, onclick) {
+  const b = researchSmallButton('research-toggle', open ? '▴' : '▾', open ? 'Hide details' : 'Show details', onclick);
+  b.setAttribute('aria-expanded', open ? 'true' : 'false');
+  return b;
+}
+function researchGroupEl(count, agent) {
+  const d = document.createElement('div');
+  d.className = 'ho-card research-notice research-group';
+  d.setAttribute('role', 'status');
+  const head = document.createElement('div'); head.className = 'research-head'; d.appendChild(head);
+  const t = document.createElement('div'); t.className = 'ho-title'; t.textContent = `${count} research runs started by agents`; head.appendChild(t);
+  head.appendChild(researchToggleButton(researchGroupOpen.has(agent), () => researchToggleSet(researchGroupOpen, agent)));
+  return d;
+}
+function researchNoticeEl(run, now, agent) {
+  const id = String(run.id);
+  const closed = !!run.outcome;   // after Stop or Make it thorough: one line and ×
+  const open = !closed && researchOpen.has(id);
+  const d = document.createElement('div');
+  d.className = 'ho-card research-notice';
+  d.setAttribute('role', 'status');
+  const head = document.createElement('div'); head.className = 'research-head'; d.appendChild(head);
+  const add = (cls, text) => { const p = document.createElement('div'); p.className = cls; p.textContent = text; d.appendChild(p); return p; };
+  const btns = [];
+  const act = (to, label, cls, what) => { const b = document.createElement('button'); b.type = 'button'; b.className = cls; b.textContent = label; b.disabled = !!run.busy; b.onclick = () => researchNoticeAct(run, agent, what, btns); btns.push(b); to.appendChild(b); };
+  // collapsed: at most two lines (CSS clamp) and a long agent name cut to 20 characters; opened: the full title, not clamped
+  const title = document.createElement('div'); title.className = open ? 'ho-title' : 'ho-title research-title-clamp'; title.textContent = closed ? run.outcome : researchNoticeTitle(run, agent, !open); head.appendChild(title);
+  if (!closed && run.active !== false) act(head, 'Stop', 'wo-stop', 'stop');
+  if (!closed) head.appendChild(researchToggleButton(open, () => researchToggleSet(researchOpen, id)));
+  head.appendChild(researchSmallButton('research-x', '×', 'Dismiss', () => { researchDismissed.add(id); researchOpen.delete(id); researchLinePaint(); }));
+  if (!open) return d;
+  const q = String(run.question || '').replace(/\s+/g, ' ').trim();
+  if (q) add('research-q', '“' + q + '”');
+  const why = String(run.reason || '').replace(/\s+/g, ' ').trim();
+  if (run.startedBy === 'agent' && why) add('research-why', 'Why: ' + why);
+  if (run.costLine && run.startedBy !== 'upgrade') add('research-cost', String(run.costLine));
+  add('ho-time', researchLineText(run, now));
+  if (run.active !== false && run.upgradable === true) {
+    const row = document.createElement('div');
+    row.className = 'research-actions';
+    act(row, 'Make it thorough', 'ho-status', 'upgrade');
+    d.appendChild(row);
+  }
+  return d;
+}
+async function researchNoticeAct(run, agent, what, btns) {
+  const id = String(run.id);
+  const live = () => (researchRuns.get(agent) && researchRuns.get(agent).get(id)) || run;   // an event may have replaced the record meanwhile
+  if (live().busy) return;
+  live().busy = true;
+  btns.forEach(b => { b.disabled = true; });
+  try {
+    const r = await researchNoticePost('/api/research/' + what, id);
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || j.error) throw new Error((j && j.error) || ('HTTP ' + r.status));
+    // the record may have been dropped by an event that came while the request ran: put it back, closed, with the answer
+    if (!researchRuns.has(agent)) researchRuns.set(agent, new Map());
+    const m = researchRuns.get(agent);
+    const cur = m.get(id) || run;
+    cur.outcome = what === 'stop' ? `Research stopped. ${researchAgentName(agent)} was told.` : RESEARCH_UPGRADE_TEXT;
+    cur.outcomeAt = Date.now(); cur.active = false; cur.upgradable = false; cur.busy = false;
+    m.set(id, cur);
+    researchLinePaint();
+    if (typeof setTimeout === 'function') setTimeout(researchLinePaint, RESEARCH_NOTICE_SHOW_MS + 100);
+  } catch (e) {
+    live().busy = false;
+    btns.forEach(b => { b.disabled = false; });
+    researchToast((e && e.message) || 'Could not reach the hub');
+    researchLinePaint();
+  }
+}
+// What a status entry or a research_progress event tells about a run.
+function researchFields(x) {
+  return { id: String(x.id), level: x.level, stage: x.stage, label: x.label, done: x.done, total: x.total, startedAt: x.startedAt, question: x.question, startedBy: x.startedBy, reason: x.reason, waitSeconds: x.waitSeconds, costLine: x.costLine, active: x.active, upgradable: x.upgradable };
+}
 function researchLineFill(box, agent) {
   if (!box) return;
-  const runs = agent && researchRuns.has(agent) ? [...researchRuns.get(agent).values()].sort((a, b) => (Number(a.startedAt) || 0) - (Number(b.startedAt) || 0)).slice(0, 3) : [];
-  box.textContent = '';
   const now = Date.now();
-  for (const r of runs) { const d = document.createElement('div'); d.className = 'ho-strip research-line'; d.setAttribute('role', 'status'); d.textContent = researchLineText(r, now); box.appendChild(d); }
+  const all = agent && researchRuns.has(agent) ? researchRuns.get(agent) : null;
+  if (all) {   // a closed notice ("Stopped. ...") goes after a short while
+    for (const [id, r] of [...all]) if (r.outcome && now - (r.outcomeAt || 0) > RESEARCH_NOTICE_SHOW_MS) all.delete(id);
+    // the new thorough run is on the page: its notice says "Thorough research started", so the old quick run's confirmation goes (said once)
+    if ([...all.values()].some(r => r.startedBy === 'upgrade' && !r.outcome && !researchDismissed.has(String(r.id)))) for (const [id, r] of [...all]) if (r.outcome === RESEARCH_UPGRADE_TEXT) { all.delete(id); researchEndedAdd(id); }
+    if (!all.size) researchRuns.delete(agent);
+  }
+  const runs = all && all.size ? [...all.values()].filter(r => !researchDismissed.has(String(r.id))).sort((a, b) => (Number(a.startedAt) || 0) - (Number(b.startedAt) || 0)).slice(0, 3) : [];
+  const grouped = runs.filter(researchNoticeOn).length >= 2;   // two or more notices: one line, each run inside it
+  let groupDrawn = false;
+  box.textContent = '';
+  for (const r of runs) {
+    if (researchNoticeOn(r)) {
+      if (grouped && !groupDrawn) { box.appendChild(researchGroupEl(runs.filter(researchNoticeOn).length, agent)); groupDrawn = true; }
+      if (!grouped || researchGroupOpen.has(agent)) box.appendChild(researchNoticeEl(r, now, agent));
+      continue;
+    }
+    const d = document.createElement('div'); d.className = 'ho-strip research-line'; d.setAttribute('role', 'status'); d.textContent = researchLineText(r, now); box.appendChild(d);
+  }
   box.hidden = runs.length === 0;
 }
-const researchEnded = new Set();   // ids of runs that already got a terminal event (delivered or failed); kept small
+const researchEnded = new Set();   // ids of runs that already got a terminal event (delivered, failed or stopped); kept small
 function researchEndedAdd(id) { researchEnded.add(id); if (researchEnded.size > 200) researchEnded.delete(researchEnded.values().next().value); }
 function researchLineApply(ev) {
   if (!ev || !ev.agent || ev.id == null) return;
   const id = String(ev.id);
-  if (ev.state === 'delivered' || ev.state === 'failed') {
+  if (ev.state === 'delivered' || ev.state === 'failed' || ev.state === 'stopped') {
     researchEndedAdd(id);   // a status answer still on its way must not bring this run back
     const m = researchRuns.get(ev.agent);
-    if (m) { m.delete(id); if (!m.size) researchRuns.delete(ev.agent); }
+    if (m) { if (!(m.get(id) && m.get(id).outcome)) m.delete(id); if (!m.size) researchRuns.delete(ev.agent); }   // a closed notice keeps its "Stopped. ..." line a while
   } else {
     if (researchEnded.has(id)) return;
     const old = researchRuns.has(ev.agent) ? researchRuns.get(ev.agent).get(id) : null;
+    if (old && old.outcome) return;   // closed by Stop or Make it thorough
     if (old && Number.isFinite(old.seq) && Number.isFinite(ev.seq) && ev.seq < old.seq) return;   // an older event never overwrites a newer one
     if (!researchRuns.has(ev.agent)) researchRuns.set(ev.agent, new Map());
-    researchRuns.get(ev.agent).set(id, { id, level: ev.level, stage: ev.stage, label: ev.label, done: ev.done, total: ev.total, startedAt: ev.startedAt, seq: ev.seq, seenAt: Date.now() });
+    researchRuns.get(ev.agent).set(id, { ...researchFields(ev), busy: old ? old.busy : false, seq: ev.seq, seenAt: Date.now() });
   }
   researchLinePaint();
 }
 function researchLinePaint() { researchLineFill(document.getElementById('research-lines'), screen === 'chat' ? current : null); }
+// The change strip (lib/ui-settings-help.js stripLoad): one line per change the lead made in the last 24 h, with Undo, above the composer
+// of the lead's chat. State from GET /api/settings-journal?by=lead&since=; loaded when the chat opens and on settings_changed.
+function changeStripLoad() {
+  const H = window.hubSettingsHelp, host = document.getElementById('change-strip');
+  if (!host) return;
+  const lead = agents.find((x) => x && x.lead);
+  if (!H || !lead || current !== lead.name) { host.textContent = ''; host.hidden = true; return; }
+  let store = null; try { store = localStorage; } catch { store = null; }
+  H.stripLoad(host, { doc: document, fetch: (u, o) => fetch(u, o), storage: store }).catch(() => {});
+}
 async function researchLineLoad(agent) {
   if (!agent) return;
   const t0 = Date.now();   // events that arrive from here on are newer than the answer being fetched
@@ -14278,13 +14833,15 @@ async function researchLineLoad(agent) {
       const id = String(x.id);
       inAnswer.add(id);
       if (researchEnded.has(id)) continue;
+      if (x.state === 'stopped') { researchEndedAdd(id); continue; }
       const cur = m.get(id);
       const x_seq = Number(x.seq);
+      if (cur && cur.outcome) continue;
       if (cur && (Number.isFinite(cur.seq) && Number.isFinite(x_seq) ? cur.seq >= x_seq : (cur.seenAt || 0) >= t0)) continue;
-      m.set(id, { id, level: x.level, stage: x.stage, label: x.label, done: x.done, total: x.total, startedAt: x.startedAt, seq: Number.isFinite(x_seq) ? x_seq : undefined, seenAt: t0 });
+      m.set(id, { ...researchFields(x), busy: cur ? cur.busy : false, seq: Number.isFinite(x_seq) ? x_seq : undefined, seenAt: t0 });
     }
     // a run the answer does not list and no event touched since the fetch began has ended
-    for (const [id, e] of [...m]) if (!inAnswer.has(id) && (e.seenAt || 0) < t0) m.delete(id);
+    for (const [id, e] of [...m]) if (!inAnswer.has(id) && (e.seenAt || 0) < t0 && !e.outcome) m.delete(id);
     if (m.size) researchRuns.set(agent, m); else researchRuns.delete(agent);
     researchLinePaint();
   } catch { /* the line stays as it was */ }
@@ -14525,6 +15082,7 @@ function onTurnStart(ev) {
         card = makeFoldHeader(`auto-card auto-card-${autoCardKind(info.kind)}`, info.label, timeLabel(ev.startedAt), 'working…');
         chatEl().appendChild(card.wrap);
       }
+      if (info.noFrom) card.line.textContent = info.note || '';   // a research report's row shows the question, not "working…"
       lastHistoryCard = null;
       // The card now shows this turn live: the waiting bubble of a re-attach would be a second copy of the reply.
       if (raEl) { reasoningEnd(ra); raEl.remove(); reattaches.delete(ev.agent); paintChatStatus(); retired = true; }
@@ -14534,6 +15092,7 @@ function onTurnStart(ev) {
         if (!card) addNote(`⚡ ${ev.origin?.kind === 'user' ? 'sent from another device' : originLabel(ev.origin)} — ${timeLabel()}`);
         setBubbleTime(addUserBubble(ev.message, savedImageUrls(ev.images)), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));   // the pictures the line was sent with
       }
+      try { window.FeatureCard && FeatureCard.messageArrived($('messages')); } catch { /* cosmetic */ }   // a live hub-started turn: its reply bubble is about to land
       return addAssistantBubble('…');
     };
     const lastBefore = chatEl().lastElementChild;
@@ -14556,6 +15115,7 @@ function onTurnStart(ev) {
     // Build Team and Set up teams are the person's own: the reply leaves the card at once, as if marked for the owner.
     if (card && ev.origin && (ev.origin.kind === 'build_team' || ev.origin.kind === 'team_setup' || ev.origin.kind === 'optimize_team')) forOwnerPending[ev.turnId] = { reason: '', at: Date.now() };
     const t = { turnId: ev.turnId, agent: ev.agent, bubble: b, el: b.el, body: b.body, feed: null, startedAt: ev.startedAt || null, prompt: ev.message, card: card ? { ...card, label: info.label } : null, hiddenEls };
+    if (t.card && info.noFrom) { t.card.noFrom = true; t.card.note = info.note || ''; }   // no "from …" line, and the row keeps the question
     hubTurns[ev.turnId] = t;
     // A for_owner that arrived before this card existed: apply it now.
     if (t.card && forOwnerPending[ev.turnId]) { delete forOwnerPending[ev.turnId]; moveReplyOut(t); }
@@ -14647,12 +15207,17 @@ function moveReplyOut(t) {
   if (!panel || anchor.parentNode !== panel) return;
   // replies already moved out after the same block keep their order: this one goes after them
   while (anchor.nextElementSibling && anchor.nextElementSibling.dataset && anchor.nextElementSibling.dataset.autoMoved === '1') anchor = anchor.nextElementSibling;
-  const from = document.createElement('div');
-  from.className = 'auto-from';
-  from.textContent = `from ${t.card.label}`;
-  from.dataset.autoMoved = '1'; t.el.dataset.autoMoved = '1';
-  anchor.after(from);
-  from.after(t.el);
+  t.el.dataset.autoMoved = '1';
+  if (t.card.noFrom) {   // a research report says what it is in its row: no "from …" line
+    anchor.after(t.el);
+  } else {
+    const from = document.createElement('div');
+    from.className = 'auto-from';
+    from.textContent = `from ${t.card.label}`;
+    from.dataset.autoMoved = '1';
+    anchor.after(from);
+    from.after(t.el);
+  }
   t.card.moved = true;
   scrollChat();
 }
@@ -14690,7 +15255,8 @@ function onTurnEnd(ev) {
     setReplyText(t, reply);
     feedEnd(t);
     // The card's line: the reply's first line; a reply that moved out of the card is shown below it, so the prompt's task line instead.
-    if (t.card) t.card.line.textContent = t.card.moved ? promptCardLine(ev.message || t.prompt, t.card.label) : (autoFirstLine(reply) || t.card.label);
+    if (t.card && t.card.noFrom) t.card.line.textContent = t.card.note || '';   // a research report's row keeps the question, never the label again
+    else if (t.card) t.card.line.textContent = t.card.moved ? promptCardLine(ev.message || t.prompt, t.card.label) : (autoFirstLine(reply) || t.card.label);
     setBubbleTime(t.el, msgTimeLine(Date.parse(ev.endedAt) || Date.now(), Date.parse(t.startedAt)));
     rereadHistory(t.agent);   // the finished exchange (its message came from elsewhere), as the hub saved it
     scrollChat();
@@ -14955,7 +15521,7 @@ function wire() {
     const g = e.target.closest('.group-title[data-group]');
     if (g) { collapsed[g.dataset.group] = !collapsed[g.dataset.group]; saveJson('hub-mobile-collapsed', collapsed); renderAgents(); return; }
     const r = e.target.closest('.agent-row');
-    if (r && e.target.closest('.dot.bg-work, .agent-bg-line')) { bgOpenChat(r.dataset.agent); return; }   // the ring or the blue line: the chat with the panel open
+    if (r && e.target.closest('.dot.bg-work, .agent-bg-line')) { bgOpenChat(r.dataset.agent); return; }   // the ring or the blue line: the chat, its panel collapsed like any chat's
     if (r) navigate('chat', r.dataset.agent);
   });
   $('bg-chip')?.addEventListener('click', () => bgOpenChat($('bg-chip').dataset.agent));
@@ -14972,9 +15538,8 @@ function wire() {
   // Esc, Back or a tap outside the approval sheet is Later: hidden until a new request comes, never answered.
   $('approval-sheet').__dialogClose = () => { approvalsHidden = true; paintApprovals(); };
   $('menu-profile')?.addEventListener('click', openProfileSheet);   // ?.: a page cached before Profile existed has no such item
-  $('menu-settings')?.addEventListener('click', settingsSheetOpen);
-  $('menu-build-team')?.addEventListener('click', (e) => { e.stopPropagation(); $('menu').classList.remove('open'); if (current && !$('menu-build-team').disabled) buildTeamStart(current); });   // ?.: a page cached before Settings existed has no such item
-  $('menu-optimize-team')?.addEventListener('click', (e) => { e.stopPropagation(); $('menu').classList.remove('open'); if (current && !$('menu-optimize-team').disabled) optimizeTeamStart(current); });
+  try { if (window.FeatureCard) FeatureCard.openSettings = () => settingsSheetOpen(); } catch { /* cosmetic */ }   // the new-features card's "Settings" link
+  $('menu-settings')?.addEventListener('click', () => settingsSheetOpen());   // no arguments: a tap opens the list (the click event is not a door)
   $('menu-security').addEventListener('click', openSecuritySheet);
   $('menu-files').addEventListener('click', openFilesSheet);
   $('menu-recall').addEventListener('click', openRecallSheet);
@@ -15132,34 +15697,84 @@ function wire() {
   }, 5000);
 }
 
-// ── system health notice (begin) ──
-// Admins only: a red bar at the top of the agent list while the nightly health check has a critical problem. The
-// sign-in items are left out (the setup checklist has its own notice). The phone has no Status page, so the link opens
-// the computer page at Settings → Status. An error or a non-200 answer leaves the bar as it is.
-function healthNoticeItems(view) {
-  return ((view && view.items) || []).filter(i => i && i.level === 'critical' && !String(i.id || '').startsWith('health-signin-'));
+// The phone's health notice is gone (P4-15): a critical health item is a "Fix now" item in For your review and the ONE notice at the top
+// of the agent list (#review-banner, painted by reviewPaint below) shows it, with the first item's fix button.
+
+// ── The count of things for the owner's review (lib/ui-review.js): a number on Settings in the ⋮ menu, a dot on the ⋮ buttons ──
+// Admins only. Read when the page loads, every 5 minutes, after a settings_changed event and when the page comes back to the front.
+let reviewSeq = 0;
+let reviewLastResult = null;   // the last answer reviewPaint drew: Simple's For your review line reads it
+async function reviewRefresh() {
+  const RV = window.hubReview, seq = ++reviewSeq;
+  let r = null;
+  if (RV && hubMe && hubMe.accounts === false && !hubMe.user) {   // a hub with no login at all: the one thing to say, with its Welcome link
+    reviewPaint(RV.build({ accounts: { none: true }, now: Date.now() }));
+    return;
+  }
+  if (RV && hubMe && hubMe.isAdmin === true && hubMe.user) {
+    let input;
+    try { input = await RV.load((u, o) => fetch(u, o), { accounts: { none: hubMe.accounts === false } }); } catch { return; }
+    if (seq !== reviewSeq) return;   // a newer read is on its way
+    input.now = Date.now();
+    try { input.snooze = RV.readSnooze(localStorage, input.now); } catch { input.snooze = {}; }   // the suggestions asked again later (this browser)
+    let extra = [];
+    try { extra = await RV.loadSources((u, o) => fetch(u, o)); } catch { extra = []; }   // modules that registered a source (same list as the desktop)
+    if (seq !== reviewSeq) return;
+    input.previous = reviewLastResult;   // a read that failed keeps what the last result said about it (marked stale)
+    r = RV.merge(RV.build(input), extra, reviewLastResult);
+  }
+  reviewPaint(r);
 }
-let healthNoticeSeq = 0;
-async function paintHealthNotice() {
-  const bar = $('health-notice');
+function reviewPaint(r) {
+  reviewLastResult = r;
+  const RV = window.hubReview;
+  const kind = r && RV ? RV.badgeKind(r) : '';
+  const item = $('menu-settings');
+  if (item) {
+    let c = $('menu-settings-count');
+    if (!kind) { if (c) c.remove(); item.removeAttribute('aria-label'); }
+    else {
+      if (!c) { c = document.createElement('span'); c.id = 'menu-settings-count'; item.appendChild(c); }
+      c.className = `rv-count rv-${kind}`;
+      c.textContent = String(r.count);
+      item.setAttribute('aria-label', RV.gearLabel(r));
+    }
+  }
+  for (const id of ['agents-menu-btn', 'chat-menu-btn']) {
+    const b = $(id);
+    if (!b) continue;
+    for (const k of ['critical', 'warn', 'info']) b.classList.remove(`rv-${k}`);
+    b.classList.toggle('rv-has', !!kind);
+    if (kind) b.classList.add(`rv-${kind}`);
+    b.setAttribute('aria-label', kind ? `Menu, ${r.count} ${r.count === 1 ? 'thing' : 'things'} to fix` : 'Menu');
+  }
+  reviewPaintBanner(r);
+}
+// The ONE notice at the top of the agent list: only while something is in "Fix now" (red). "<first item> (and N more to fix). Open For your review"
+// and the first item's fix button; the link opens Settings at the review group (its page starts with Fix now).
+function reviewPaintBanner(r) {
+  const bar = $('review-banner');
   if (!bar) return;
-  const seq = ++healthNoticeSeq;
-  if (!hubMe || hubMe.isAdmin !== true || !hubMe.user) { bar.hidden = true; bar.textContent = ''; return; }
-  let view = null;
-  try {
-    const r = await api('/api/system-health');
-    if (!r.ok) return;
-    view = await r.json();
-  } catch { return; }
-  if (seq !== healthNoticeSeq) return;   // a newer paint is on its way
-  const crit = healthNoticeItems(view);
-  if (!crit.length) { bar.hidden = true; bar.textContent = ''; return; }
-  bar.innerHTML = `Health: ${crit.map(i => esc(i.title)).join('; ')}. <a href="/?health=1">Open Settings → Status</a>`;
-  for (const i of crit) { const b = typeof ClaudeSignin !== 'undefined' && ClaudeSignin.healthButton(i); if (b) bar.appendChild(b); }
+  const RV = window.hubReview, b = r && RV ? RV.bannerOf(r) : null;
+  if (!b) { bar.hidden = true; bar.textContent = ''; return; }
+  const f = b.fix;
+  bar.innerHTML = `<span class="rvb-text">${esc(b.title)}${b.more > 0 ? ` (and ${b.more} more to fix)` : ''}.</span> <a href="#" class="rvb-open">Open For your review</a>`
+    + (f && f.href ? ` <a href="${esc(f.href)}" class="rvb-fix">${esc(f.label)}</a>` : f && f.api ? ` <button type="button" class="rvb-fix" data-api="${esc(f.api)}" data-method="${esc(f.method || 'POST')}">${esc(f.label)}</button>` : f && f.kind === 'claude-signin' ? ' <span class="rvb-signin"></span>' : '');
+  const open = bar.querySelector('.rvb-open');
+  if (open) open.addEventListener('click', (e) => { if (e.preventDefault) e.preventDefault(); settingsSheetOpen('', 'review'); });
+  const act = bar.querySelector('button.rvb-fix');
+  if (act) act.addEventListener('click', async () => {
+    act.disabled = true;
+    try { const res = await api(act.dataset.api, { method: act.dataset.method || 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); act.textContent = res && res.ok ? 'Done' : 'Failed'; } catch { act.textContent = 'Failed'; }
+    setTimeout(() => reviewRefresh().catch(() => {}), 1500);
+  });
+  const slot = bar.querySelector('.rvb-signin');
+  if (slot) { const s = typeof ClaudeSignin !== 'undefined' ? ClaudeSignin.healthButton({ action: 'claude-signin' }) : null; if (s) slot.appendChild(s); }
   bar.hidden = false;
 }
-document.addEventListener('visibilitychange', () => { if (!document.hidden) paintHealthNotice().catch(() => {}); });
-// ── system health notice (end) ──
+document.addEventListener('visibilitychange', () => { if (!document.hidden) reviewRefresh().catch(() => {}); });
+setInterval(() => reviewRefresh().catch(() => {}), 5 * 60 * 1000);
+// ── review count (end) ──
 
 // ── Multi-user: owner switcher, account menu, Profile and Security sheets ──────
 
@@ -15239,7 +15854,7 @@ function applyMultiUser() {
     }
     if ($('menu-wallet')) $('menu-wallet').hidden = !hubMe.isAdmin;   // admins only
     if ($('menu-profile')) $('menu-profile').hidden = !hubMe.user;
-    if ($('menu-settings')) $('menu-settings').hidden = !hubMe.isAdmin;   // admins only, as the desktop's Settings (the hub refuses its routes to members)
+    if ($('menu-settings')) $('menu-settings').hidden = false;   // everyone: an admin opens all the groups, a member the one "You and this device" (the count on it stays admins only)
     // what an admin sets is in Settings (Notifications: yours, for an agent, deep research); a member keeps them here, their only home
     for (const id of ['menu-notify-prefs', 'menu-notify-agent']) if ($(id)) $(id).hidden = !!hubMe.isAdmin;
     researchPrefPaintAll();
@@ -15386,36 +16001,7 @@ function menuLookName() {
   try { const cur = L.applied(document); const m = (L.LOOKS || []).find(l => l.id === cur); label = m ? m.label : ''; } catch { /* no label */ }
   el.textContent = label ? label + ' ›' : '›';
 }
-// The chat's ⋮ menu: "Agent settings" (admins; the settings page of the open agent) and "Build team" (admins; a main
-// agent with no team). Simple mode shows neither. Run on open and on every status change.
-function menuTeamSync() {
-  const st = $('menu-agent-settings'), bt = $('menu-build-team'), ot = $('menu-optimize-team');
-  if (!st && !bt && !ot) return;
-  const admin = isAdmin() && !(typeof simpleOn === 'function' && simpleOn());
-  const a = current ? agentByName(current) : null;
-  if (st) {
-    st.hidden = !(admin && a);
-    if (a) st.href = '/agent-settings.html?agent=' + encodeURIComponent(a.name);
-  }
-  if (bt) {
-    bt.hidden = !(admin && a && buildNoTeam().has(a.name));
-    const on = !!a && (buildingTeam(a.name) || buildTeamPending.has(a.name));
-    bt.disabled = on;
-    bt.textContent = on ? 'Building…' : '🏗 Build team';
-  }
-  if (ot) {   // a main agent WITH a team, never together with Build team
-    ot.hidden = !(admin && a && optimizeHasTeam().has(a.name));
-    const on = !!a && (reviewingTeam(a.name) || optimizeTeamPending.has(a.name));
-    ot.disabled = on;
-    const label = on ? 'Reviewing…' : '🔍 Optimize team';
-    const lab = $('menu-optimize-label'), sub = $('menu-optimize-sub');
-    if (lab) lab.textContent = label; else ot.textContent = label;
-    if (sub) { sub.textContent = !on && a ? optimizeSubText(a.name) : ''; sub.hidden = on; }
-  }
-}
 function menuOnOpen() {
-  menuTeamSync();
-  if (current && typeof optimizeHasTeam === 'function' && optimizeHasTeam().has(current) && isAdmin() && !(typeof simpleOn === 'function' && simpleOn())) optimizeEstimateLoad(current);   // the size of the review, once per opening
   menuGroupsSync();
   menuAdvDotSync();
   menuLookName();
@@ -15521,7 +16107,7 @@ function paintMemorySheet() {
     body.appendChild(row);
   }
   if (!flagged.length) body.appendChild(wkEl('div', 'mh-item', d.checkedAt ? 'Every agent is fine.' : 'Not checked yet.'));
-  body.appendChild(wkEl('div', 'mh-foot', 'The details are under Settings → Status → Memory on a computer.'));
+  body.appendChild(wkEl('div', 'mh-foot', 'The details are under Settings → Upkeep → Memory on a computer.'));
   body.scrollTop = scroll;
 }
 
@@ -15724,9 +16310,11 @@ function lookPickerPaint(host, onChosen) {
 const SETTINGS_SHEET_URL = '/?settings-only=1&desktop=once';
 const SETTINGS_SHEET_WAIT_MS = 20000;
 let settingsSheet = null;   // { el, frame, ready, timer }
-function settingsSheetOpen() {
+function settingsSheetOpen(doorId, groupId) {
   try { $('menu').classList.remove('open'); } catch { /* no menu */ }
-  if (settingsSheet) return;
+  if (typeof doorId !== 'string' || !/^OPT-\d{1,6}$/.test(doorId)) doorId = '';   // only a record id is a door (an event or anything else opens the list)
+  if (typeof groupId !== 'string' || !/^(review|money)$/.test(groupId)) groupId = '';   // a group door: /?settings-only=1#settings-group=review (the frame shows that group's page)
+  if (settingsSheet) { if (doorId || groupId) { settingsSheet.door = doorId || ''; settingsSheet.group = groupId; settingsSheetLoad(); } return; }
   const el = document.createElement('div');
   el.id = 'settings-sheet';
   el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Settings');
@@ -15735,8 +16323,8 @@ function settingsSheetOpen() {
     '<div class="ssh-btns" hidden><button type="button" class="ssh-retry">Try again</button><button type="button" class="ssh-close">Close</button></div>' +
     '<div class="ssh-btns ssh-stuck" hidden><button type="button" class="ssh-wait-more">Keep waiting</button><button type="button" class="ssh-force">Close anyway</button></div></div>';
   document.body.appendChild(el);
-  settingsSheet = { el, frame: el.querySelector('iframe'), ready: false, timer: null };
-  el.__dialogClose = settingsSheetRequestClose;   // Back: the dialog in the frame decides (unsaved changes, a save running)
+  settingsSheet = { el, frame: el.querySelector('iframe'), ready: false, timer: null, door: doorId || '', group: groupId };
+  el.__dialogClose = () => settingsSheetRequestClose(true);   // Back: the dialog in the frame decides (a group page goes back to the list first; unsaved changes, a save running)
   el.querySelector('.ssh-retry').addEventListener('click', settingsSheetLoad);
   el.querySelector('.ssh-close').addEventListener('click', settingsSheetClosed);
   el.querySelector('.ssh-done').addEventListener('click', settingsSheetClosed);   // shown once the frame left Settings
@@ -15759,7 +16347,20 @@ function settingsSheetLoad() {
   clearTimeout(s.timer);
   s.timer = setTimeout(settingsSheetFailed, SETTINGS_SHEET_WAIT_MS);
   // the chat this phone has open: Settings → Notifications → "For an agent" starts on it
-  s.frame.src = SETTINGS_SHEET_URL + (typeof current === 'string' && current ? '&agent=' + encodeURIComponent(current) : '');
+  // a door (/mobile#settings-for=OPT-xxxx) goes on to the frame as its hash: Settings opens at that record
+  s.frame.src = SETTINGS_SHEET_URL + (typeof current === 'string' && current ? '&agent=' + encodeURIComponent(current) : '') + (s.door ? '#settings-for=' + s.door : s.group ? '#settings-group=' + s.group : '');
+}
+// /mobile#settings-for=OPT-xxxx: the Settings sheet opens at that record (the frame does the finding); the address goes back to what it was.
+function settingsDoorPhone() {
+  const H = window.hubSettingsHelp;
+  const run = () => {
+    const d = H && H.parseDoorHash(location.hash, 'settings-for');
+    if (!d) return;
+    try { window.history.replaceState(window.history.state, '', location.pathname + location.search); } catch { /* the hash stays */ }
+    settingsSheetOpen(d.id);
+  };
+  window.addEventListener('hashchange', run);
+  run();
 }
 // Nothing came back in time (offline, the hub down): a plain message with a retry, never a blank screen.
 function settingsSheetFailed() {
@@ -15783,11 +16384,12 @@ function settingsSheetFrameLoaded() {
   s.el.classList.add('ready');
   s.el.querySelector('.ssh-bar').hidden = false;
 }
-function settingsSheetRequestClose() {
+function settingsSheetRequestClose(back) {
   const s = settingsSheet;
   if (!s) return;
   if (!s.ready) { settingsSheetClosed(); return; }   // nothing of Settings in the frame: nothing to lose
-  try { s.frame.contentWindow.postMessage({ type: 'mm-settings-close' }, location.origin); } catch { settingsSheetClosed(); return; }
+  // Back (back === true) asks the frame to go back a page first: it answers mm-settings-popped, or treats the message as a close request on its list
+  try { s.frame.contentWindow.postMessage({ type: back === true ? 'mm-settings-back' : 'mm-settings-close' }, location.origin); } catch { settingsSheetClosed(); return; }
   // the dialog answers at once (closed, or kept with its question up). No answer: the sheet stays and asks, since the frame
   // may hold changes; it is never closed without the person saying so.
   clearTimeout(s.closeTimer);
@@ -15814,7 +16416,7 @@ function settingsSheetMessage(e) {
   const type = e.data && e.data.type;
   if (type === 'mm-settings-ready') { s.ready = true; s.away = false; clearTimeout(s.timer); s.el.classList.add('ready'); s.el.querySelector('.ssh-bar').hidden = true; }   // back on Settings (after signing in again)
   else if (type === 'mm-settings-closed') settingsSheetClosed();
-  else if (type === 'mm-settings-kept') { clearTimeout(s.closeTimer); settingsSheetKeepWaiting(); dialogGuard.open(s.el); }   // a late answer also clears "isn't answering"   // "Discard changes?", a save running or an inner box closed: the sheet stays, Back works again
+  else if (type === 'mm-settings-kept' || type === 'mm-settings-asking' || type === 'mm-settings-popped') { clearTimeout(s.closeTimer); settingsSheetKeepWaiting(); dialogGuard.open(s.el); }   // a late answer also clears "isn't answering"   // "Discard changes?", a save running or an inner box closed: the sheet stays, Back works again
 }
 function settingsSheetClosed() {
   const s = settingsSheet;
@@ -16923,7 +17525,7 @@ async function init() {
   applyMultiUser();
   refreshPlanUsage();
   if (hubMe) { presenceStart(); loadNotifyPrefs(); }   // signed in: tell the hub this page is open; the bell shows 🔕 for an agent set to Off
-  paintHealthNotice().catch(() => {});
+  reviewRefresh().catch(() => {});
   if (new URLSearchParams(location.search).get('security') === '1') openSecuritySheet();
   await loadAgents();
   activeJobsSync();
@@ -16933,6 +17535,9 @@ async function init() {
   window.history.replaceState({ screen: route.screen, agent: route.agent }, '');
   const opened = applyRoute(route);
   if (resumed.fromArrow) Promise.resolve(opened).then(() => { if (route.screen === 'chat' && route.agent === current) reloadResumeFinish(route.agent, resumed.draft); });
+  helpMountPhone();   // the ⓘ help in the phone-native sheets
+  askLeadStart();     // "Ask Maestro about this" from the Settings frame: /mobile#ask-lead=<text> fills the lead's box
+  settingsDoorPhone();   // a link to a setting: /mobile#settings-for=OPT-xxxx opens the Settings sheet at it
   updateDots();
   connectEvents();
   paintPush();
@@ -16985,7 +17590,7 @@ function themeNoticeShow() {
   const el = window.hubSimple.themeNotice(document, { me: () => hubMe, save: (v) => simplePrefsPost({ theme: v }), onError: () => toast('Could not save that') });
   if (!el) return;
   el.id = 'theme-notice';   // top of the Agents screen with the other notices, never in the composer
-  const host = $('screen-agents'), first = $('health-notice');
+  const host = $('screen-agents'), first = $('review-banner');
   if (host && first) host.insertBefore(el, first.nextSibling); else if (host) host.prepend(el);
 }
 function simpleOn() { return !!(window.hubSimple && document.documentElement.classList.contains('mm-simple')); }
@@ -17178,7 +17783,12 @@ function simpleTopEnsure() {
     '<button type="button" class="simple-theme-btn" hidden><span class="stb-ic" aria-hidden="true"></span><span class="stb-lab"></span></button>' +
     '<button type="button" id="simple-avatar" class="st-avatar" aria-label="Settings" aria-haspopup="dialog"></button>';
   document.body.insertBefore(top, document.body.firstChild);
-  $('simple-pill').addEventListener('click', simpleAgentsOpen);
+  // Pressing the agent's name opens that agent's card (Basics and Memory only in Simple, P3-10); the rest of the pill still opens the list.
+  $('simple-pill').addEventListener('click', (e) => {
+    const onName = e && e.target && e.target.closest ? e.target.closest('.st-pname') : null;
+    if (onName && current && agentByName(current) && openAgentCard(current)) return;
+    simpleAgentsOpen();
+  });
   top.querySelector('.simple-theme-btn').addEventListener('click', simpleThemeTap);
   $('simple-avatar').addEventListener('click', simpleSettingsOpen);
   return top;
@@ -17306,7 +17916,7 @@ function simpleAgentRow(a, opts) {
   simpleDotPaint(b.querySelector('.sa-dot'), a.name);
   b.addEventListener('click', (e) => {
     const bt = e && e.target && e.target.closest ? e.target.closest('[data-build-team]') : null; if (bt) { if (e.stopPropagation) e.stopPropagation(); if (typeof opts.onPick === 'function') opts.onPick(); buildTeamActivate(bt); return; }   // the small Build team link starts the same Build team as the Teams link; the row does not open the chat
-    if (e && e.target && e.target.closest && e.target.closest('.sa-dot.bg-work, .sa-sub-bg') && window.HandOffCard) HandOffCard.open(a.name); if (typeof opts.onPick === 'function') opts.onPick(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name); });
+    if (typeof opts.onPick === 'function') opts.onPick(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name); });
   return b;
 }
 // Simple's Teams view: the same sections and rows as the phone's Teams tab (hubTeams.sections; a leader's workers open unless folded by hand).
@@ -17325,7 +17935,7 @@ function simpleTeamsSig() {
   return JSON.stringify([m.secs.map((s) => [s.key, s.count, s.open, s.rows.map((r) => [r.a.name, r.a.display || '', r.a.icon || '', !!r.a.lead, r.tm.level, r.tm.rank, !!r.build, !!r.tm.pill, !!r.tm.open, r.tm.n, !!r.tm.last, !!r.tm.parentLast])]), teamsOpen]);
 }
 function simpleSwitch(list) {
-  const sw = document.createElement('div'); sw.className = 'sa-switch'; sw.setAttribute('role', 'tablist');
+  const sw = document.createElement('div'); sw.className = 'sa-switch'; sw.setAttribute('role', 'tablist'); sw.setAttribute('data-setting', 'OPT-0128');
   sw.innerHTML = '<button type="button" data-view="all" role="tab">All Agents</button><button type="button" data-view="teams" role="tab">Teams</button>';
   sw.addEventListener('click', (e) => { const b = e.target.closest('button[data-view]'); if (b) teamsPick(b.dataset.view === 'teams' ? 'teams' : 'agents'); });
   list.appendChild(sw);
@@ -17352,7 +17962,7 @@ function simpleAgentListFill(list, opts) {
   const m = simpleAgentSheetModel(agents, current, simpleMoreGet(), isBusy, bgCountOf);
   for (const a of m.primary) list.appendChild(simpleAgentRow(a, opts));
   if (m.hasMore) {
-    const mb = document.createElement('button'); mb.type = 'button'; mb.className = 'sa-row sa-more'; mb.setAttribute('aria-expanded', String(m.open));
+    const mb = document.createElement('button'); mb.type = 'button'; mb.className = 'sa-row sa-more'; mb.setAttribute('data-setting', 'OPT-1023'); mb.setAttribute('aria-expanded', String(m.open));
     mb.innerHTML = '<span class="sa-txt"><b>More agents</b></span><span class="sa-chev" aria-hidden="true"></span><span class="sa-dot"></span>';
     mb.querySelector('.sa-chev').textContent = m.open ? '⌃' : '⌄';
     simpleMoreDotPaint(mb.querySelector('.sa-dot'), m);
@@ -17388,6 +17998,7 @@ function simpleAgentsOpen() {
   d.innerHTML = '<h3>Talking to</h3><div class="sa-list"></div>';
   simpleAgentsFill(d);
   if (!d.open) d.showModal();
+  if (window.hubSettingsHelp) window.hubSettingsHelp.mount(d, 'simple-phone').catch(() => {});   // the ⓘ help beside All Agents | Teams and More agents (rows drawn later are watched)
 }
 // Live status changed: repaint the dots in place (no rebuild, so a tap in progress is not lost): the open sheet and the sidebar.
 function simpleDotsIn(box) {
@@ -17515,13 +18126,24 @@ function simpleSettingsOpen() {
   const name = (hubMe && hubMe.user && (hubMe.user.name || hubMe.user.login)) || '';
   d.setAttribute('aria-label', 'Settings');
   d.innerHTML = '<h3>Settings</h3>' +
+    (hubMe && hubMe.isAdmin === true ? '<h4 class="ss-gh" id="ss-g-review">For your review</h4>' +
+      '<div class="ss-sec ss-rhint" id="ss-review-line" role="status">Checking…</div>' +
+      '<button type="button" class="ss-row" id="ss-review"><b>Review</b></button>' : '') +
+    '<h4 class="ss-gh" id="ss-g-you">You and this device</h4>' +
     '<div class="ss-sec"><div class="ss-title">Appearance</div><div class="ss-seg" role="group" aria-label="Appearance">' +
     '<button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div><div class="ss-follow" hidden></div></div>' +
     '<div class="ss-sec" id="ss-style-sec"><div class="ss-title">Interface style</div><div id="ss-style"></div></div>' +
     '<div class="ss-sec"><div class="ss-title">Name</div><div class="ss-val"></div></div>' +
-    (hubMe && hubMe.isAdmin === false ? '' : '<button type="button" class="ss-row" id="ss-all"><b>All settings</b><small>Provider keys, web search, voice, backups and the rest</small></button>') +   // admins only, as on the desktop
+    '<div class="ss-sec ss-rhint" id="ss-notes-sec">Each agent’s notifications are on its card: tap the agent’s name in its chat.</div>' +   // Deep research (researchSimplePaint) goes under this line
     '<button type="button" class="ss-row" id="ss-adv"><b>Switch to Advanced</b><small>All tools, agents’ work and settings</small></button>' +
     '<button type="button" class="ss-row" id="ss-out"><b>Sign out</b></button>' +
+    '<h4 class="ss-gh" id="ss-g-voice">Voice and calls</h4>' +
+    (hubMe && hubMe.isAdmin === false ? '<div class="ss-sec ss-rhint">An admin turns voice on and picks the voices. Use the microphone in a chat to talk.</div>' : '<button type="button" class="ss-row" id="ss-voice"><b>Voice settings</b><small>Turn voice on or off, the voices and calls</small></button>') +
+    (hubMe && hubMe.isAdmin === true ? '<h4 class="ss-gh" id="ss-g-money">Models and money</h4>' +
+      '<div class="ss-sec ss-rhint" id="ss-money-line">Subscriptions, keys and spending</div>' +
+      '<button type="button" class="ss-row" id="ss-money"><b>Open</b></button>' : '') +
+    '<h4 class="ss-gh" id="ss-g-more">More settings</h4>' +
+    '<button type="button" class="ss-row" id="ss-all"><b>More settings</b><small>' + (hubMe && hubMe.isAdmin === false ? 'Notifications, voice, chat and your account' : 'Provider keys, web search, backups and the rest') + '</small></button>' +   // everyone, as on the desktop (a member gets the one group); the last button
     '<button type="button" class="ss-close">Close</button>';
   d.querySelector('.ss-val').textContent = name;
   lookPickerPaint(d.querySelector('#ss-style'));   // Interface style sits right after Appearance
@@ -17557,9 +18179,24 @@ function simpleSettingsOpen() {
   }));
   $('ss-adv').addEventListener('click', async () => { if (await simplePrefsPost({ uiMode: 'advanced' })) simpleReload(); else toast('Could not switch'); });
   $('ss-out').addEventListener('click', () => { signOut(); });
+  const paintReviewLine = () => {
+    const line = $('ss-review-line');
+    if (!line) return;
+    const r = reviewLastResult;
+    line.textContent = !r || !window.hubReview ? 'Checking…' : window.hubReview.summaryText(r);
+    line.classList.toggle('ss-warn', !!(r && r.count > 0));   // red only
+  };
+  if ($('ss-review-line')) {
+    paintReviewLine();
+    if (!reviewLastResult) reviewRefresh().then(() => { if (d.isConnected) paintReviewLine(); }).catch(() => {});
+  }
+  $('ss-review')?.addEventListener('click', () => { d.close(); settingsSheetOpen('', 'review'); });   // Settings, at For your review
+  $('ss-money')?.addEventListener('click', () => { d.close(); settingsSheetOpen('', 'money'); });   // Settings, at Models and money
   $('ss-all')?.addEventListener('click', () => { d.close(); settingsSheetOpen(); });
+  $('ss-voice')?.addEventListener('click', () => { d.close(); settingsSheetOpen(); });   // Settings opens on its list; Voice and calls is one tap away
   d.querySelector('.ss-close').addEventListener('click', () => d.close());
   if (!d.open) d.showModal();
+  if (window.hubSettingsHelp) window.hubSettingsHelp.mount(d, 'simple-phone').catch(() => {});   // the ⓘ help, if the records anchor any here
   typeof researchSimplePaint === 'function' && researchSimplePaint(d);   // Deep research, when the hub has it on
   typeof researchPrefLoad === 'function' && researchPrefLoad();   // repaints the open sheet with the hub's answer
 }

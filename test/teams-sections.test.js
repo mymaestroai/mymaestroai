@@ -108,11 +108,11 @@ function world({ stored, storageThrows, simple, member } = {}) {
     "const TEAMS_OPEN_KEY = 'hub-teams-open'; let teamsLastHtml = null; let teamsTimer = 0; let teamsOpenMem = null; const TEAMS_SOLO_KEYS = ['@sec:solo', '@sec:none', '@sec:alone'];",
     fnSrc('capName'), fnSrc('sidebarViewStored'), fnSrc('sidebarViewOk'), fnSrc('sidebarViewSet'), fnSrc('sidebarTabsApply'),
     'async ' + fnSrc('sidebarTabsLoad'), fnSrc('setupTabs'), fnSrc('teamsOpenGet'), fnSrc('teamsSecFolded'), fnSrc('teamsOpenToggle'), fnSrc('teamsClick'),
-    fnSrc('agentLiveState'), fnSrc('bgCountOf'), "const buildTeamPending = new Set(); let agentMenuEl = null, agentMenuOpener = null, agentMenuOff = null;",
-    "const optimizeTeamPending = new Set(); const optimizeEstimates = {};",
-    fnSrc('teamBuilding'), fnSrc('agentCanBuildTeam'), fnSrc('teamReviewing'), fnSrc('agentCanOptimizeTeam'), fnSrc('optimizeSubText'), fnSrc('agentMenuEntries'),
-    'async ' + fnSrc('optimizeTeamStart'), fnSrc('optimizeEstimateLoad'), fnSrc('agentMenuBtnHtml'), fnSrc('buildTeamCtlHtml'), fnSrc('buildLineHtml'),
-    fnSrc('paintBuildControls'), 'async ' + fnSrc('buildTeamStart'), fnSrc('agentMenuClose'), fnSrc('agentMenuOpenAt'), fnSrc('agentMenuToggle'), fnSrc('agentButton'),
+    fnSrc('agentStateWords'), fnSrc('agentLiveState'), fnSrc('bgCountOf'), "const buildTeamPending = new Set();",
+    "const optimizeTeamPending = new Set();",
+    fnSrc('teamBuilding'), fnSrc('agentCanBuildTeam'), fnSrc('teamReviewing'), fnSrc('agentCanOptimizeTeam'), fnSrc('agentRowNameAttrs'),
+    'async ' + fnSrc('optimizeTeamStart'), fnSrc('buildTeamCtlHtml'), fnSrc('buildLineHtml'),
+    fnSrc('paintBuildControls'), 'async ' + fnSrc('buildTeamStart'), fnSrc('agentButton'),
     fnSrc('questionChecklistOf'), fnSrc('questionChecklistHtml'), fnSrc('questionCheckedIds'), fnSrc('askResponseBody'),
     fnSrc('teamsPillText'), fnSrc('teamsPillLabel'), fnSrc('teamsPillHtml'), fnSrc('teamsRowHtml'), fnSrc('teamsBlockHtml'), fnSrc('teamsSubtreeHtml'), fnSrc('renderTeams'), fnSrc('teamsRepaintSoon'),
     // Set up teams (renderTeams, setupTabs and teamsClick call these): the harness carries them so the pinned Teams tests keep running as before.
@@ -120,7 +120,7 @@ function world({ stored, storageThrows, simple, member } = {}) {
     fnSrc('agentWorksAlone'), fnSrc('teamSetupLeadDisplay'), fnSrc('teamSetupBusy'), fnSrc('teamSetupLines'), fnSrc('teamSetupDate'), fnSrc('teamSetupLineHtml'), fnSrc('teamSetupApply'),
     'async ' + fnSrc('teamSetupLoad'), fnSrc('teamSetupLoadSoon'), fnSrc('teamSetupPaint'), fnSrc('teamSetupOfferHtml'), fnSrc('teamSetupUndoRows'), fnSrc('teamSetupChatPaint'),
     'async ' + fnSrc('teamSetupStart'), 'async ' + fnSrc('teamSetupUndo'), 'function setAgentLive() {} function loadAgents() { return Promise.resolve(); }',
-    'this.api = { setupTabs, sidebarViewSet, sidebarTabsApply, renderTeams, teamsClick, teamsRepaintSoon, teamsOpenToggle, agentMenuEntries, agentMenuBtnHtml, buildLineHtml, agentButton, buildTeamStart, optimizeTeamStart, agentMenuOpenAt, agentMenuClose, paintBuildControls, questionChecklistOf, questionChecklistHtml, askResponseBody };'].join('\n');
+    'this.api = { setupTabs, sidebarViewSet, sidebarTabsApply, renderTeams, teamsClick, teamsRepaintSoon, teamsOpenToggle, agentRowNameAttrs, buildLineHtml, agentButton, buildTeamStart, optimizeTeamStart, paintBuildControls, questionChecklistOf, questionChecklistHtml, askResponseBody };'].join('\n');
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(src, ctx);
@@ -211,13 +211,13 @@ test('pill: a button after the boss\'s name (and crown) with aria-expanded and a
   w.api.renderTeams();
   const h = w.list.innerHTML;
   const r = rowOf(h, 'harbor');
-  assert.match(r, /<span class="name-text">Harbor<\/span><button type="button" class="teams-pill-btn" data-fold="harbor" aria-expanded="false" aria-label="Unfold [^"]*: 2 agents"[^>]*><span class="teams-pill">2 agents &#x25B8;<\/span><\/button><\/span>/);
+  assert.match(r, /<span class="name-text"[^>]*>Harbor<\/span><button type="button" class="teams-pill-btn" data-fold="harbor" aria-expanded="false" aria-label="Unfold [^"]*: 2 agents"[^>]*><span class="teams-pill">2 agents &#x25B8;<\/span><\/button><\/span>/);
   assert.strictEqual((h.match(/class="teams-pill-btn/g) || []).length, 2, 'one pill per team (folded: no leader rows drawn)');
   assert.doesNotMatch(h, /teams-fold/);
   const l = world();
   l.ctx.AGENTS = [MAIN('owner', { lead: true }), A('tide', { reportsTo: 'owner' })];
   l.api.renderTeams();
-  assert.match(rowOf(l.list.innerHTML, 'owner'), /<span class="name-text">Owner<\/span><span class="lead-badge"[^>]*>👑<\/span><button type="button" class="teams-pill-btn"/);
+  assert.match(rowOf(l.list.innerHTML, 'owner'), /<span class="name-text"[^>]*>Owner<\/span><span class="lead-badge"[^>]*>👑<\/span><button type="button" class="teams-pill-btn"/);
 });
 test('pill: the native button click folds, keeps the fold memory and does NOT open the chat; the rest of the row opens it; Enter on the pill is not a row activation', () => {
   const w = world();
@@ -272,7 +272,7 @@ test('members (leaders and workers) are one line: no "Reports to", no second lin
   const h = w.list.innerHTML;
   assert.doesNotMatch(h, /Reports to/);
   for (const n of ['foreman', 'draft', 'layout', 'archive', 'tide', 'cargo']) assert.doesNotMatch(rowOf(h, n), /teams-sub|Team leader|Worker</, n);
-  assert.match(rowOf(h, 'draft'), /<span class="name-text">Draft<\/span><span class="teams-live" title="working · 3m">· working · 3m<\/span>/);
+  assert.match(rowOf(h, 'draft'), /<span class="name-text"[^>]*>Draft<\/span><span class="teams-live" title="working · 3m">· working · 3m<\/span>/);
   assert.match(html, /\.teams-live \{[^}]*color: var\(--warning\)/, 'orange');
   assert.match(rowOf(h, 'tide'), /teams-dot live-idle bg-work/, 'a member keeps the ring');
 });
@@ -329,7 +329,7 @@ test('Simple: every fold control keeps the 36 px tap area (--tms-fold is no long
 });
 
 // ---- Build team and Working alone
-test('Build team: the link is on the second line of an undecided main in "Solo agents" for admins; not for a works-alone one, not in Teams, Shared or Other; the menu still has it', () => {
+test('Build team: the link is on the second line of an undecided main in "Solo agents" for admins; not for a works-alone one, not in Teams, Shared or Other', () => {
   const w = world();
   w.ctx.AGENTS = company();
   alone(w, ['cedar']);
@@ -340,8 +340,8 @@ test('Build team: the link is on the second line of an undecided main in "Solo a
   assert.strictEqual((h.match(/Build team</g) || []).length, 3);
   assert.doesNotMatch(rowOf(h, 'cedar'), /build-team|teams-sub/, 'a works-alone solo agent: no second line, no Build team prompt and no "Works alone" words');
   assert.doesNotMatch(h, /Works alone|Working alone|No team yet/);
-  assert.ok(w.api.agentMenuEntries(w.ctx.AGENTS.find((a) => a.name === 'cedar')).some((e) => e.key === 'build'), 'Build team stays in the ⋯ menu');
-  assert.match(rowOf(h, 'cedar'), /class="agent-menu-btn"/, 'and the ⋯ is on the row');
+  assert.doesNotMatch(rowOf(h, 'cedar'), /agent-menu-btn|⋯/, 'no ⋯ on the row any more (P4-2); Build team is the card\'s row');
+  assert.match(rowOf(h, 'cedar'), /data-card-agent="cedar"/, 'the name opens the card');
   const m = world({ member: true });
   m.ctx.AGENTS = company();
   m.api.renderTeams();

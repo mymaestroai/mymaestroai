@@ -108,7 +108,7 @@ test('the reply path: real replies record health, the spend log books a failed r
   assert.match(chat, /const modelHealth = require\('\.\/model-health'\)\.getModelHealth\(\);/);
   assert.match(chat, /const stopped = !!terminalError && \(terminalError\.name === 'AbortError' \|\| String\(terminalError\.message \|\| ''\)\.includes\('aborted'\)\);\n\s*const failed = !!terminalError && !stopped;/);
   assert.match(chat, /durationMs: Date\.now\(\) - ledgerStartedAt, ok: !failed,/, 'no more ok:true for every reply');
-  assert.match(chat, /if \(!stopped && typeof model === 'string'\) \{ try \{ modelHealth\.record\(model, failed \? \{ ok: false, kind: turnErrorInfo && turnErrorInfo\.kind/);
+  assert.match(chat, /if \(!stopped && !monthlyRefused && typeof model === 'string'\) \{ try \{ modelHealth\.record\(model, failed \? \{ ok: false, kind: turnErrorInfo && turnErrorInfo\.kind/);
 });
 
 test('an agent that consults a failing agent gets the plain explanation, not the raw provider text', () => {
@@ -130,7 +130,7 @@ test('the model test route: one route for the Test button and the pickers; admin
   assert.match(srv, /health: require\('\.\/lib\/model-health'\)\.getModelHealth\(\)\.view\(\),/);
   const { classifyRoute } = L('access');
   assert.strictEqual(classifyRoute('/api/models/test', 'POST').kind, 'admin');
-  assert.match(read('agent-settings.html'), /if \(result\.success && result\.toolCall === false\) \{/, 'the Test button says when a model answered without using the tool');
+  assert.match(read('lib/ui-agent-card-basics.js'), /if \(r\.ok && j\.success && j\.toolCall === false\) \{/, 'the card\'s Test button says when a model answered without using the tool (P4-2: the old page is gone)');
 });
 
 // The pages: the same warnings for an OpenRouter row on the phone and the desktop, the mark in the pickers, and the

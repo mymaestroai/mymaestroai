@@ -42,3 +42,268 @@ test('levels: all passed -> hot, some -> warn, none -> empty', () => {
   assert.strictEqual(L.planState({ utilization: 40 }).cls, '');
   assert.strictEqual(L.planPctText({ utilization: 89.6 }, [75]), '90%');
 });
+
+// ── the header badge: the plan leads by default, the agent's model family joins it only when it is worse ──
+// BW: the default choice of planBadgeView (no choice, no 5-hour window), in the { lead, second, cls } shape these tests were written in.
+const BW = (weekly, family, levels) => { const v = L.planBadgeView({ weekly }, family, null, false, levels); return v && { lead: v.main.w, second: v.extras[0] ? v.extras[0].w : null, cls: v.cls }; };
+const W = (family, utilization, extra) => Object.assign({ family, label: family ? family[0].toUpperCase() + family.slice(1) : null, utilization, rejected: false, extraUsage: false, resetsAt: '2026-11-30T20:00:00Z' }, extra || {});
+
+test('planBadgeView (default choice): the plan is higher -> plan alone', () => {
+  const r = BW([W(null, 40), W('fable', 22)], 'fable', [75, 90]);
+  assert.strictEqual(r.lead.family, null);
+  assert.strictEqual(r.second, null);
+  assert.strictEqual(r.cls, '');
+});
+test('planBadgeView (default choice): the family is higher -> plan leads, family second', () => {
+  const r = BW([W(null, 18), W('fable', 19)], 'fable', []);
+  assert.strictEqual(r.lead.family, null);
+  assert.strictEqual(r.second.family, 'fable');
+});
+test('planBadgeView (default choice): equal after rounding -> plan alone', () => {
+  const r = BW([W(null, 18.2), W('fable', 18.4)], 'fable', []);
+  assert.strictEqual(r.second, null);
+});
+test('planBadgeView (default choice): the family refused while the plan is not -> shown second, class refused', () => {
+  const r = BW([W(null, 100, { rejected: false, extraUsage: true }), W('fable', 60, { rejected: true })], 'fable', [75]);
+  assert.strictEqual(r.second.family, 'fable');
+  assert.strictEqual(r.cls, 'refused');
+  const r2 = BW([W(null, 100), W('fable', 100)], 'fable', []);
+  // changed with planBadgeView: a window that is used up is always shown (the safety rule), so both read "used up"
+  assert.strictEqual(r2.second.family, 'fable', 'plan refused too: the family is still shown, used up');
+  assert.strictEqual(r2.cls, 'refused');
+});
+test('planBadgeView (default choice): the family on extra usage while the plan is not -> shown second, class warn', () => {
+  const r = BW([W(null, 100 - 1), W('fable', 100, { extraUsage: true })], 'fable', []);
+  assert.strictEqual(r.second.family, 'fable');
+  assert.strictEqual(r.cls, 'warn');
+  const lowerButExtra = BW([W(null, 100, { extraUsage: false, rejected: false }), W('fable', 100, { extraUsage: true })], 'fable', []);
+  assert.strictEqual(lowerButExtra.cls, 'refused', 'plan at 100% without extra usage is refused, and the worse class wins');
+});
+test('planBadgeView (default choice): no all-models window -> the family alone; no family window -> the plan alone; nothing -> null', () => {
+  const a = BW([W('fable', 30)], 'fable', []);
+  assert.deepStrictEqual([a.lead.family, a.second, a.cls], ['fable', null, '']);
+  const b = BW([W(null, 30), W('opus', 90)], 'fable', []);
+  assert.deepStrictEqual([b.lead.family, b.second], [null, null]);
+  assert.strictEqual(BW([W('opus', 30)], 'fable', []), null);
+  assert.strictEqual(BW([], 'fable', []), null);
+  assert.strictEqual(BW([W(null, null), W('fable', null)], 'fable', []), null, 'windows without a reading do not count');
+  assert.strictEqual(BW([W(null, 30), W('opus', 90)], null, []).second, null, 'no family (non-Claude-family model)');
+});
+test('planBadgeView (default choice): the class is the worse of the two windows, even when the family is not shown', () => {
+  assert.strictEqual(BW([W(null, 80), W('fable', 20)], 'fable', [75, 90]).cls, 'warn');
+  assert.strictEqual(BW([W(null, 80), W('fable', 95)], 'fable', [75, 90]).cls, 'hot');
+  assert.strictEqual(BW([W(null, 95), W('fable', 80)], 'fable', [75, 90]).cls, 'hot');
+});
+
+// the pages: paint the badge with stubs and read what they write
+const vm = require('vm');
+function pageSlice(src, from, to) { const a = src.indexOf(from); const b = src.indexOf(to, a); assert.ok(a > 0 && b > a, 'slice ' + from); return src.slice(a, b); }
+// a badge element and a device store; the pages set attributes and read the stored choice (see test/ui-plan-badge-chooser.test.js for the popup)
+function stubEl() { const attrs = {}; return { hidden: true, textContent: '', className: '', title: '', onclick: null, setAttribute: (k, v) => { attrs[k] = String(v); }, getAttribute: (k) => (k in attrs ? attrs[k] : null), removeAttribute: (k) => { delete attrs[k]; } }; }
+function stubStore() { return { getItem: () => null, setItem() {} }; }
+function desktopBadge(data, model, opts) {
+  const o = opts || {};
+  const el = stubEl();
+  const ctx = vm.createContext({
+    Math, Number, String, Array, Object, Date, window: {}, localStorage: stubStore(), planLast: data, chats: { c1: { agent: 'a', isGroup: false } }, chatModelOf: () => model,
+    document: { getElementById: () => el }, subsIsCodex: (m) => /^codex-cli\//.test(m), subsEnabled: () => o.subs !== false,
+    planWhen: (x) => 'WHEN-' + String(x).slice(5, 10), openPlanSettings() {}, openSubsSettings() {}, codexLast: null,
+  });
+  vm.runInContext(pageSlice(read('app.js'), '// ── plan state helpers (begin) ──', 'async function openPlanSettings('), ctx);
+  vm.runInContext('paintPlanBadges()', ctx);
+  return el;
+}
+function phoneBadge(data, model, opts) {
+  const o = opts || {};
+  const el = stubEl();
+  const ctx = vm.createContext({
+    Math, Number, String, Array, Object, Date, hubMe: null, localStorage: stubStore(), planUsageLast: data, current: 'a', agentByName: () => ({ model }), $: () => el,
+    subsEnabled: () => o.subs !== false, isAdmin: () => true, codexBadge() { return null; }, codexUsageLast: null, codexAskAt: 0,
+    codexShouldRead: () => false, codexAskRead() {}, codexPendingBadge: () => null,
+  });
+  vm.runInContext(pageSlice(read('mobile.js'), '// ── plan state helpers (begin) ──', '\n// Every model change'), ctx);
+  vm.runInContext('paintPlan()', ctx);
+  return el;
+}
+const data = (weekly, five) => ({ weekly, windows: five == null ? {} : { five_hour: { utilization: five } }, warn: { at: [75, 90] } });
+const FABLE = 'claude-sdk/claude-fable-5';
+
+test('desktop badge: plan higher -> "Claude plan 40% this week"', () => {
+  const el = desktopBadge(data([W(null, 40), W('fable', 22)]), FABLE);
+  assert.strictEqual(el.textContent, 'Claude plan 40% this week');
+  assert.strictEqual(el.hidden, false);
+});
+test('desktop badge: family higher -> "Claude plan 18% this week · Fable 19%"', () => {
+  assert.strictEqual(desktopBadge(data([W(null, 18), W('fable', 19)]), FABLE).textContent, 'Claude plan 18% this week · Fable 19%');
+});
+test('desktop badge: equal after rounding -> plan alone', () => {
+  assert.strictEqual(desktopBadge(data([W(null, 18.2), W('fable', 18.4)]), FABLE).textContent, 'Claude plan 18% this week');
+});
+test('desktop badge: family refused while the plan is not -> shown second, class refused', () => {
+  const el = desktopBadge(data([W(null, 50), W('fable', 60, { rejected: true })]), FABLE);
+  // a refused window now reads "used up" instead of its percent (a rejected 60% would otherwise look usable)
+  assert.strictEqual(el.textContent, 'Claude plan 50% this week · Fable used up');
+  assert.match(el.className, /\brefused\b/);
+});
+test('desktop badge: family on extra usage -> "Fable 100% · extra usage", class warn', () => {
+  const el = desktopBadge(data([W(null, 99), W('fable', 100, { extraUsage: true })]), FABLE);
+  assert.strictEqual(el.textContent, 'Claude plan 99% this week · Fable 100% · extra usage');
+  assert.strictEqual(el.className, 'plan-badge hot');   // plan at 99 is past every level: the worse of hot and warn
+});
+test('desktop badge: no all-models window -> the family alone as today; non-Claude model -> no badge', () => {
+  assert.strictEqual(desktopBadge(data([W('fable', 30)]), FABLE).textContent, 'Fable 30% this week');
+  const none = desktopBadge(data([W(null, 30)]), 'openrouter/some-model');
+  assert.strictEqual(none.hidden, true);
+  assert.strictEqual(none.textContent, '');
+});
+test('desktop badge: the 5h suffix stays last; the class is the worse of the two; the title reads plan, family, 5-hour', () => {
+  const el = desktopBadge(data([W(null, 80), W('fable', 95)], 62), FABLE);
+  assert.strictEqual(el.textContent, 'Claude plan 80% this week · Fable 95% · 5-hour 62%');
+  assert.strictEqual(el.className, 'plan-badge hot');
+  const t = el.title;
+  assert.ok(t.startsWith("Your Claude plan has used 80% of this week's allowance (resets WHEN-11-30)"), t);
+  assert.ok(t.indexOf("; Fable has used 95% (resets WHEN-11-30)") > 0 && t.indexOf('; 5-hour window 62%') > t.indexOf('Fable has used'), t);
+  assert.ok(t.endsWith('. Click to choose what this shows.'), t);
+  assert.strictEqual(desktopBadge(data([W(null, 80)], 40), FABLE).textContent, 'Claude plan 80% this week', 'no 5h at 50 or less');
+  assert.strictEqual(desktopBadge(data([W(null, 80)], 62), FABLE, { subs: false }).textContent, 'Claude plan 80% this week', 'no 5h with subscriptions off');
+});
+test('desktop badge: a shown window on extra usage uses the "used up" sentence for its part', () => {
+  const t = desktopBadge(data([W(null, 99), W('fable', 100, { extraUsage: true })]), FABLE).title;
+  assert.ok(t.includes("Your Claude plan has used 99% of this week's allowance (resets WHEN-11-30); Fable is used up for this week until WHEN-11-30; extra usage is paying for Claude replies until then"), t);
+});
+test('desktop badge: the title with only the family window keeps today\'s text', () => {
+  assert.strictEqual(desktopBadge(data([W('fable', 30)]), FABLE).title, "Fable has used 30% of this week's allowance (resets WHEN-11-30). Click to choose what this shows.");
+});
+
+test('phone header: plan higher -> "Claude plan 40%"; family higher -> "Claude plan 18% · Fable 19%"; equal -> plan alone', () => {
+  assert.strictEqual(phoneBadge(data([W(null, 40), W('fable', 22)]), FABLE).textContent, 'Claude plan 40% this week');
+  assert.strictEqual(phoneBadge(data([W(null, 18), W('fable', 19)]), FABLE).textContent, 'Claude plan 18% this week · Fable 19%');
+  assert.strictEqual(phoneBadge(data([W(null, 18.2), W('fable', 18.4)]), FABLE).textContent, 'Claude plan 18% this week');
+});
+test('phone header: refused / extra family shown with the worse class; no all-models window -> family alone; non-Claude -> none', () => {
+  const r = phoneBadge(data([W(null, 50), W('fable', 60, { rejected: true })]), FABLE);
+  assert.strictEqual(r.textContent, 'Claude plan 50% this week · Fable used up');   // refused reads "used up", not its percent
+  assert.strictEqual(r.className, 'sub refused');
+  const e = phoneBadge(data([W(null, 30), W('fable', 100, { extraUsage: true })]), FABLE);
+  assert.strictEqual(e.textContent, 'Claude plan 30% this week · Fable 100% · extra usage');
+  assert.strictEqual(e.className, 'sub warn');
+  assert.strictEqual(phoneBadge(data([W('fable', 30)]), FABLE).textContent, 'Fable 30% this week');
+  assert.strictEqual(phoneBadge(data([W(null, 30)]), 'openrouter/x').hidden, true);
+});
+test('phone header: 5h suffix last; title reads plan, family, 5-hour', () => {
+  const el = phoneBadge(data([W(null, 80), W('fable', 95)], 62), FABLE);
+  assert.strictEqual(el.textContent, 'Claude plan 80% this week · Fable 95% · 5-hour 62%');
+  assert.strictEqual(el.className, 'sub hot');
+  assert.strictEqual(el.title, "Claude plan: 80% of this week's allowance; Fable: 95%; 5-hour window 62%");
+  assert.strictEqual(phoneBadge(data([W(null, 80)]), FABLE).title, "Claude plan: 80% of this week's allowance");
+  assert.strictEqual(phoneBadge(data([W('fable', 30)]), FABLE).title, "Fable: 30% of this week's Claude plan allowance");
+});
+// ── a refused window says "used up" in words, in the text and the hover, on both pages ──
+const PHONE_WHEN = (iso) => new Date(iso).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+test('badgeAmount is the same small helper on both pages, outside the shared block; planUsedUp lives inside it', () => {
+  const grab = (src) => { const m = src.match(/function badgeAmount\([\s\S]*?\n\s*\}\n/); assert.ok(m, 'badgeAmount present'); return m[0].split('\n').map(l => l.trim()).join('\n'); };
+  assert.strictEqual(grab(read('app.js')), grab(read('mobile.js')));
+  for (const [f, indent] of [['lib/ui-plan-state.js', ''], ['app.js', '    '], ['mobile.js', '']]) {
+    const block = helperBlock(read(f), indent);
+    assert.ok(block.includes('function planUsedUp('), f + ': planUsedUp inside the shared block');
+    assert.ok(!block.includes('badgeAmount'), f + ': badgeAmount stays outside the shared block');
+    assert.strictEqual((read(f).match(/function planUsedUp\(/g) || []).length, 1, f + ': one planUsedUp only');
+  }
+  assert.strictEqual(typeof L.planUsedUp, 'function');
+});
+test('planBadgeView (default choice): plan at 99.6 (rounds to 100, not rejected, no extra) does not hide a really-rejected / used-up / extra-usage family', () => {
+  const rej = BW([W(null, 99.6), W('fable', 60, { rejected: true })], 'fable', [75]);
+  assert.strictEqual(rej.second.family, 'fable');
+  assert.strictEqual(rej.cls, 'refused');
+  const exact = BW([W(null, 99.6), W('fable', 100)], 'fable', []);
+  assert.strictEqual(exact.second.family, 'fable');
+  const extra = BW([W(null, 99.6), W('fable', 100, { extraUsage: true })], 'fable', []);
+  assert.strictEqual(extra.second.family, 'fable');
+  const planGone = BW([W(null, 70, { rejected: true }), W('fable', 40)], 'fable', [75]);
+  assert.strictEqual(planGone.second, null);
+});
+test('badges: plan 99.6 + Fable rejected / exactly 100 / 100 on extra usage -> Fable still shown (desktop and phone)', () => {
+  const d1 = desktopBadge(data([W(null, 99.6), W('fable', 60, { rejected: true })]), FABLE);
+  assert.strictEqual(d1.textContent, 'Claude plan 100% this week · Fable used up');
+  const p1 = phoneBadge(data([W(null, 99.6), W('fable', 60, { rejected: true })]), FABLE);
+  assert.strictEqual(p1.textContent, 'Claude plan 100% this week · Fable used up');
+  assert.strictEqual(desktopBadge(data([W(null, 99.6), W('fable', 100)]), FABLE).textContent, 'Claude plan 100% this week · Fable used up');
+  assert.strictEqual(phoneBadge(data([W(null, 99.6), W('fable', 100)]), FABLE).textContent, 'Claude plan 100% this week · Fable used up');
+  assert.strictEqual(desktopBadge(data([W(null, 99.6), W('fable', 100, { extraUsage: true })]), FABLE).textContent, 'Claude plan 100% this week · Fable 100% · extra usage');
+  assert.strictEqual(phoneBadge(data([W(null, 99.6), W('fable', 100, { extraUsage: true })]), FABLE).textContent, 'Claude plan 100% this week · Fable 100% · extra usage');
+  // reverse sanity: the plan really is used up, Fable at 40 -> plan alone
+  assert.strictEqual(desktopBadge(data([W(null, 99.6, { rejected: true }), W('fable', 40)]), FABLE).textContent, 'Claude plan used up this week');
+  assert.strictEqual(phoneBadge(data([W(null, 99.6, { rejected: true }), W('fable', 40)]), FABLE).textContent, 'Claude plan used up this week');
+});
+test('desktop badge: Fable 99.6 (rounds to 100, not rejected, no extra usage) is not "used up"', () => {
+  const el = desktopBadge(data([W(null, 18), W('fable', 99.6)]), FABLE);
+  assert.strictEqual(el.textContent, 'Claude plan 18% this week · Fable 100%');
+  assert.ok(el.title.includes('Fable has used 100%'), el.title);
+  assert.ok(!el.title.includes('used up'), el.title);
+});
+test('desktop badge: Fable at exactly 100 (not rejected, no extra usage), or rejected at 60 -> "Fable used up"', () => {
+  const a = desktopBadge(data([W(null, 18), W('fable', 100)]), FABLE);
+  assert.strictEqual(a.textContent, 'Claude plan 18% this week · Fable used up');
+  assert.ok(a.title.includes('Fable is used up for this week until WHEN-11-30'), a.title);
+  const b = desktopBadge(data([W(null, 18), W('fable', 60, { rejected: true })]), FABLE);
+  assert.strictEqual(b.textContent, 'Claude plan 18% this week · Fable used up');
+  assert.ok(b.title.includes('Fable is used up for this week until WHEN-11-30'), b.title);
+});
+test('phone header: Fable 99.6 is not "used up"; exactly 100 or rejected is', () => {
+  const a = phoneBadge(data([W(null, 18), W('fable', 99.6)]), FABLE);
+  assert.strictEqual(a.textContent, 'Claude plan 18% this week · Fable 100%');
+  assert.ok(!a.title.includes('used up'), a.title);
+  const b = phoneBadge(data([W(null, 18), W('fable', 100)]), FABLE);
+  assert.strictEqual(b.textContent, 'Claude plan 18% this week · Fable used up');
+  assert.ok(b.title.includes('Fable: used up until'), b.title);
+  const c = phoneBadge(data([W(null, 18), W('fable', 60, { rejected: true })]), FABLE);
+  assert.strictEqual(c.textContent, 'Claude plan 18% this week · Fable used up');
+});
+test('desktop badge: plan on extra usage + Fable refused -> extra-usage words, then "Fable used up"', () => {
+  const el = desktopBadge(data([W(null, 100, { extraUsage: true }), W('fable', 60, { rejected: true })]), FABLE);
+  assert.strictEqual(el.textContent, 'Claude plan 100% · extra usage this week · Fable used up');
+  assert.match(el.className, /\brefused\b/);
+  assert.ok(el.title.includes('Your Claude plan is used up for this week until WHEN-11-30; extra usage is paying for Claude replies until then'), el.title);
+  assert.ok(el.title.includes('; Fable is used up for this week until WHEN-11-30'), el.title);
+  assert.ok(!el.title.includes('Fable has used'), el.title);
+  assert.ok(!el.title.includes('Fable is used up for this week until WHEN-11-30; extra usage'), 'the extra-usage sentence describes only the plan');
+});
+test('desktop badge: plan refused, Fable lower -> "Claude plan used up this week" alone, hover says used up', () => {
+  const el = desktopBadge(data([W(null, 70, { rejected: true }), W('fable', 40)]), FABLE);
+  assert.strictEqual(el.textContent, 'Claude plan used up this week');
+  assert.match(el.className, /\brefused\b/);
+  assert.ok(el.title.startsWith('Your Claude plan is used up for this week until WHEN-11-30'), el.title);
+  assert.ok(!el.title.includes('extra usage') && !el.title.includes('70%') && !el.title.includes('Fable'), el.title);
+});
+test('desktop badge: plan 62 + Fable refused -> "Claude plan 62% this week · Fable used up"', () => {
+  const el = desktopBadge(data([W(null, 62), W('fable', 60, { rejected: true })]), FABLE);
+  assert.strictEqual(el.textContent, 'Claude plan 62% this week · Fable used up');
+  assert.ok(el.title.startsWith("Your Claude plan has used 62% of this week's allowance (resets WHEN-11-30); Fable is used up for this week until WHEN-11-30"), el.title);
+});
+test('phone header: plan on extra usage + Fable refused; plan refused alone; plan 62 + Fable refused', () => {
+  const a = phoneBadge(data([W(null, 100, { extraUsage: true }), W('fable', 60, { rejected: true })]), FABLE);
+  assert.strictEqual(a.textContent, 'Claude plan 100% · extra usage this week · Fable used up');
+  assert.strictEqual(a.className, 'sub refused');
+  assert.ok(a.title.includes('Claude plan: used up this week until ' + PHONE_WHEN('2026-11-30T20:00:00Z') + '; extra usage is paying; Fable: used up until ' + PHONE_WHEN('2026-11-30T20:00:00Z')), a.title);
+  const b = phoneBadge(data([W(null, 70, { rejected: true }), W('fable', 40)]), FABLE);
+  assert.strictEqual(b.textContent, 'Claude plan used up this week');
+  assert.strictEqual(b.className, 'sub refused');
+  assert.strictEqual(b.title, 'Claude plan: used up until ' + PHONE_WHEN('2026-11-30T20:00:00Z'));
+  const c = phoneBadge(data([W(null, 62), W('fable', 60, { rejected: true })]), FABLE);
+  assert.strictEqual(c.textContent, 'Claude plan 62% this week · Fable used up');
+  assert.strictEqual(c.title, "Claude plan: 62% of this week's allowance; Fable: used up until " + PHONE_WHEN('2026-11-30T20:00:00Z'));
+});
+// changed with the chooser: the hover has one sentence per window SHOWN (it used to carry the raw 5-hour reading whenever there was one)
+test('phone header: the hover covers the windows shown; a 5-hour window that is not shown has no sentence; a used-up one does', () => {
+  const el = phoneBadge(data([W(null, 30)], 40), FABLE);
+  assert.strictEqual(el.textContent, 'Claude plan 30% this week');
+  assert.ok(!el.title.includes('5-hour'), el.title);
+  assert.ok(!phoneBadge(data([W(null, 30)], 62), FABLE, { subs: false }).title.includes('5-hour'), 'subscriptions off: not shown, not in the hover');
+  assert.ok(phoneBadge(data([W(null, 30)], 62), FABLE).title.endsWith('; 5-hour window 62%'));
+  assert.ok(phoneBadge(data([W(null, 30)], 100), FABLE, { subs: false }).title.includes('5-hour window: used up until'), 'used up is shown whatever the switch says');
+});
+
+test('simple mode hides both badges (desktop .agent-name children, phone #chat-plan)', () => {
+  assert.ok(read('index.html').includes('html.mm-simple .chat-actions .agent-name > :not(.agent-name-text)'));
+  assert.ok(read('mobile.html').includes('html.mm-simple #chat-plan,'));
+});

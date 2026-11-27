@@ -136,11 +136,11 @@ test('the blue chip names agents with background work that are not busy, and is 
   assert.match(html, /<script src="\/ui-agent-dot\.js"><\/script>\s*<script src="\/ui-hand-off-card\.js"><\/script>/);
 });
 
-test('tapping the ring, the blue line or the chip opens the panel (HandOffCard.open) and the chat', () => {
+test('tapping the ring, the blue line or the chip opens the chat and never asks the panel to expand', () => {
   const ctx = setup();
   load(ctx, 'bgOpenChat');
   vm.runInContext("bgOpenChat('hazel')", ctx);
-  assert.deepStrictEqual(ctx.calls.open, ['hazel']);
+  assert.deepStrictEqual(ctx.calls.open, [], 'the panel is not asked to open: the next chat starts collapsed');
   assert.deepStrictEqual(ctx.calls.navigate, [['chat', 'hazel']]);
   assert.match(js, /e\.target\.closest\('\.dot\.bg-work, \.agent-bg-line'\)\) \{ bgOpenChat\(r\.dataset\.agent\)/);
   assert.match(js, /\$\('bg-chip'\)\?\.addEventListener\('click', \(\) => bgOpenChat\(\$\('bg-chip'\)\.dataset\.agent\)\)/);
@@ -192,7 +192,7 @@ test('track gets isAdmin, stopJob and stopWorker; stopJob posts /api/jobs/cancel
 });
 
 test('the phone service worker is v79 and the panel has its CSS', () => {
-  assert.match(fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8'), /const VERSION = 'hub-mobile-v94'/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8'), /const VERSION = 'hub-mobile-v104'/);
   for (const c of ['.wo-ring', '.wo-row', '.wo-kind', '.wo-title', '.wo-sub', '.wo-quiet', '.wo-stop']) assert.ok(html.includes(c), c);
   assert.match(html, /\.wo-quiet \{[^}]*dashed/);
 });

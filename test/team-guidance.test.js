@@ -152,18 +152,13 @@ test('teamRole: challenger and worker are stored, null and empty delete it, anyt
 // ── the server boundary ──
 test('a member cannot PATCH teamGuidance or teamRole: the server guard, run on the real source, refuses both', () => {
   const src = read('server.js');
-  const start = src.indexOf("if (!req.hubService && !access.isAdmin(req.hubUser)) {\n        const MEMBER_EDITABLE");
-  assert.ok(start > 0, 'the member guard is in server.js');
-  const open = src.indexOf('{', start);
-  let depth = 0, end = open;
-  for (let i = open; i < src.length; i++) { if (src[i] === '{') depth++; else if (src[i] === '}') { depth--; if (!depth) { end = i; break; } } }
-  const guard = src.slice(start, end + 1);
-  assert.doesNotMatch(guard, /teamGuidance|teamRole/, 'neither is in the member allowlist');
+  // The member guard moved from server.js into lib/settings-apply agentFieldAllowed (the lead's settings tool uses it too): run the real function.
+  const sa = L('settings-apply.js');
+  assert.ok(!sa.MEMBER_EDITABLE_AGENT_FIELDS.has('teamGuidance') && !sa.MEMBER_EDITABLE_AGENT_FIELDS.has('teamRole'), 'neither is in the member allowlist');
+  assert.match(src, /settingsApply\.agentFieldAllowed\(body,/, 'the PATCH route asks agentFieldAllowed');
   const run = (user, body, hubService = false) => {
-    let sent = null;
-    const jsonResponse = (res, code, obj) => { sent = { code, obj }; return 'sent'; };
-    const fn = vm.runInNewContext(`(function (req, body, access, jsonResponse, res) { ${guard}\n return 'continued'; })`, {});
-    return { out: fn({ hubService, hubUser: user }, body, access, jsonResponse, {}), sent };
+    const g = sa.agentFieldAllowed(body, { service: hubService, token: false, user, isAdmin: access.isAdmin(user), isOwner: false, pendingTotp: false, ownSession: false });
+    return g.ok ? { out: 'continued', sent: null } : { out: 'sent', sent: { code: g.status, obj: { error: g.error } } };
   };
   const member = { id: 'u2', role: 'member' }, admin = { id: 'u1', role: 'admin' };
   for (const body of [{ teamGuidance: 'on' }, { teamRole: 'challenger' }, { teamGuidance: null }, { blurb: 'x', teamRole: null }]) {
@@ -292,22 +287,17 @@ test('first-run seeding writes the marker, so a fresh install is never migrated'
 });
 
 // ── pages ──
-test('the pages carry the controls: the Settings tuning select, and the two agent-settings rows', () => {
-  const idx = read('index.html'), app = read('app.js'), as = read('agent-settings.html');
+test('the pages carry the controls: the Settings tuning select (the two per-agent rows are the card\'s Role and team rows, P4-2)', () => {
+  const idx = read('index.html'), app = read('app.js');
   // menu split (gear = what you set, ⋯ = what you do): the select moved from the ⋯ menu into #st-tuning-body, right after SDK workers
   assert.match(idx, /<div id="st-tuning-body" data-no-dirty hidden>[\s\S]*?id="sdk-workers-select"[\s\S]*?<\/div>\s*<div class="st-hint">[^<]*<\/div>\s*<div class="st-row"><label for="team-guidance-select">Team guidance<\/label><select id="team-guidance-select">[\s\S]*?value="full">Full<[\s\S]*?value="light">Light<[\s\S]*?value="off">Off</);
   assert.doesNotMatch(idx.slice(idx.indexOf('id="more-menu"'), idx.indexOf('id="st-tuning-body"')), /team-guidance-select/);
   // Review r1: the save moved into bindTeamGuidanceSelect (one save at a time, the stored value put back on failure); its behaviour is tested below.
   assert.match(app, /doFetch\('\/api\/team_guidance', \{ method: 'POST'[^}]*\}[^)]*body: JSON\.stringify\(\{ level: want \}\)/);
   assert.match(app, /if \(teamGuidanceSelect\) bindTeamGuidanceSelect\(teamGuidanceSelect, /);
-  assert.match(as, /<select id="team-guidance-mode" onchange="saveTeamGuidance\(\)"[\s\S]*?value="inherit">Use the hub setting<[\s\S]*?value="on">On<[\s\S]*?value="off">Off</);
-  assert.match(as, /<select id="team-role" onchange="saveTeamRole\(\)"[\s\S]*?value="">None<[\s\S]*?value="worker">Worker<[\s\S]*?value="challenger">Challenger</);
-  assert.match(as, /id="team-guidance-status"/);
-  assert.match(as, /JSON\.stringify\(\{ teamGuidance: v \}\)/);
-  assert.match(as, /JSON\.stringify\(\{ teamRole: v \|\| null \}\)/);
-  assert.match(as, /agent\?\.teamGuidance \|\| 'inherit'/);
-  assert.match(as, /agent\?\.teamRole \|\| ''/);
-  assert.ok(as.indexOf('id="effort-row"') < as.indexOf('id="team-guidance-row"'), 'after the effort row');
+  const basics = read('lib/ui-agent-card-basics.js');
+  assert.match(basics, /ctx\.patch\(\{ teamGuidance: /);
+  assert.match(basics, /ctx\.patch\(\{ teamRole: /);
 });
 
 // Review r1 (Sonnet): teamRole 'worker' must list the agent like a worker; the light text names the spawn_workers fallback.

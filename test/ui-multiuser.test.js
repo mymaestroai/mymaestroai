@@ -71,23 +71,30 @@ test('Security dialog covers 2FA enrol / disable, password change and sign out e
 test('members: admin surfaces are hidden and approvals / Resume buttons are not rendered', () => {
   assert.match(app, /function applyMemberView\(\) \{[^]*?if \(!me \|\| me\.isAdmin\) return;/);
   // menu split (gear = what you set, ⋯ = what you do): comms-btn and advanced-toggle left the ⋯ menu; the whole menu (more-wrap) is still hidden for members
-  for (const id of ['wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn', 'settings-btn', 'schedule-btn', 'spend-today', 'more-wrap']) {
+  for (const id of ['schedule-btn', 'spend-today', 'update-chip']) {
     assert.ok(app.includes(`'${id}'`), `${id} is hidden for members`);
     assert.ok(html.includes(`id="${id}"`), `${id} exists in index.html`);
   }
-  // their new homes are in Settings, an admin's: a member gets only a plain line instead of the dialog
+  // P4-11: the ⋯ menu is gone; Wallets, Dream, Update and Restart are buttons in an admin's Settings (a member never gets those sections)
+  assert.ok(!html.includes('id="more-wrap"') && !html.includes('id="wallet-btn"'));
+  for (const id of ['dream-btn', 'git-sync-btn', 'restart-hub-btn']) assert.ok(app.includes(`id="${id}"`), `${id} is in Settings`);
+  // P4-5b: the gear is a member's too (it opens their one group "You and this device"), so it is not in the hidden list
+  assert.doesNotMatch(app.slice(app.indexOf('function applyMemberView() {'), app.indexOf('function applyMemberView() {') + 1200), /'settings-btn'/);
+  assert.ok(html.includes('id="settings-btn"'), 'the gear exists in index.html');
+  // their new homes are in Settings, an admin's: a member gets the one group instead of the dialog
   for (const id of ['comms-btn', 'advanced-toggle', 'notify-agent-item']) assert.ok(!html.includes(`id="${id}"`), `${id} is no longer in the ⋯ menu`);
-  assert.ok(html.includes('id="more-moved-item"'), 'the ⋯ menu points to Settings');
+  assert.ok(!html.includes('id="more-moved-item"'), 'no ⋯ menu any more');
   assert.ok(app.includes('id="st-comms-section"') && app.includes('id="st-tuning-section"') && app.includes('id="st-notify-agent"'), 'the moved items are Settings sections');
-  assert.match(app, /if \(!isHubAdmin\(\)\) stModal\(`<h3>&#x2699;&#xFE0F; Settings<\/h3><p class="st-sub">Settings are kept by the admins of this Maestro\.<\/p>/);
+  assert.doesNotMatch(app, /Settings are kept by the admins of this Maestro/);
+  assert.match(app, /async function openSettings\(\) \{\n\s+if \(!isHubAdmin\(\)\) return openMemberSettings\(\);/);
   // The ⋯ menu as a whole, the Tiger Team and Guide tabs and the tab strip are hidden for members.
   assert.match(app, /for \(const t of \['group-chat', 'guide'\]\)/);
   // changed: members keep the tab strip for All Agents and Teams (Teams view); only the Tiger Team and Guide tabs stay hidden
   assert.doesNotMatch(app, /document\.querySelector\('\.sidebar \.tabs'\);\s*if \(tabs\) tabs\.style\.display = 'none'/);
   assert.match(app, /const groupActions = !isHubAdmin\(\) \? ''/);
-  // changed: the hover gear is replaced by the always-visible ⋯ row menu; its entries (Settings, Build team) are admin-only and an empty menu draws no button
-  assert.match(app, /function agentMenuEntries\(a\) \{\s*if \(!a \|\| !isHubAdmin\(\) \|\| simpleOn\(\)\) return \[\];/);
-  assert.match(app, /if \(!agentMenuEntries\(a\)\.length\) return '';/);
+  // changed (P4-2): the agent row's ⋯ menu is gone; Build team (admin-only, never in Simple) is the card's row and the "Solo · Build team" link needs agentCanBuildTeam
+  assert.doesNotMatch(app, /function agentMenuEntries|agentMenuBtnHtml/);
+  assert.match(app, /return !!a && isHubAdmin\(\) && \(!!inSimple \|\| !simpleOn\(\)\) && hubTeams\.isMain\(a\) && !hubTeams\.hasTeam\(a\.name, AGENTS\);/);
   assert.match(app, /function upsertApproval\(ev\) \{\s*if \(!ev \|\| !ev\.id\) return;\s*if \(!isHubAdmin\(\)\) return;/);
   assert.match(app, /if \(!isHubAdmin\(\)\) return;\s*\/\/ approvals are an admin surface/);
   assert.match(app, /if \(!isHubAdmin\(\)\) btn\.style\.display = 'none'/);
@@ -113,5 +120,5 @@ test('mobile: owner query, Security sheet, sign out, member gating, 401 redirect
 });
 
 test('service worker version bumped so phones pick up the new mobile.js', () => {
-  assert.match(sw, /const VERSION = 'hub-mobile-v94';/);
+  assert.match(sw, /const VERSION = 'hub-mobile-v104';/);
 });

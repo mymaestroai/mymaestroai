@@ -198,5 +198,5 @@ test('Settings on an older hub answer: no figure, but caps and credits are still
   const set = app.slice(app.indexOf('async function paintSpendSettings'), app.indexOf('async function saveSpendCaps'));
   assert.ok(set.includes("const legacy = typeof t.paidTurns !== 'number';"));
   assert.ok(!/paidTurns !== 'number'\)[^\n]*return;/.test(set), 'the older-hub path must not return before the cap inputs are filled');
-  assert.ok(set.indexOf("box.textContent = 'Restart your Maestro to see pay-per-use spend.'") < set.indexOf("agentInp.value = caps.perAgentDailyUsd"));
+  assert.ok(set.indexOf("box.textContent = 'Restart your Maestro to see pay-per-use spend.'") < set.indexOf("capLoaded(agentInp, caps.perAgentDailyUsd"));   // the caps are now filled through capLoaded (it keeps a typed value), not by assigning .value
 });
