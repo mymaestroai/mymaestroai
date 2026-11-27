@@ -10,7 +10,7 @@ const ROOT = path.join(__dirname, '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
 const idx = read('index.html'), mob = read('mobile.html'), app = read('app.js'), cd = read('lib/ui-call-display.js');
 
-test('index.html: the call bar, voice pop and drawer pickers set colour, background and colour-scheme (dark, light under Simple's html.mm-simple.mm-light)', () => {
+test('index.html: the call bar, voice pop and drawer pickers set colour, background and colour-scheme (dark, light under the Simple light theme, html.mm-simple.mm-light)', () => {
   assert.match(idx, /\.voice-pop select\[data-vp="display"\][^{]*\{[^}]*color: var\(--text\);[^}]*background-color: var\(--bg-input\);[^}]*color-scheme: dark;/);
   assert.match(idx, /\.voice-callbar select\[data-vcb="display"\][^{]*\{[^}]*color: var\(--text\)/);
   assert.match(idx, /select\.ucd-display\s*\{[^}]*color-scheme: dark/);
@@ -18,7 +18,7 @@ test('index.html: the call bar, voice pop and drawer pickers set colour, backgro
   assert.match(idx, /select\[data-vp="display"\] option[^{]*\{[^}]*color: var\(--text\);[^}]*background-color: var\(--bg-input\)/);
 });
 
-test('mobile.html: #cp-display, #vp-display and the drawer picker set colour, background and colour-scheme (dark, light under Simple's html.mm-simple.mm-light)', () => {
+test('mobile.html: #cp-display, #vp-display and the drawer picker set colour, background and colour-scheme (dark, light under the Simple light theme, html.mm-simple.mm-light)', () => {
   assert.match(mob, /select#cp-display, select#vp-display, select\.ucd-display\s*\{[^}]*color: var\(--text\);[^}]*background-color: var\(--bg-input\);[^}]*color-scheme: dark;/);
   assert.match(mob, /html\.mm-simple\.mm-light select#cp-display, html\.mm-simple\.mm-light select#vp-display[^{]*\{[^}]*color-scheme: light;/);
   assert.match(mob, /select#cp-display option[^{]*\{[^}]*color: var\(--text\);[^}]*background-color: var\(--bg-input\)/);
