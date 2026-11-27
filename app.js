@@ -62,6 +62,7 @@
         }
         else if (r.status === 401) {
           try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }   // no session: the last person's theme must not stay on this browser
+          try { if (window.HubLooks) window.HubLooks.forgetBanner(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
           // No session. On a hub with no accounts at all (updated from before multi-user) /api/me is refused too, so
           // ask the public auth status; hubMe stays undefined so the rest of the page behaves as before.
           try { const a = await (await fetch('/api/auth/status', { credentials: 'include' })).json(); window.hubNoAccounts = a && a.setupNeeded === true && !a.signedIn; } catch {}
@@ -716,6 +717,7 @@
     async function signOut() {
       try { qsForgetRecents(null); } catch { /* the ⌘K switcher's recents leave with the person */ }
       try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
+      try { if (window.HubLooks) window.HubLooks.forgetBanner(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
       try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }); } catch (e) { /* go to login anyway */ }
       location.href = '/login';
     }
@@ -3713,10 +3715,30 @@
     }
     // The ONE banner (P4-15): only while something is in "Fix now". "<first item> (and N more to fix). Open For your review" and that item's fix button.
     // It replaces the no-login, no-provider, setup, health, security and restore banners; pressing the link opens Settings at Fix now.
+    // The banner's place is held from the first paint by html.mm-rvb-cached (lib/ui-looks.js). Only a SETTLED call (the page knows who is signed in,
+    // or there are no accounts) may drop that placeholder or touch the remembered banner; an earlier call changes nothing.
+    let reviewBannerSettled = false;
+    const reviewBannerBackstop = setTimeout(() => {   // backstop: nothing settled in 15 s, so the placeholder must not stay
+      if (reviewBannerSettled) return;
+      document.documentElement.classList.remove('mm-rvb-cached');
+      layoutBanners();
+    }, 15000);
+    if (reviewBannerBackstop && reviewBannerBackstop.unref) reviewBannerBackstop.unref();   // (Node tests only)
     function reviewPaintBanner() {
+      if (!(window.hubMe || window.hubNoAccounts === true)) return;   // not settled: leave the placeholder and the cache
+      reviewBannerSettled = true;
+      const html = document.documentElement;
+      const hadCached = html.classList.contains('mm-rvb-cached');
       let bar = document.getElementById('hub-review-banner');
       const b = reviewLast && RV ? RV.bannerOf(reviewLast) : null;
-      if (!b) { if (bar) { bar.remove(); layoutBanners(); } return; }
+      const store = () => { try { return window.HubLooks ? window.HubLooks.storageOf(window) : null; } catch { return null; } };
+      if (!b) {
+        html.classList.remove('mm-rvb-cached');
+        if (bar) bar.remove();
+        layoutBanners();
+        try { if (window.HubLooks) window.HubLooks.rememberBanner(store(), 'desk', null); } catch { /* blocked storage */ }
+        return;
+      }
       if (!bar) {
         bar = document.createElement('div');
         bar.id = 'hub-review-banner';
@@ -3728,6 +3750,11 @@
           if (e.preventDefault) e.preventDefault();
           openReviewAt('fix');
         });
+        if (!hadCached) {   // newly appearing: it slides in once (the page moves with it)
+          bar.classList.add('mm-rvb-enter');
+          html.classList.add('mm-rvb-anim');
+          setTimeout(() => { bar.classList.remove('mm-rvb-enter'); html.classList.remove('mm-rvb-anim'); }, 300);
+        }
         document.body.prepend(bar);
       }
       const first = reviewLast.fix[0];
@@ -3736,7 +3763,9 @@
         const btn = typeof ClaudeSignin !== 'undefined' ? ClaudeSignin.healthButton({ action: 'claude-signin' }) : null;
         if (btn) s.appendChild(btn);
       }
+      html.classList.remove('mm-rvb-cached');   // same task as the insert: the real bar replaces the placeholder
       layoutBanners();
+      try { if (window.HubLooks && bar.offsetHeight > 0) window.HubLooks.rememberBanner(store(), 'desk', { t: bar.textContent.trim().slice(0, 400), h: bar.offsetHeight }); } catch { /* blocked storage */ }
     }
     // "Ask me in a week" on a suggestion: kept in this browser (localStorage 'hub-review-snooze'), so a calm install can clear its suggestions. No request is made.
     function reviewSnooze(id) {
@@ -4768,7 +4797,13 @@
         n.style.top = `${top}px`;
         top += n.offsetHeight || 0;
       }
-      document.documentElement.style.setProperty('--banner-h', `${top}px`);
+      // the review banner's early stand-in (html.mm-rvb-cached, lib/ui-looks.js) keeps its place last in the stack until the real bar replaces it
+      const html = document.documentElement;
+      if (!document.getElementById('hub-review-banner') && html.classList.contains('mm-rvb-cached')) {
+        html.style.setProperty('--mm-rvb-top', `${top}px`);
+        top += parseFloat(html.style.getPropertyValue('--mm-rvb-h')) || 0;
+      }
+      html.style.setProperty('--banner-h', `${top}px`);
     }
     // A notice's height can change after it is drawn (the web font arrives, the window narrows and its text wraps).
     window.addEventListener('resize', () => layoutBanners());

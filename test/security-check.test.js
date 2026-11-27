@@ -283,7 +283,7 @@ test('Run now in the security box reloads the review list, count and banner; the
   const j = app.indexOf('function layoutBanners() {');
   const fn = new Function('document', app.slice(j, app.indexOf('\n    }\n', j) + 6) + '\nreturn layoutBanners;');
   const pushed = {};
-  const page = (nodes) => ({ getElementById: (id) => nodes[id] || null, documentElement: { style: { setProperty: (k, v) => { pushed[k] = v; } } } });
+  const page = (nodes, cached) => ({ getElementById: (id) => nodes[id] || null, documentElement: { classList: { contains: (c) => !!cached && c === 'mm-rvb-cached' }, style: { setProperty: (k, v) => { pushed[k] = v; }, getPropertyValue: (k) => (k === '--mm-rvb-h' && cached ? cached + 'px' : '') } } });
   const layout = { style: {}, offsetHeight: 30 }, theme = { style: {}, offsetHeight: 20 }, review = { style: {}, offsetHeight: 34 };
   fn(page({ 'hub-review-banner': review, 'hub-theme-notice': theme, 'hub-phone-layout-notice': layout }))();
   assert.deepStrictEqual([layout.style.top, theme.style.top, review.style.top], ['0px', '30px', '50px'], 'all three stack; none covers another');
@@ -292,6 +292,12 @@ test('Run now in the security box reloads the review list, count and banner; the
   assert.strictEqual(review.style.top, '0px');
   fn(page({}))();
   assert.strictEqual(pushed['--banner-h'], '0px', 'no notices: the page goes back up');
+  // the review banner's early stand-in (html.mm-rvb-cached) keeps its place last in the stack until the real bar replaces it
+  fn(page({ 'hub-theme-notice': theme }, 41))();
+  assert.strictEqual(pushed['--mm-rvb-top'], '20px', 'the stand-in sits under the theme line');
+  assert.strictEqual(pushed['--banner-h'], '61px', 'and counts in the stack');
+  fn(page({ 'hub-review-banner': review }, 41))();
+  assert.strictEqual(pushed['--banner-h'], '34px', 'the real bar: the stand-in no longer counts');
   const html = require('fs').readFileSync(require('path').join(__dirname, '..', 'index.html'), 'utf8');
   for (const rule of [/padding-top: var\(--banner-h, 0px\)/, /\.sidebar-toggle \{\s*\n\s*display: none; position: fixed; top: calc\(10px \+ var\(--banner-h, 0px\)\)/, /position: fixed; left: -340px; top: var\(--banner-h, 0px\)/, /height: calc\(100dvh - var\(--banner-h, 0px\)\)/]) assert.match(html, rule);
 });

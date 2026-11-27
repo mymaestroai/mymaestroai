@@ -62,6 +62,7 @@ async function api(path, opts = {}) {
   if (res.status === 401 && !redirectingToLogin && !OWN_401.includes(String(path).split('?')[0])) {
     redirectingToLogin = true;
     try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }   // no session: the last person's theme must not stay here
+    try { if (window.HubLooks) window.HubLooks.forgetBanner(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
     location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
   }
   return res;
@@ -15754,11 +15755,26 @@ function reviewPaint(r) {
 }
 // The ONE notice at the top of the agent list: only while something is in "Fix now" (red). "<first item> (and N more to fix). Open For your review"
 // and the first item's fix button; the link opens Settings at the review group (its page starts with Fix now).
+// html.mm-rvb-cached (lib/ui-looks.js) holds the banner's place from the first paint; only a SETTLED call (hubMe known, or the no-accounts build)
+// may drop it or touch the remembered banner.
+let reviewBannerSettled = false;
+const reviewBannerBackstop = setTimeout(() => { if (!reviewBannerSettled) document.documentElement.classList.remove('mm-rvb-cached'); }, 15000);   // backstop
+if (reviewBannerBackstop && reviewBannerBackstop.unref) reviewBannerBackstop.unref();   // (Node tests only)
 function reviewPaintBanner(r) {
   const bar = $('review-banner');
   if (!bar) return;
+  if (!(hubMe || window.hubNoAccounts === true)) return;   // not settled: leave the placeholder and the cache
+  reviewBannerSettled = true;
+  const html = document.documentElement;
+  const hadCached = html.classList.contains('mm-rvb-cached'), wasHidden = bar.hidden;
+  const store = () => { try { return window.HubLooks ? window.HubLooks.storageOf(window) : null; } catch { return null; } };
   const RV = window.hubReview, b = r && RV ? RV.bannerOf(r) : null;
-  if (!b) { bar.hidden = true; bar.textContent = ''; return; }
+  if (!b) {
+    bar.hidden = true; bar.textContent = '';
+    html.classList.remove('mm-rvb-cached');
+    try { if (window.HubLooks) window.HubLooks.rememberBanner(store(), 'phone', null); } catch { /* blocked storage */ }
+    return;
+  }
   const f = b.fix;
   bar.innerHTML = `<span class="rvb-text">${esc(b.title)}${b.more > 0 ? ` (and ${b.more} more to fix)` : ''}.</span> <a href="#" class="rvb-open">Open For your review</a>`
     + (f && f.href ? ` <a href="${esc(f.href)}" class="rvb-fix">${esc(f.label)}</a>` : f && f.api ? ` <button type="button" class="rvb-fix" data-api="${esc(f.api)}" data-method="${esc(f.method || 'POST')}">${esc(f.label)}</button>` : f && f.kind === 'claude-signin' ? ' <span class="rvb-signin"></span>' : '');
@@ -15772,7 +15788,10 @@ function reviewPaintBanner(r) {
   });
   const slot = bar.querySelector('.rvb-signin');
   if (slot) { const s = typeof ClaudeSignin !== 'undefined' ? ClaudeSignin.healthButton({ action: 'claude-signin' }) : null; if (s) slot.appendChild(s); }
+  if (!hadCached && wasHidden) { bar.classList.add('mm-rvb-enter'); setTimeout(() => bar.classList.remove('mm-rvb-enter'), 300); }   // newly appearing: slides in once
   bar.hidden = false;
+  html.classList.remove('mm-rvb-cached');
+  try { if (window.HubLooks && bar.offsetHeight > 0) window.HubLooks.rememberBanner(store(), 'phone', { t: bar.textContent.trim().slice(0, 400), h: bar.offsetHeight }); } catch { /* blocked storage */ }
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) reviewRefresh().catch(() => {}); });
 setInterval(() => reviewRefresh().catch(() => {}), 5 * 60 * 1000);
@@ -16210,6 +16229,7 @@ async function paintMenuCredit() {
 
 async function signOut() {
   try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
+  try { if (window.HubLooks) window.HubLooks.forgetBanner(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
   try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
   location.href = '/login';
 }

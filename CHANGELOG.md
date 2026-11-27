@@ -6,6 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **The page no longer jumps when the red "fix now" banner arrives.** Your Maestro remembers the banner on each device and holds its place from the moment the page appears, so the chat and the agent list stay where they are while it loads. A banner your device has not shown before slides in once.
 - **Make a new agent from Settings, also on the phone.** Agents and teams starts with New agent: give it a name and describe its role, and your Maestro sets it up.
 - **The security check is in People and safety.** Run it where the group says it is; For your review still opens it from a problem's Details.
 - **Help buttons stay beside their setting on the phone.** The ⓘ no longer drops onto a line of its own next to switches, share-link times and the worker counts, and the group page header reads "‹ Settings" and the group name without a stray dot.

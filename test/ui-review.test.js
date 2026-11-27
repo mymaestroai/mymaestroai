@@ -191,6 +191,7 @@ function makeEl(doc, id) {
 }
 function makeDoc(ids) {
   const doc = { byId: {}, hiddenFlag: false, listeners: {} };
+  doc.documentElement = { classList: { _s: new Set(), add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); }, contains(c) { return this._s.has(c); } } };
   doc.getElementById = (id) => doc.byId[id] || null;
   doc.createElement = () => makeEl(doc, '');
   doc.addEventListener = (t, fn) => { (doc.listeners[t] = doc.listeners[t] || []).push(fn); };

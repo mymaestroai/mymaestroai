@@ -79,5 +79,5 @@ test('mobile: a chat-only Recall menu item opens a Recall sheet; tap a hit for i
 // (OPT-0019 / 0020 read-only, OPT-0021 the editor) list, edit, create and delete over /api/agents/<name>/records - test/ui-agent-card-more.test.js.
 
 test('service worker cache bumped to v18', () => {
-  assert.ok(sw.includes("const VERSION = 'hub-mobile-v107';"));
+  assert.ok(sw.includes("const VERSION = 'hub-mobile-v109';"));
 });
