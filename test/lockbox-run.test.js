@@ -20,6 +20,13 @@ let skip = false;
 if (process.platform !== 'linux') skip = 'the box only exists on Linux';
 else if (PROBE && PROBE.ok === false) skip = 'the box is not available here: ' + PROBE.reason;
 
+// strace cannot trace a process that is already traced (a watched shell runs this suite under strace): the watch tests
+// skip then, and run wherever the suite itself is not traced (CI). TracerPid in /proc/self/status is non-zero when traced.
+function isTraced() {
+  try { const m = /^TracerPid:\s*(\d+)/m.exec(fs.readFileSync('/proc/self/status', 'utf8')); return !!m && m[1] !== '0'; } catch (e) { return false; }
+}
+const TRACED = isTraced() ? 'this process is itself traced (TracerPid is not 0), so strace cannot trace the box here' : false;
+
 const cleanup = [];
 process.on('exit', () => { for (const d of cleanup) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (e) { /* ignore */ } } });
 
@@ -220,7 +227,7 @@ describe('lockbox-run', { skip }, () => {
     assert.notStrictEqual(r.status, 0);
   });
 
-  it('13. watch mode lets everything run and logs what enforce would refuse', () => {
+  it('13. watch mode lets everything run and logs what enforce would refuse', { skip: TRACED }, () => {
     const fx = fixture();
     const prof = profile(fx, { mode: 'watch' });
     const sock = path.join(fx.A, 'sock');
@@ -267,7 +274,7 @@ describe('lockbox-run', { skip }, () => {
     assert.strictEqual(box(fx, prof, 'kill -TERM $$').signal, 'SIGTERM');
   });
 
-  it('14. watch keeps log.max entries and counts the rest', () => {
+  it('14. watch keeps log.max entries and counts the rest', { skip: TRACED }, () => {
     const fx = fixture();
     const prof = profile(fx, { mode: 'watch', log: { path: fx.log, max: 2 } });
     const r = box(fx, prof, 'for i in 1 2 3 4 5; do echo x > "$FX_B/f$i"; done');
@@ -280,7 +287,7 @@ describe('lockbox-run', { skip }, () => {
     assert.strictEqual(more.count, 3);
   });
 
-  it('14b. watch writes nothing when nothing would be refused', () => {
+  it('14b. watch writes nothing when nothing would be refused', { skip: TRACED }, () => {
     const fx = fixture();
     const r = box(fx, profile(fx, { mode: 'watch' }), 'echo ok > "$FX_A/sub/ok.txt"; cat "$FX_S/plain.txt"');
     assert.strictEqual(r.status, 0, r.stderr);
