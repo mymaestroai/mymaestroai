@@ -3809,7 +3809,7 @@
           return `<div class="rv-row rv-feature" data-fid="${esc(f.id)}">
             <div class="rv-main"><div class="rv-title">${esc(f.title)}</div>${f.text ? `<div class="rv-text">${esc(f.text)}</div>` : ''}${f.snoozedUntil && !d ? `<div class="rv-text">${esc(RV.askedAgainLine(f.snoozedUntil))}</div>` : ''}
             <div class="rv-result" role="status" aria-live="polite">${d ? esc(d.line) : ''}</div></div>
-            ${d && d.decision !== 'later' ? '' : `<div class="rv-acts">${[['on', 'Turn on'], ['off', 'Leave off'], ...(d || f.snoozedUntil ? [] : [['later', 'Ask me in a week']])].map(([k, l]) => `<button type="button" class="st-test-btn" data-rv="decide" data-id="${esc(f.id)}" data-decision="${k}">${l}</button>`).join('')}</div>`}</div>`;
+            ${d && d.decision !== 'snooze' ? '' : `<div class="rv-acts">${[['on', 'Turn on'], ['off', 'Leave off'], ...(d || f.snoozedUntil ? [] : [['snooze', 'Ask me in a week']])].map(([k, l]) => `<button type="button" class="st-test-btn" data-rv="decide" data-id="${esc(f.id)}" data-decision="${k}">${l}</button>`).join('')}</div>`}</div>`;
         }).join('');
       }
       if (!r.problems.length && !shown.length && !r.notes.length) h += `<div class="rv-calm">Nothing needs your review.</div>`;
@@ -3827,10 +3827,20 @@
       const say = (t) => { const el = row && row.querySelector('.rv-result'); if (el) el.textContent = t; };
       for (const b of row ? row.querySelectorAll('button') : []) b.disabled = true;
       try {
-        const r = await fetch(`/api/behaviour-changes/${encodeURIComponent(id)}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision }) });
+        const r = await fetch(`/api/behaviour-changes/${encodeURIComponent(id)}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, expect: 'pending' }) });
         const j = await r.json().catch(() => ({}));
-        if (!r.ok || j.ok === false) {   // a 403 (not their own browser session) shows the server's message
+        if (!r.ok || j.ok === false) {   // a 403 (owner-only, or not their own browser session) shows the server's message; a 409 (answered on another device) also redraws the list
           say(j.error || j.message || `Not saved (HTTP ${r.status}).`);
+          if (r.status === 409) {   // redraw from the hub's truth, then put the message back on the row if it is still listed
+            const msg = j.error || j.message || 'already decided';
+            reviewRefresh().catch(() => {}).then(() => {
+              const again = document.getElementById('st-review-list');
+              const el = again && [...again.querySelectorAll('.rv-feature')].find((e) => e.dataset.fid === id);
+              const res = el && el.querySelector('.rv-result');
+              if (res) res.textContent = msg;
+            });
+            return;
+          }
           for (const b of row ? row.querySelectorAll('button') : []) b.disabled = false;
           return;
         }

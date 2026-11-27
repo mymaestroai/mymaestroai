@@ -82,9 +82,9 @@ test('backups: a paused restore is Fix now, a failed backup and a failed nightly
 });
 
 test('features: pending behaviour changes only; a snoozed one is listed but not counted; it counts again once the time has passed', () => {
-  const changes = { changes: [pending('one'), pending('two', { snoozedUntil: NOW + 3 * DAY }), pending('three', { snoozedUntil: NOW - 1 }), { id: 'four', state: 'on', title: 'Four' }, { id: 'five', state: 'off', title: 'Five' }] };
+  const changes = { changes: [pending('one'), pending('two', { snoozedUntil: new Date(NOW + 3 * DAY).toISOString() }), pending('three', { snoozedUntil: new Date(NOW - 1000).toISOString() }), pending('six', { snoozedUntil: NOW + DAY }), { id: 'four', state: 'on', title: 'Four' }, { id: 'five', state: 'off', title: 'Five' }] };
   const r = R.build({ changes, now: NOW });
-  assert.deepStrictEqual(r.features.map((f) => [f.id, f.snoozed]), [['one', false], ['two', true], ['three', false]]);
+  assert.deepStrictEqual(r.features.map((f) => [f.id, f.snoozed]), [['one', false], ['two', true], ['three', false], ['six', true]]);   // ISO strings from the hub; a number from old data still reads
   assert.strictEqual(r.features[1].snoozedUntil, NOW + 3 * DAY);
   assert.strictEqual(r.features[0].text, 'What one changes.', 'one line from the entry');
   assert.strictEqual(r.features[0].title, 'Feature one');
@@ -92,8 +92,8 @@ test('features: pending behaviour changes only; a snoozed one is listed but not 
   assert.strictEqual(r.worst, 'none', 'features never raise the worst level');
   assert.strictEqual(R.badgeKind(r), '', 'features alone give no count on the gear');
   assert.strictEqual(R.summaryText(r), 'Nothing to fix · 2 new features');
-  assert.strictEqual(R.build({ changes: { changes: [pending('a', { snoozedUntil: NOW + DAY })] }, now: NOW }).count, 0);
-  assert.strictEqual(R.summaryText(R.build({ changes: { changes: [pending('a', { snoozedUntil: NOW + DAY })] }, now: NOW })), 'Nothing to fix');
+  assert.strictEqual(R.build({ changes: { changes: [pending('a', { snoozedUntil: new Date(NOW + DAY).toISOString() })] }, now: NOW }).count, 0);
+  assert.strictEqual(R.summaryText(R.build({ changes: { changes: [pending('a', { snoozedUntil: new Date(NOW + DAY).toISOString() })] }, now: NOW })), 'Nothing to fix');
 });
 
 test('count = the Fix now items only; worst is critical only for them; suggestions and features never count; the line, the gear label and the colour', () => {
@@ -142,8 +142,10 @@ test('the words after a choice: Turned on. / Left off. / I\'ll ask again on <dat
   assert.strictEqual(R.decisionLine('on'), 'Turned on.');
   assert.strictEqual(R.decisionLine('off'), 'Left off.');
   const at = Date.UTC(2026, 11, 3, 12, 0, 0);
-  assert.strictEqual(R.decisionLine('later', at, 'en-US'), "I'll ask again on December 3.");
+  assert.strictEqual(R.decisionLine('snooze', new Date(at).toISOString(), 'en-US'), "I'll ask again on December 3.");
+  assert.strictEqual(R.decisionLine('snooze', at, 'en-US'), "I'll ask again on December 3.");
   assert.strictEqual(R.askedAgainLine(at, 'en-US'), "I'll ask again on December 3.");
+  assert.strictEqual(R.askedAgainLine(new Date(at).toISOString(), 'en-US'), "I'll ask again on December 3.");
   assert.strictEqual(R.SNOOZE_MS, 7 * DAY);
 });
 
@@ -250,7 +252,7 @@ test('page: the review group shows Fix now, then Worth doing, then folded Sugges
   assert.match(h, /<h4>New features<\/h4>/);
   assert.match(h, /Team advice/);
   assert.match(h, /What team-guidance changes\./);
-  for (const [k, l] of [['on', 'Turn on'], ['off', 'Leave off'], ['later', 'Ask me in a week']]) assert.match(h, new RegExp(`data-decision="${k}">${l}<`));
+  for (const [k, l] of [['on', 'Turn on'], ['off', 'Leave off'], ['snooze', 'Ask me in a week']]) assert.match(h, new RegExp(`data-decision="${k}">${l}<`));
   assert.doesNotMatch(h, /Nothing needs your review/);
   assert.deepStrictEqual(d.calls.sum.at(-1), ['review', 'list', '1 to fix · 1 suggestion · 1 new feature', true], 'the group row: red because something is to fix');
   const sum = d.doc.getElementById('st-sum-review');
@@ -294,13 +296,13 @@ test('page: a read that failed shows "Could not check ..." and not the calm line
 
 test('page: a snoozed feature stays listed with "I\'ll ask again on <date>." (Turn on / Leave off kept) and is not counted', async () => {
   const d = desktop();
-  const until = Date.now() + 3 * DAY;
+  const until = new Date(Date.now() + 3 * DAY).toISOString();
   d.st.responses = answers({ '/api/behaviour-changes': { changes: [pending('a', { snoozedUntil: until })] } });
   await d.api.reviewRefresh();
   const sh = d.doc.getElementById('st-review-list').innerHTML;
   assert.match(sh, /I&#39;ll ask again on |I'll ask again on /);
   assert.ok(sh.includes('data-decision="on"') && sh.includes('data-decision="off"'), 'Turn on and Leave off stay on a snoozed row');
-  assert.ok(!sh.includes('data-decision="later"'), 'it was already put off');
+  assert.ok(!sh.includes('data-decision="snooze"'), 'it was already put off');
   assert.strictEqual(d.doc.getElementById('settings-count'), null, 'no badge: nothing counts');
   assert.strictEqual(d.doc.getElementById('settings-btn').attrs['aria-label'], 'Settings');
 });
@@ -314,7 +316,7 @@ test('page: each button posts its own decision; the row then says what happened 
     d.st.responses = answers();   // the server now says it is decided
     await d.api.reviewDecide('team-guidance', decision, null);
     const post = d.calls.fetch.find((c) => c[1] === 'POST');
-    assert.deepStrictEqual([post[0], post[2]], ['/api/behaviour-changes/team-guidance', JSON.stringify({ decision })]);
+    assert.deepStrictEqual([post[0], post[2]], ['/api/behaviour-changes/team-guidance', JSON.stringify({ decision, expect: 'pending' })]);
     const h = d.doc.getElementById('st-review-list').innerHTML;
     assert.match(h, /Team advice/, 'the row stays with its title');
     assert.ok(h.includes(`>${line}<`), line);
@@ -324,18 +326,18 @@ test('page: each button posts its own decision; the row then says what happened 
   }
 });
 
-test('page: "Ask me in a week" posts later, says when it will ask again, and the row stays (not counted)', async () => {
+test('page: "Ask me in a week" posts snooze (expect pending), says when it will ask again, and the row stays (not counted)', async () => {
   const d = desktop();
   d.st.responses = answers({ '/api/behaviour-changes': { changes: [pending('a', { title: 'Alpha' })] } });
   await d.api.reviewRefresh();
-  const until = Date.now() + 7 * DAY;
+  const until = new Date(Date.now() + 7 * DAY).toISOString();
   d.st.decideBody = { ok: true, change: { id: 'a', state: 'pending', snoozedUntil: until } };
   d.st.responses = answers({ '/api/behaviour-changes': { changes: [pending('a', { title: 'Alpha', snoozedUntil: until })] } });
-  await d.api.reviewDecide('a', 'later', null);
-  assert.strictEqual(d.calls.fetch.find((c) => c[1] === 'POST')[2], JSON.stringify({ decision: 'later' }));
+  await d.api.reviewDecide('a', 'snooze', null);
+  assert.strictEqual(d.calls.fetch.find((c) => c[1] === 'POST')[2], JSON.stringify({ decision: 'snooze', expect: 'pending' }));
   const h = d.doc.getElementById('st-review-list').innerHTML;
-  assert.ok(h.includes(escHtml(R.decisionLine('later', until))), "I'll ask again on <date>.");
-  assert.ok(h.includes('data-decision="on"') && h.includes('data-decision="off"') && !h.includes('data-decision="later"'), 'the row keeps Turn on and Leave off');
+  assert.ok(h.includes(escHtml(R.decisionLine('snooze', until))), "I'll ask again on <date>.");
+  assert.ok(h.includes('data-decision="on"') && h.includes('data-decision="off"') && !h.includes('data-decision="snooze"'), 'the row keeps Turn on and Leave off');
   await new Promise((r) => setImmediate(r));
   assert.strictEqual(d.doc.getElementById('settings-count'), null);
 });
@@ -355,6 +357,18 @@ test('page: a refused choice (not their own browser session) shows the server\'s
   await d.api.reviewDecide('a', 'on', null);
   assert.strictEqual(say.textContent, 'Sign in with an admin account in your browser to decide this.');
   assert.match(d.doc.getElementById('st-review-list').innerHTML, /data-decision="on"/, 'nothing was repainted');
+});
+
+test('page: a 409 (answered on another device) shows the server\'s text and reads the list again', async () => {
+  const d = desktop();
+  d.st.responses = answers({ '/api/behaviour-changes': { changes: [pending('a')] } });
+  await d.api.reviewRefresh();
+  const before = d.calls.fetch.filter((c) => c[0] === '/api/behaviour-changes').length;
+  d.st.decideStatus = 409;
+  d.st.decideBody = { ok: false, error: 'already decided' };
+  await d.api.reviewDecide('a', 'snooze', null);
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(d.calls.fetch.filter((c) => c[0] === '/api/behaviour-changes').length, before + 1, 'the list was fetched again');
 });
 
 test('page: Details reveals the full section through stReveal', () => {

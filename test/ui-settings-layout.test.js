@@ -89,15 +89,15 @@ test('4. the phone group page hides the dialog title and sentence and shows Save
 
 test('5. a snoozed feature keeps Turn on and Leave off; one wording: "I\'ll ask again on <date>."', () => {
   const at = Date.UTC(2026, 11, 3, 12);
-  assert.strictEqual(R.decisionLine('later', at, 'en-US'), "I'll ask again on December 3.");
-  assert.strictEqual(R.decisionLine('later', undefined, 'en-US'), "I'll ask again in a week.");
+  assert.strictEqual(R.decisionLine('snooze', new Date(at).toISOString(), 'en-US'), "I'll ask again on December 3.");
+  assert.strictEqual(R.decisionLine('snooze', undefined, 'en-US'), "I'll ask again in a week.");
   assert.strictEqual(R.askedAgainLine(at, 'en-US'), "I'll ask again on December 3.");
   assert.ok(!/We'll ask again|Asked again on/.test(read('lib/ui-review.js').replace(/\/\*[\s\S]*?\*\//, '')), 'no other wording is left in the module');
   // no other module words it
   for (const f of ['app.js', 'mobile.js', 'lib/behaviour-changes.js']) assert.ok(!/ask again next week|We'll ask again/.test(read(f)), f);
   const row = app.slice(app.indexOf('<div class="rv-row rv-feature"'), app.indexOf('<div class="rv-row rv-feature"') + 900);
-  assert.ok(row.includes("d && d.decision !== 'later' ? ''"), 'a snoozed row still has its buttons');
-  assert.ok(row.includes("[['on', 'Turn on'], ['off', 'Leave off'], ...(d || f.snoozedUntil ? [] : [['later', 'Ask me in a week']])]"), 'Turn on / Leave off stay; the snooze button goes once asked');
+  assert.ok(row.includes("d && d.decision !== 'snooze' ? ''"), 'a snoozed row still has its buttons');
+  assert.ok(row.includes("[['on', 'Turn on'], ['off', 'Leave off'], ...(d || f.snoozedUntil ? [] : [['snooze', 'Ask me in a week']])]"), 'Turn on / Leave off stay; the snooze button goes once asked');
   assert.match(app, /reviewDecided\[id\] = \{ title: \(f && f\.title\) \|\| id, decision,/, 'the choice is kept so the row knows it was snoozed');
 });
 
