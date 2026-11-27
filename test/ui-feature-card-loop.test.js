@@ -173,3 +173,19 @@ test('the card already last with the busy card higher up: the busy card goes bac
   assert.deepStrictEqual(o.slice(-2), ['card', 'busy']);
   assert.ok(o.indexOf('bubble') < o.indexOf('card'), o.join(','));
 });
+
+test('after the move limit gave up, a chat switch places the card at once in the new list (the spent budget is reset too)', async () => {
+  const { FC, D } = load();
+  const a = D.node('div');
+  const other = D.node('div'); other.className = 'someone-else';
+  a.appendChild(other);
+  const o = new D.MO(() => { if (other.parentNode === a && a.lastElementChild !== other) a.appendChild(other); });
+  o.observe(a, { childList: true });
+  FC.chatShown('harbor', a);
+  await settle();
+  const b = D.node('div'); b.appendChild(D.node('div'));
+  FC.chatShown('harbor', b);
+  await settle();
+  const last = b.children[b.children.length - 1];
+  assert.ok(last && String(last.className).includes('feature-card'), 'the card is placed at the end of the new list');
+});
