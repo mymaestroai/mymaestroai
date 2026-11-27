@@ -27,9 +27,9 @@ function fakeSaver(opts = {}) {
 // ── Q1: the reset question names the address a reset really uses (fallbackUrl), the built-in one when missing
 test('Q1: reset names providers[p].fallbackUrl; without it the built-in address', async () => {
   const data = { providers: { ninfer: { url: 'https://203.0.113.10/v1', fallbackUrl: 'http://10.0.0.5:9000/v1' } } };
-  assert.strictEqual(G.p5cConfirmText(row('OPT-0931'), null, 'https://203.0.113.10/v1', data),
+  assert.strictEqual(G.p5cConfirmText(row('OPT-0931'), null, data),
     'Keys and prompts for NInfer will go to http://10.0.0.5:9000/v1 instead of https://203.0.113.10/v1. Change it?');
-  assert.strictEqual(G.p5cConfirmText(row('OPT-0931'), null, 'https://203.0.113.10/v1', { providers: { ninfer: {} } }),
+  assert.strictEqual(G.p5cConfirmText(row('OPT-0931'), null, { providers: { ninfer: { url: 'https://203.0.113.10/v1' } } }),
     'Keys and prompts for NInfer will go to http://127.0.0.1:8080/v1 instead of https://203.0.113.10/v1. Change it?');
   const f = fakeSaver({ data });
   await f.saver.save('OPT-0931', true);
@@ -43,11 +43,11 @@ test('Q10: typing the address already in effect asks nothing (default, or the en
   await a.saver.save('OPT-0933');
   assert.deepStrictEqual(a.asked, [], 'the default address typed: no question');
   assert.strictEqual(a.posts.length, 1);
-  const b = fakeSaver({ data: { providers: { ninfer: { fallbackUrl: 'http://10.0.0.5:9000/v1' } } } });
+  const b = fakeSaver({ data: { providers: { ninfer: { url: 'http://10.0.0.5:9000/v1', fallbackUrl: 'http://10.0.0.5:9000/v1' } } } });
   b.raws['OPT-0931'] = 'http://10.0.0.5:9000/v1';
   await b.saver.save('OPT-0931');
   assert.deepStrictEqual(b.asked, [], 'the env address typed: no question');
-  const c = fakeSaver({ data: { providers: { ninfer: { fallbackUrl: 'http://10.0.0.5:9000/v1' } } } });
+  const c = fakeSaver({ data: { providers: { ninfer: { url: 'http://10.0.0.5:9000/v1', fallbackUrl: 'http://10.0.0.5:9000/v1' } } } });
   c.raws['OPT-0931'] = 'https://proxy.example.com';
   await c.saver.save('OPT-0931');
   assert.strictEqual(c.asked.length, 1);
@@ -128,32 +128,21 @@ test('Q8: words come from the read-back; a failed read-back says saved but not c
   assert.deepStrictEqual(reset.toasts, ['Biggest upload (MB): back to the default.']);
 });
 
-// ── Q5: a repaint never touches a focused or dirty input
+// ── Q5: the row is painted whole from the stored copy (the row is locked while it saves, so nothing of the row is a draft)
 function fakeInput(id, value) { return { id, value, options: [], add() {} }; }
-test('Q5: p5cFill skips the focused input and a dirty one, and paints the rest', () => {
+test('Q5: p5cFill sets every control of the row from the stored copy', () => {
   const r = row('OPT-0962');
   const els = {};
   for (const p of ['google', 'openai']) for (const w of ['fast', 'best']) els[`${p}-${w}`] = fakeInput(`st-p5c-imageModels-${p}-${w}`, `typing-${p}-${w}`);
-  const focused = els['google-fast'];
-  G.p5cMarkDirty(els['openai-best'].id);
-  const guard = (el) => el !== focused && !G.p5cIsDirty(el.id);
-  G.p5cFill(r, { google: { fast: 'S1', best: 'S2' }, openai: { fast: 'S3', best: 'S4' } }, (s) => els[s], guard, (v) => ({ value: v }));
-  assert.strictEqual(els['google-fast'].value, 'typing-google-fast', 'focused: untouched');
-  assert.strictEqual(els['openai-best'].value, 'typing-openai-best', 'dirty: untouched');
-  assert.strictEqual(els['google-best'].value, 'S2');
-  assert.strictEqual(els['openai-fast'].value, 'S3');
-  G.p5cClearDirty('st-p5c-imageModels');   // committed
-  assert.strictEqual(G.p5cIsDirty(els['openai-best'].id), false);
-  G.p5cFill(r, { openai: { best: 'S4' } }, (s) => els[s], guard, (v) => ({ value: v }));
-  assert.strictEqual(els['openai-best'].value, 'S4', 'painted once committed');
-  assert.strictEqual(els['google-fast'].value, 'typing-google-fast', 'still focused');
+  G.p5cFill(r, { google: { fast: 'S1', best: 'S2' }, openai: { fast: 'S3' } }, (s) => els[s], (v) => ({ value: v }));
+  assert.deepStrictEqual(Object.fromEntries(Object.entries(els).map(([k, e]) => [k, e.value])), { 'google-fast': 'S1', 'google-best': 'S2', 'openai-fast': 'S3', 'openai-best': '' });
 });
 
-test('Q5: app.js marks inputs dirty from the input event, clears on commit, and paints through the guard', () => {
+test('Q5: app.js paints the row through STG.p5cFill without a focus guard and locks the row while it saves', () => {
   const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
-  assert.ok(app.includes("document.addEventListener('input'") && app.includes('STG.p5cMarkDirty(t.id)'));
-  assert.ok(app.includes('STG.p5cClearDirty(r.id)'));
-  assert.ok(app.includes('STG.p5cFill(r, set,') && app.includes('c !== document.activeElement && !STG.p5cIsDirty(c.id)'));
+  assert.ok(app.includes('STG.p5cFill(r, set, (s) => (s ? byId(s) : el), (v) => new Option(v, v))'));
+  assert.ok(!app.includes('document.activeElement && !STG'));
+  assert.ok(app.includes('lock: p5cLock'));
 });
 
 // ── Q6 page part

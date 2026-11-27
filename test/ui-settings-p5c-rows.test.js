@@ -106,13 +106,14 @@ test('picture models send only the tier that changed; clearing one is an explici
 });
 
 test('the provider address question names the provider, the new address and the old one, for a reset too', () => {
-  assert.strictEqual(G.p5cConfirmText(row('OPT-0933'), null, 'https://203.0.113.10/v1'), 'Keys and prompts for Anthropic will go to https://api.anthropic.com instead of https://203.0.113.10/v1. Change it?');
-  assert.strictEqual(G.p5cConfirmText(row('OPT-0933'), 'https://p.example.com', undefined), 'Keys and prompts for Anthropic will go to https://p.example.com instead of https://api.anthropic.com. Change it?');
+  const d = { providers: { anthropic: { url: 'https://203.0.113.10/v1' } } };
+  assert.strictEqual(G.p5cConfirmText(row('OPT-0933'), null, d), 'Keys and prompts for Anthropic will go to https://api.anthropic.com instead of https://203.0.113.10/v1. Change it?');
+  assert.strictEqual(G.p5cConfirmText(row('OPT-0933'), 'https://p.example.com', {}), 'Keys and prompts for Anthropic will go to https://p.example.com instead of https://api.anthropic.com. Change it?');
 });
 
-// The row saver with a fake page: a post that finishes late, so an edit lands while a save runs.
+// The row saver with a fake page. late: the post finishes when a gate is opened. lock events are recorded with the paints, in order.
 function fakeSaver(opts = {}) {
-  const raws = {}; const posts = []; const toasts = []; const paints = []; const asked = []; const gates = [];
+  const raws = {}; const posts = []; const toasts = []; const paints = []; const asked = []; const gates = []; const events = [];
   const data = opts.data || {};
   const saver = G.p5cSaver({
     data: () => data,
@@ -121,40 +122,50 @@ function fakeSaver(opts = {}) {
     readBack: async () => (opts.back ? opts.back(data) : data),
     confirm: (t) => { asked.push(t); return opts.yes !== false; },
     toast: (t) => toasts.push(t),
-    paint: (r) => paints.push(r.opt),
+    paint: (r) => { paints.push(r.opt); events.push(`paint:${r.opt}`); },
+    lock: (r, on) => events.push(`${on ? 'lock' : 'unlock'}:${r.opt}`),
   });
-  return { saver, raws, posts, toasts, paints, asked, gates, data };
+  return { saver, raws, posts, toasts, paints, asked, gates, events, data };
 }
 const tick = () => new Promise((r) => setImmediate(r));
 
-test('an edit made while a save runs is kept and saved after it; the row is not repainted over it', async () => {
+test('while a row saves it is locked and a second save of it is ignored; the end paints then unlocks', async () => {
   const f = fakeSaver({ late: true });
   f.raws['OPT-0951'] = '100';
   const first = f.saver.save('OPT-0951');
   await tick();
   assert.deepStrictEqual(f.posts, [{ filesMaxUploadMb: 100 }]);
-  f.raws['OPT-0951'] = '200'; const second = f.saver.save('OPT-0951');   // lands while the first is in flight
-  f.raws['OPT-0951'] = '300'; const third = f.saver.save('OPT-0951');
+  assert.deepStrictEqual(f.events, ['lock:OPT-0951']);
+  f.raws['OPT-0951'] = '200'; await f.saver.save('OPT-0951');   // ignored: no queue
+  await f.saver.save('OPT-0951', true);
   await tick();
-  assert.strictEqual(f.posts.length, 1, 'one save at a time');
-  f.gates.shift()();   // the first save ends
-  await tick(); await tick();
-  assert.deepStrictEqual(f.posts, [{ filesMaxUploadMb: 100 }, { filesMaxUploadMb: 300 }], 'only the latest wanted value follows');
-  assert.deepStrictEqual(f.paints, [], 'no repaint over the newer edit while it is pending or saving');
+  assert.strictEqual(f.posts.length, 1, 'no second save starts');
   f.gates.shift()();
-  await Promise.all([first, second, third]);
-  assert.strictEqual(f.data.filesMaxUploadMb, 300);
-  assert.deepStrictEqual(f.paints, ['OPT-0951'], 'painted once, at the end');
+  await first;
+  assert.strictEqual(f.posts.length, 1, 'nothing replays afterwards');
+  assert.strictEqual(f.data.filesMaxUploadMb, 100);
+  assert.deepStrictEqual(f.events, ['lock:OPT-0951', 'paint:OPT-0951', 'unlock:OPT-0951'], 'painted from the stored copy, then enabled again');
+  f.raws['OPT-0951'] = '300'; const again = f.saver.save('OPT-0951'); await tick();   // idle again: saves
+  assert.deepStrictEqual(f.posts[1], { filesMaxUploadMb: 300 });
+  f.gates.shift()(); await again;
 });
 
-test('an edit that returns to the saved value while a save runs sends nothing more', async () => {
-  const f = fakeSaver({ late: true, data: { filesMaxUploadMb: 50 } });
-  f.raws['OPT-0951'] = '100';
-  const first = f.saver.save('OPT-0951'); await tick();
-  f.raws['OPT-0951'] = '100'; const again = f.saver.save('OPT-0951');
-  f.gates.shift()();
-  await Promise.all([first, again]);
-  assert.strictEqual(f.posts.length, 1);
+test('a save in one row does not block another row, and the patch is worked out from the stored copy at that moment', async () => {
+  const f = fakeSaver({ late: true, data: { imageModels: { google: { fast: 'gf', best: 'gb' } } } });
+  f.raws['OPT-0951'] = '100'; f.raws['OPT-0962'] = { google: { fast: 'gf', best: 'gb2' }, openai: { fast: '', best: '' } };
+  const a = f.saver.save('OPT-0951'); const b = f.saver.save('OPT-0962');
+  await tick();
+  assert.strictEqual(f.posts.length, 2, 'both rows save');
+  assert.deepStrictEqual(f.posts[1], { imageModels: { google: { best: 'gb2' } } });
+  f.gates.shift()(); f.gates.shift()();
+  await Promise.all([a, b]);
+  // another admin changed the fast tier meanwhile (the screen's copy follows a read-back): the next save sends only what differs from it now
+  f.data.imageModels.google.fast = 'other-admin';
+  f.raws['OPT-0962'] = { google: { fast: 'other-admin', best: 'gb3' }, openai: { fast: '', best: '' } };
+  f.gates.length = 0;
+  const c = f.saver.save('OPT-0962'); await tick();
+  assert.deepStrictEqual(f.posts[2], { imageModels: { google: { best: 'gb3' } } }, 'the other admin\'s tier is not replayed over');
+  f.gates.shift()(); await c;
 });
 
 test('after a save the stored value is read back: "back to the default" only when it really is', async () => {
@@ -187,6 +198,60 @@ test('a failed save says the hub\'s words and puts the box back', async () => {
   assert.deepStrictEqual(f.toasts, ['Could not save: Too big.']);
   assert.deepStrictEqual(f.paints, ['OPT-0951']);
   assert.ok(!('filesMaxUploadMb' in f.data));
+  assert.deepStrictEqual(f.events, ['lock:OPT-0951', 'paint:OPT-0951', 'unlock:OPT-0951']);
+});
+
+test('(A) the question\'s "from" is the address in effect now (providers[p].url), not the stored override', async () => {
+  // an environment gateway E is in effect, and the stored override equals the built-in address B: typing E is a real move away from B
+  const E = 'http://gateway.example:9000/v1', B = 'http://127.0.0.1:8080/v1';
+  const f = fakeSaver({ data: { providers: { ninfer: { url: B, fallbackUrl: E } } } });
+  f.raws['OPT-0931'] = E;
+  await f.saver.save('OPT-0931');
+  assert.deepStrictEqual(f.asked, [`Keys and prompts for NInfer will go to ${E} instead of ${B}. Change it?`]);
+  // a reset goes to the fallback address; asked whenever from != to (trailing slash ignored)
+  const g = fakeSaver({ data: { providers: { ninfer: { url: 'https://proxy.example.com', fallbackUrl: E } } } });
+  await g.saver.save('OPT-0931', true);
+  assert.deepStrictEqual(g.asked, [`Keys and prompts for NInfer will go to ${E} instead of https://proxy.example.com. Change it?`]);
+  const h = fakeSaver({ data: { providers: { ninfer: { url: E, fallbackUrl: E } } } });
+  h.raws['OPT-0931'] = E + '/';
+  await h.saver.save('OPT-0931');
+  assert.deepStrictEqual(h.asked, [], 'same destination: no question');
+  assert.deepStrictEqual(G.p5cDestination(row('OPT-0931'), 'https://x.example', { providers: { ninfer: { url: B } } }), { to: 'https://x.example', from: B });
+});
+
+test('(B) a failed save repaints its row, and a refused one flips back (the paint is not guarded by focus)', async () => {
+  const f = fakeSaver({ fail: 'No.', data: {} });
+  f.raws['OPT-0960'] = false;   // a switch toggled off from its default of on
+  await f.saver.save('OPT-0960');
+  assert.deepStrictEqual(f.toasts, ['Could not save: No.']);
+  assert.deepStrictEqual(f.events, ['lock:OPT-0960', 'paint:OPT-0960', 'unlock:OPT-0960']);
+  // the fill sets a focused switch too
+  const sw = { id: 'st-p5c-hubBrief', checked: false };
+  G.p5cFill(row('OPT-0960'), G.p5cValue(row('OPT-0960'), f.data), () => sw, (v) => ({ value: v }));
+  assert.strictEqual(sw.checked, true, 'back to the stored (default on) value');
+  const inp = { id: 'st-p5c-filesMaxUploadMb', value: 'typed' };
+  G.p5cFill(row('OPT-0951'), 7, () => inp, (v) => ({ value: v }));
+  assert.strictEqual(inp.value, '7');
+});
+
+test('(C) a draft in another row is untouched; a value the page\'s own check refuses keeps the typed text (no repaint, no lock)', async () => {
+  const f = fakeSaver({ data: {} });
+  f.raws['OPT-0951'] = 'many';
+  await f.saver.save('OPT-0951');
+  assert.deepStrictEqual(f.toasts, ['Biggest upload (MB) must be a number from 1 to 100000.']);
+  assert.deepStrictEqual(f.events, [], 'no repaint, no lock');
+  assert.deepStrictEqual(f.posts, []);
+  const g = fakeSaver({ data: {} });
+  g.raws['OPT-0952'] = '50';
+  await g.saver.save('OPT-0952');
+  assert.deepStrictEqual(g.paints, ['OPT-0952'], 'only the saved row is painted');
+});
+
+test('app.js: the row is locked while it saves, nothing tracks drafts, no repaint guard', () => {
+  const app = read('app.js'), lib = read('lib/ui-settings-groups.js');
+  assert.ok(app.includes('lock: p5cLock') && app.includes("setAttribute('aria-busy', 'true')") && app.includes('c.disabled = true') && app.includes('c.disabled = false') && app.includes('f.focus()'));
+  assert.ok(!/p5cMarkDirty|p5cIsDirty|p5cClearDirty/.test(app + lib), 'the dirty tracking is gone');
+  assert.ok(!app.includes("document.addEventListener('input', (e) => { const t = e.target; if (t && typeof t.id === 'string' && t.id.indexOf('st-p5c-')"), 'the input listener is gone');
 });
 
 test('what a row shows: unset shows the default, a saved value shows as set, the screen copy follows a save', () => {

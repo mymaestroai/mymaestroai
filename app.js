@@ -6083,18 +6083,15 @@
       if (!el) return;
       const set = STG.p5cValue(r, p5cData);
       const byId = (s) => document.getElementById(`${r.id}-${s}`);
-      // a repaint never touches an input that has focus or holds a draft not yet committed (STG.p5cFill, lib/ui-settings-groups.js)
-      STG.p5cFill(r, set, (s) => (s ? byId(s) : el), (c) => c !== document.activeElement && !STG.p5cIsDirty(c.id), (v) => new Option(v, v));
+      // every control of the row is put back, a focused one too; only this row (STG.p5cFill, lib/ui-settings-groups.js)
+      STG.p5cFill(r, set, (s) => (s ? byId(s) : el), (v) => new Option(v, v));
       const unset = set === undefined;
       const def = byId('def'), use = byId('use');
       if (def) def.hidden = !unset;
       if (use) use.hidden = unset;
     }
     // The model lists (member models, plan switch targets) come from the list the pickers use; then every row is painted.
-    // A draft is dirty from the first 'input' event until its change is committed (p5cSave reads the row and clears it).
-    let p5cInputWatch = false;
     async function p5cAfterDraw() {
-      if (!p5cInputWatch) { p5cInputWatch = true; document.addEventListener('input', (e) => { const t = e.target; if (t && typeof t.id === 'string' && t.id.indexOf('st-p5c-') === 0) STG.p5cMarkDirty(t.id); }, true); }
       let ml = null;
       try { ml = await modelList(); } catch { /* the rows still show what is saved */ }
       const models = ml ? ml.models : [], billing = ml ? (ml.billing || {}) : {};
@@ -6124,14 +6121,34 @@
       if (r.kind === 'cache') return { enabled: byId('on').checked, ttl: byId('ttl').value };
       return el.value;
     }
-    // The loop (one save per row at a time, the latest edit kept while one runs, read back after a save, the address question) lives in
-    // STG.p5cSaver (lib/ui-settings-groups.js) so a test can run it; here only the page's hands are given to it.
+    // While a row saves, all its controls are disabled (aria-busy) and a second save of it is ignored; when it ends the row is painted from
+    // the stored copy and enabled again, and focus returns to the control that had it. Only that row is touched.
+    const p5cFocus = {};   // row id -> the control that had focus when the row was locked
+    function p5cLock(r, on) {
+      const el = document.getElementById(r.id);
+      if (!el) return;
+      const all = new Set([el, ...document.querySelectorAll(`[id^="${r.id}-"]`), ...el.querySelectorAll('input,select')]);
+      const ctls = [...all].filter(c => /^(INPUT|SELECT|BUTTON)$/.test(c.tagName));
+      if (on) {
+        const a = document.activeElement;
+        p5cFocus[r.id] = a && ctls.includes(a) ? a : null;
+        el.setAttribute('aria-busy', 'true');
+        for (const c of ctls) { c.disabled = true; c.setAttribute('aria-busy', 'true'); }
+      } else {
+        el.removeAttribute('aria-busy');
+        for (const c of ctls) { c.disabled = false; c.removeAttribute('aria-busy'); }
+        const f = p5cFocus[r.id]; delete p5cFocus[r.id];
+        if (f && f.isConnected) f.focus();
+      }
+    }
+    // The saving (one save per row, no queue, read back after a save, the address question) lives in STG.p5cSaver
+    // (lib/ui-settings-groups.js) so a test can run it; here only the page's hands are given to it.
     let p5cRunner = null;
     function p5cSave(opt, useDefault = false) {
-      if (useDefault) { const pr = STG.p5cByOpt(opt); if (pr) STG.p5cClearDirty(pr.id); }   // Use default drops any draft in the row
       if (!p5cRunner) p5cRunner = STG.p5cSaver({
         data: () => p5cData,
-        readRaw: (r) => { const v = p5cRaw(r); STG.p5cClearDirty(r.id); return v; },   // what is typed is now being saved: no longer a draft
+        readRaw: p5cRaw,
+        lock: p5cLock,
         post: async (body) => {
           const resp = await stSaveFetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) });
           if (resp.ok) return { ok: true };
