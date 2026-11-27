@@ -25814,7 +25814,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const me = window.hubMe, id = me && me.user && me.user.id;
       return { key: id ? `hub-qs-recent:${id}` : null, prefix: 'hub-qs-recent', max: 30 };
     }
-    let qsList = [], qsSel = 0, qsLastQ = null;   // qsLastQ: the search text of the last paint (null: none yet), so a repaint can tell a new query from a refresh
+    let qsList = [], qsSel = 0, qsLastQ = null, qsWaiting = new Set();   // qsLastQ: the search text of the last paint (null: none yet), so a repaint can tell a new query from a refresh
     function qsRecentBox() { try { return window.sessionStorage || null; } catch { return null; } }
     function qsRecent() {
       const { key, max } = qsRecentStore();
@@ -25862,9 +25862,10 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const rec = new Map(recent.map((n, i) => [n, i]));
       const label = (a) => String(a.display || a.name || '').toLowerCase();
       return agents.map(a => ({ a, s: qsScore(a, q) })).filter(x => x.s !== Infinity).sort((x, y) => {
+        // a typed query: the match score decides first and waiting only breaks ties; no query: waiting agents come first
         const wx = waiting.has(x.a.name) ? 0 : 1, wy = waiting.has(y.a.name) ? 0 : 1;
-        if (wx !== wy) return wx - wy;
-        if (x.s !== y.s) return x.s - y.s;
+        if (q) { if (x.s !== y.s) return x.s - y.s; if (wx !== wy) return wx - wy; }
+        else { if (wx !== wy) return wx - wy; if (x.s !== y.s) return x.s - y.s; }
         if (!q) { const ux = unread.has(x.a.name) ? 0 : 1, uy = unread.has(y.a.name) ? 0 : 1; if (ux !== uy) return ux - uy; }
         const rx = rec.has(x.a.name) ? rec.get(x.a.name) : Infinity, ry = rec.has(y.a.name) ? rec.get(y.a.name) : Infinity;
         if (rx !== ry) return rx - ry;
@@ -25978,12 +25979,35 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (!words.parentNode) row.appendChild(words);
       if (!dot.parentNode) row.appendChild(dot);
     }
-    // Updates the states of the rows on screen in place: no row is created, removed or moved.
+    // Updates the states of the rows on screen in place: no row is created or removed. Rows move only when the set of
+    // waiting agents among them changed: the same row nodes are re-ordered to the new ranking, the selection follows its agent.
     function qsRefreshStates() {
       const list = document.getElementById('qs-list');
       if (!list) return;
       const unread = qsUnread();
       for (const row of Array.from(list.children)) if (row.dataset.agent) qsWriteState(row, qsRowState(row.dataset.agent, unread.has(row.dataset.agent)));
+      const listed = qsList.map(a => a.name);
+      const waiting = new Set(listed.filter(n => agentLiveState(n).question));
+      const before = qsWaiting;
+      if (waiting.size === before.size && listed.every(n => waiting.has(n) === before.has(n))) return;
+      qsWaiting = waiting;
+      const q = document.getElementById('qs-q');
+      const rows = new Map(Array.from(list.children).filter(r => r.dataset.agent).map(r => [r.dataset.agent, r]));
+      const roster = (AGENTS || []).filter(a => a && a.name && rows.has(a.name));
+      const ranked = qsRank(roster, q ? q.value : '', { recent: qsRecent(), unread, waiting });
+      if (ranked.length !== rows.size) return;   // the roster and the rows disagree: the next full render sorts it out
+      const keepName = qsList[qsSel] && qsList[qsSel].name;
+      const top = list.scrollTop;
+      qsList = ranked;
+      ranked.forEach((a, i) => {
+        const row = rows.get(a.name);
+        if (list.children[i] !== row) list.insertBefore(row, list.children[i] || null);
+        row.dataset.i = String(i); row.id = `qs-opt-${i}`;
+      });
+      const at = qsList.findIndex(a => a.name === keepName);
+      qsSel = at >= 0 ? at : 0;
+      qsPaintSel(false);
+      list.scrollTop = top;
     }
     function renderQuickSwitcher() {
       const q = document.getElementById('qs-q'), list = document.getElementById('qs-list'), status = document.getElementById('qs-status');
@@ -25996,6 +26020,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const keepName = qsList[qsSel] && qsList[qsSel].name;
       const waiting = new Set(roster.filter(a => agentLiveState(a.name).question).map(a => a.name));   // the sidebar's own "waiting for your answer"
       qsList = qsRank(roster, q.value, { recent: qsRecent(), unread, waiting });
+      qsWaiting = new Set(qsList.map(a => a.name).filter(n => waiting.has(n)));
       const same = q.value === qsLastQ;
       const at = same && keepName ? qsList.findIndex(a => a.name === keepName) : -1;
       qsSel = at >= 0 ? at : 0;

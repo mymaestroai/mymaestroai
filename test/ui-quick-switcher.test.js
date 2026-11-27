@@ -291,7 +291,7 @@ function page({ agents = [A('aide', 'Aide'), A('researcher', 'Researcher'), A('r
     requestAnimationFrame: (f) => { c.frames.push(f); return c.frames.length; }, flush: () => { const f = c.frames.splice(0); f.forEach(x => x()); },
     ownerView: () => 'mine', agentOwnerCache: new Map(), CYBER_MODELS: new Set(['x']), applyStatusSnapshot() {}, renderAgents() {},
   };
-  vm.runInNewContext('let qsList = [], qsSel = 0, qsLastQ = null; const QS_MAC = true; let simpleLookOff = null, simpleThemeSaving = false; let rsnFullFor = null, rsnFullReturn = null, toolsFullFor = null, toolsFullReturn = null;\n'
+  vm.runInNewContext('let qsList = [], qsSel = 0, qsLastQ = null, qsWaiting = new Set(); const QS_MAC = true; let simpleLookOff = null, simpleThemeSaving = false; let rsnFullFor = null, rsnFullReturn = null, toolsFullFor = null, toolsFullReturn = null;\n'
     + ['qsRecentStore', 'qsRecent', 'qsNoteOpened', 'qsRecentKeys', 'qsForgetRecents', 'qsScore', 'qsRank', 'qsUnread', 'qsBlocked', 'closeQuickSwitcher',
       'openQuickSwitcher', 'renderQuickSwitcher', 'qsPaintSel', 'qsKey', 'qsOpen', 'qsShortcut',
       'simpleCloseSettings', 'openSimpleSettings', 'openReasoningFull', 'paintReasoningFull', 'closeReasoningFull', 'openToolsFull', 'closeToolsFull', 'loadAgents'].map(fn).join('')
@@ -746,7 +746,8 @@ test('a status repaint updates the rows in place: the same row nodes, no row rep
   assert.strictEqual(rowEl('scout'), scoutRow, 'the same row node');
   assert.strictEqual(rowState(p, 'scout'), 'waiting for your answer');
   assert.ok(rowDot(p, 'scout').cls.has('live-question') && !rowDot(p, 'scout').cls.has('busy') && rowDot(p, 'scout').textContent === '?');
-  assert.deepStrictEqual(list.children, before, 'every row node kept, in order');
+  assert.ok(list.children.length === before.length && before.every(r => list.children.includes(r)), 'every row node kept (the waiting agent moved to the top: the waiting set changed)');
+  assert.deepStrictEqual(list.children.map(r => r.dataset.agent), ['scout', 'aide', 'forge']);
   assert.deepStrictEqual(scoutRow.children.map(x => [...x.cls][0]), ['qs-ic', 'qs-name', 'qs-state', 'qs-dot'], 'same element order as a full paint');
   // a new state on a row that had none: created in place
   p.c.bg = { forge: 2 };
@@ -799,6 +800,48 @@ test('the selected agent removed from the roster while scrolled down: back to th
   assert.strictEqual(p.doc.querySelector('.qs-row.sel').dataset.i, '0');
   assert.strictEqual(p.q().getAttribute('aria-activedescendant'), 'qs-opt-0');
   assert.strictEqual(list.scrollTop, 0);
+});
+
+test('an agent entering then leaving the waiting state while open moves to the top and back: same nodes, the selection follows its agent', () => {
+  const p = page({ agents: [A('aide', 'Aide'), A('forge', 'Forge'), A('scout', 'Scout'), A('zed', 'Zed')] });
+  p.cmdK();
+  const list = p.doc.getElementById('qs-list');
+  const order = () => list.children.map(r => r.dataset.agent);
+  const nodes = list.children.slice();
+  p.key(p.q(), 'ArrowDown'); p.key(p.q(), 'ArrowDown');   // forge is row 1, scout row 2: select scout
+  list.scrollTop = 25;
+  assert.deepStrictEqual(order(), ['aide', 'forge', 'scout', 'zed']);
+  assert.strictEqual(p.doc.querySelector('.qs-row.sel').dataset.agent, 'scout');
+  p.c.live = { zed: { question: true } };
+  p.c.api.statusChanged(); p.c.flush();
+  assert.deepStrictEqual(order(), ['zed', 'aide', 'forge', 'scout'], 'the waiting agent is on top');
+  assert.ok(nodes.every(r => list.children.includes(r)) && list.children.length === 4, 'the same row nodes');
+  assert.strictEqual(p.doc.querySelector('.qs-row.sel').dataset.agent, 'scout', 'the selection stays on scout');
+  assert.deepStrictEqual(list.children.map(r => r.dataset.i), ['0', '1', '2', '3']);
+  assert.strictEqual(p.q().getAttribute('aria-activedescendant'), 'qs-opt-3');
+  assert.strictEqual(p.doc.activeElement, p.q()); assert.strictEqual(list.scrollTop, 25);
+  // select the waiting agent itself (row 0), then let it stop waiting: it goes back down and stays selected
+  p.key(p.q(), 'ArrowDown');   // wraps: scout (row 3) -> zed (row 0)
+  assert.strictEqual(p.doc.querySelector('.qs-row.sel').dataset.agent, 'zed');
+  p.c.live = {};
+  p.c.api.statusChanged(); p.c.flush();
+  assert.deepStrictEqual(order(), ['aide', 'forge', 'scout', 'zed'], 'back to the normal order');
+  assert.ok(nodes.every(r => list.children.includes(r)) && list.children.length === 4, 'the same row nodes');
+  assert.strictEqual(p.doc.querySelector('.qs-row.sel').dataset.agent, 'zed', 'the selection followed zed to its new place');
+  assert.strictEqual(p.q().getAttribute('aria-activedescendant'), 'qs-opt-3');
+  assert.strictEqual(list.scrollTop, 25);
+});
+
+test('a typed query: the match decides first, waiting only breaks ties; with no query waiting comes first', () => {
+  const c = {};
+  vm.runInNewContext([fn('qsScore'), fn('qsRank')].join('') + '\nthis.rank = qsRank;', c);
+  const agents = [A('misc-coach', 'Misc Coach'), A('scout', 'Scout')];
+  const names = (l) => l.map(a => a.name);
+  const waiting = new Set(['misc-coach']);
+  assert.deepStrictEqual(names(c.rank(agents, 'sc', { waiting })), ['scout', 'misc-coach'], 'exact prefix beats a waiting loose match');
+  assert.deepStrictEqual(names(c.rank(agents, '', { waiting })), ['misc-coach', 'scout'], 'no query: waiting first');
+  const tie = [A('scout-a', 'Scout A'), A('scout-b', 'Scout B')];
+  assert.deepStrictEqual(names(c.rank(tie, 'sco', { waiting: new Set(['scout-b']) })), ['scout-b', 'scout-a'], 'equal scores: waiting breaks the tie');
 });
 
 test('a status-only update never re-sorts the open rows (an agent that becomes unread keeps its place until the next full render)', () => {

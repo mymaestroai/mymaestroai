@@ -108,7 +108,8 @@ test('agents waiting for the owner\'s answer sort first, then the existing order
   assert.deepStrictEqual(names(c.rank(agents, '', { waiting: new Set(['gamma']) })), ['gamma', 'alpha', 'beta', 'delta']);
   assert.deepStrictEqual(names(c.rank(agents, '', { waiting: new Set(['gamma', 'beta']) })), ['beta', 'gamma', 'alpha', 'delta'], 'among the waiting: the existing order');
   assert.deepStrictEqual(names(c.rank(agents, '', { waiting: new Set(['gamma']), unread: new Set(['delta']), recent: ['beta'] })), ['gamma', 'delta', 'beta', 'alpha'], 'waiting, then unread, then recent, then name');
-  assert.deepStrictEqual(names(c.rank(agents, 'a', { waiting: new Set(['delta']) }))[0], 'delta', 'with a query too (it matched)');
+  assert.deepStrictEqual(names(c.rank(agents, 'e', { waiting: new Set(['delta']) }))[0], 'delta', 'with a query: an equal match, waiting breaks the tie');
+  assert.deepStrictEqual(names(c.rank(agents, 'a', { waiting: new Set(['delta']) }))[0], 'alpha', 'with a query: a better match beats waiting');
   assert.deepStrictEqual(names(c.rank(agents, 'zzz', { waiting: new Set(['delta']) })), [], 'a waiting agent that does not match stays out');
   assert.deepStrictEqual(c.rank(agents, '', { waiting: new Set(['nobody']) }).length, 4);
 });
@@ -126,8 +127,11 @@ test('the waiting dot: same class as the sidebar\'s, same pulse animation, and n
   const qs = index.match(/\.qs-dot\.live-question \{[^}]*\}/);
   assert.ok(qs, 'the switcher\'s rule exists');
   assert.strictEqual((qs[0].match(/animation:\s*([^;]+);/) || [])[1], sideAnim, 'the same animation');
-  // the sidebar has no prefers-reduced-motion rule for its dot, so the switcher adds none (identical behaviour)
-  assert.doesNotMatch(index, /prefers-reduced-motion[^{]*\{[^}]*(live-question|qs-dot)/);
+  // reduced motion: both the sidebar's and the switcher's waiting dot stop pulsing (the "?" stays)
+  const rm = index.match(/@media \(prefers-reduced-motion: reduce\) \{[^@]*?\.agent-btn \.agent-status\.live-question[^{]*\{[^}]*\}[^}]*\}/);
+  assert.ok(rm, 'a reduced-motion rule covers the sidebar dot');
+  assert.match(rm[0], /\.qs-dot\.live-question/, 'and the switcher dot');
+  assert.match(rm[0], /animation:\s*none/);
   // the class: the row's dot is written with live-question (the sidebar's class name)
   assert.match(fn('qsRowState'), /mark = 'live-question'/);
   assert.match(fn('qsWriteState'), /dot\.className = 'qs-dot ' \+ st\.mark/);

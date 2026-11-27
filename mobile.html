@@ -1078,7 +1078,7 @@
   .handoff-cards .ho-card.ho-ended { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 13px; }
   .handoff-cards .ho-ended .ho-line { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
   .handoff-cards .ho-ended .ho-pill, .handoff-cards .ho-ended .ho-status { flex: none; }
-  /* the strip: one compact line that expands into the cards (collapsed: 32 px + 6 px padding = 38 px, under 40) */
+  /* the strip: a compact line that expands into the cards (collapsed: 38 px on one line; on a narrow screen the summary wraps to a second line, about 50 px) */
   .handoff-cards { gap: 4px; }
   .handoff-cards .ho-strip { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; box-sizing: border-box; padding: 6px 10px; font: inherit; font-size: 13px; text-align: left; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; cursor: pointer; transition: border-color .3s, background-color .3s; }
   .handoff-cards .ho-sum { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
