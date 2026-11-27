@@ -15719,7 +15719,7 @@ async function paintHealthNotice() {
   if (seq !== healthNoticeSeq) return;   // a newer paint is on its way
   const crit = healthNoticeItems(view);
   if (!crit.length) { bar.hidden = true; bar.textContent = ''; return; }
-  bar.innerHTML = `Health: ${crit.map(i => esc(i.title)).join('; ')}. <a href="/?health=1">Open Settings → Status</a>`;
+  bar.innerHTML = `Health: ${crit.map(i => esc(i.title)).join('; ')}. <a href="/?health=1">Open Settings → For your review</a>`;
   for (const i of crit) { const b = typeof ClaudeSignin !== 'undefined' && ClaudeSignin.healthButton(i); if (b) bar.appendChild(b); }
   bar.hidden = false;
 }
@@ -16106,7 +16106,7 @@ function paintMemorySheet() {
     body.appendChild(row);
   }
   if (!flagged.length) body.appendChild(wkEl('div', 'mh-item', d.checkedAt ? 'Every agent is fine.' : 'Not checked yet.'));
-  body.appendChild(wkEl('div', 'mh-foot', 'The details are under Settings → Status → Memory on a computer.'));
+  body.appendChild(wkEl('div', 'mh-foot', 'The details are under Settings → Upkeep → Memory on a computer.'));
   body.scrollTop = scroll;
 }
 

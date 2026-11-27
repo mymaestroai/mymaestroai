@@ -327,7 +327,7 @@ test('phone banner: admins only; shows "Health: <titles>." with a link to /?heal
   let r = phoneRig({ me: ADMIN, body: view([item('health-disk-main', 'critical', { title: 'Disk almost full' }), item('health-backups', 'critical', { title: 'No backup' })]) });
   await r.S.paintHealthNotice();
   assert.strictEqual(r.bar.hidden, false);
-  assert.match(r.bar.innerHTML, /^Health: Disk almost full; No backup\. <a href="\/\?health=1">Open Settings → Status<\/a>/);
+  assert.match(r.bar.innerHTML, /^Health: Disk almost full; No backup\. <a href="\/\?health=1">Open Settings → For your review<\/a>/);
   r = phoneRig({ me: { isAdmin: false, user: { id: 'sam' } }, existingText: 'old' });
   await r.S.paintHealthNotice();
   assert.deepStrictEqual(r.calls, [], 'a member never asks');
