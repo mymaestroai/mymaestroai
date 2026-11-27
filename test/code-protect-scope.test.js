@@ -255,7 +255,7 @@ test('~/… keeps its .. for the kernel-style walk (not folded before a symlink 
 });
 
 test('a { inside $( ) or a ( inside ${ } does not hide a redirection after the substitution; the same expansion alone is free', () => {
-  const pairs = [['echo $(echo {)', '>lib/a.js'], ['echo ${v:-(}', '>lib/a.js'], ['echo $(case x in x) echo;; esac)', '>lib/a.js'], ['echo $[a+1]', '>lib/a.js']];
+  const pairs = [['echo $(echo {)', '>lib/a.js'], ['echo ${v:-(}', '>lib/a.js'], ['echo $(case x in x) echo;; esac)', '>lib/a.js'], ['echo $[a+1]', '>lib/a.js'], ['echo ${v:-<(}', '>lib/a.js'], ['echo $[a<(1)]', '>lib/a.js']];
   for (const [e, r] of pairs) {
     assert.strictEqual(cpOn.commandWritesProtected(e, app), false, e);
     assert.strictEqual(cpOn.commandWritesProtected(e + r, app), true, e + r);
@@ -270,6 +270,21 @@ test('git -C through a symlink and ..: judged by the repository git really enter
   fs.symlinkSync(path.join(b, 'lib', 'sub'), path.join(ws, 'l'));
   const cp = make(b, path.join(b, 'hub-home'));
   assert.strictEqual(cp.commandWritesProtected(`git -C ${ws}/l/.. checkout -- .`, ws), true, 'l/.. is lib/, in the install');
-  assert.strictEqual(cp.commandWritesProtected('cd l/.. && git checkout -- .', ws), true, 'after a cd too');
+  // bash's cd (no -P) applies .. to its logical folder: `cd l/..` stays in the workspace; -P goes to lib/
+  assert.strictEqual(cp.commandWritesProtected('cd l/.. && git checkout -- .', ws), false, 'cd -L: back in the workspace');
+  assert.strictEqual(cp.commandWritesProtected('cd l && cd .. && git checkout -- .', ws), false, 'cd l then cd ..: the workspace');
+  assert.strictEqual(cp.commandWritesProtected('cd -P l/.. && git checkout -- .', ws), true, 'cd -P: lib/, in the install');
+  assert.strictEqual(cp.commandWritesProtected('cd l && git checkout -- .', ws), true, 'inside the link: lib/sub');
+  assert.strictEqual(cp.commandWritesProtected('cd l && echo x > ../x.js', ws), true, 'a redirection opens ../ physically: lib/x.js');
+  assert.strictEqual(cp.commandWritesProtected('cd l/.. && echo x > notes.md', ws), false, 'cd -L back in the workspace: its own file');
   assert.strictEqual(cp.commandWritesProtected(`git -C ${ws} checkout -- .`, ws), false, 'the workspace\'s own repository');
+  // a lookup that fails (EMFILE) on the link while judging git -C: the policy refuses
+  const orig = fs.lstatSync;
+  fs.lstatSync = (p, ...r) => { if (String(p) === path.join(ws, 'l')) { const e = new Error('too many open files'); e.code = 'EMFILE'; throw e; } return orig(p, ...r); };
+  tp.setCodeProtectProvider(() => cp);
+  try {
+    assert.throws(() => cp.commandWritesProtected(`git -C ${ws}/l/.. checkout -- .`, ws));
+    const agent = { name: 'sam', category: 'primary' };
+    assert.strictEqual(tp.decide({ agent, tool: 'Bash', input: { command: `git -C ${ws}/l/.. checkout -- .` }, cwd: ws }).protectedCode, true);
+  } finally { fs.lstatSync = orig; tp.setCodeProtectProvider(null); }
 });
