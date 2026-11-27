@@ -136,7 +136,15 @@ test('mightWrite: reads are not, redirections and writing programs are', () => {
   for (const c of ['echo x > f', 'cat a | tee f', 'sed -n 1p a', 'python3 -c 1']) assert.strictEqual(mightWrite(c), true, c);
 });
 
-test('policy: a command that cannot be read is refused only when it might write', () => {
+test('onlyReads: only commands made of programs known to only read, with no redirection or substitution', () => {
+  const { onlyReads } = require('../lib/code-protect');
+  for (const c of ['ls -la /tmp | head', 'cat a 2>&1', 'grep -rn x . | wc -l', 'cd /tmp && ls', 'A=1 stat f']) assert.strictEqual(onlyReads(c), true, c);
+  for (const c of ['echo x > f', 'mytool --sync lib', 'ls; mytool', 'echo $(mytool)', 'echo `mytool`', 'cat <(mytool)', 'sort -o f a', '']) {
+    assert.strictEqual(onlyReads(c), false, c);
+  }
+});
+
+test('policy: a command that cannot be read is let through only when it certainly only reads', () => {
   const broken = { state: () => ({ on: true }), isProtectedPath: () => false, commandWritesProtected: () => { throw new Error('unreadable'); } };
   tp.setCodeProtectProvider(() => broken);
   try {
@@ -144,5 +152,25 @@ test('policy: a command that cannot be read is refused only when it might write'
     const w = (command) => tp.decide({ agent, tool: 'Bash', input: { command }, cwd: app }).protectedCode === true;
     assert.strictEqual(w('ls -la /tmp'), false);
     assert.strictEqual(w(`echo x > ${app}/lib/x.js`), true);
+    assert.strictEqual(w(`maintenance-tool --rewrite ${app}/lib`), true, 'an unknown program may write: refused');
   } finally { tp.setCodeProtectProvider(null); }
+});
+
+test('a symlink in data/ or a workspace cannot carry a write into the program files', () => {
+  const b = tmp();
+  mk(b, 'lib', 'data', 'workspaces/sam', 'hub-home/share/sam');
+  fs.symlinkSync(path.join(b, 'lib'), path.join(b, 'data', 'l'));
+  fs.symlinkSync(path.join(b, 'lib'), path.join(b, 'workspaces', 'sam', 'l'));
+  fs.writeFileSync(path.join(b, 'lib', 'x.js'), '');
+  fs.symlinkSync(path.join(b, 'lib', 'x.js'), path.join(b, 'data', 'xlink'));
+  const cp = make(b, path.join(b, 'hub-home'));
+  for (const p of ['data/l/x.js', 'data/l/new.js', 'workspaces/sam/l/x.js', 'data/xlink']) assert.strictEqual(cp.isProtectedPath(path.join(b, p)), true, p);
+  assert.strictEqual(cp.commandWritesProtected(`echo x > ${b}/data/l/x.js`, path.join(b, 'workspaces', 'sam')), true);
+  assert.strictEqual(cp.isProtectedPath(path.join(b, 'data', 'plain.json')), false, 'an ordinary data file stays free');
+});
+
+test('a quoted > in a read is text, not a redirection', () => {
+  const L = path.join(app, 'lib/x.js');
+  for (const c of [`grep '>' ${L}`, `grep -n ">=" ${L}`, `grep -c "a > b" ${L}`]) assert.strictEqual(wp(c), false, c);
+  assert.strictEqual(wp(`echo '>' > ${L}`), true, 'a real redirection after a quoted > still counts');
 });
