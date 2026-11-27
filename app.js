@@ -10911,7 +10911,7 @@
       if (!chat) return;
       if (reset) {
         const panel0 = document.getElementById(`messages-${chatId}`);
-        if (panel0) panel0.textContent = '';
+        if (panel0) { try { window.FeatureCard && FeatureCard.historyDrawing(panel0); } catch { /* cosmetic */ } panel0.textContent = ''; }
         chat.messages = chat.messages.slice(0, 1);   // the system message stays
         chat.inProgress = null;
         // Live turns drawn in the cleared panel are gone from it: the status check below follows a running one again.
@@ -11010,6 +11010,7 @@
       }
       soloEarlierPaint(chatId);
       busyCardRefresh(chat);
+      try { window.FeatureCard && FeatureCard.historyDrawn(document.getElementById(`messages-${chatId}`)); } catch { /* cosmetic */ }   // the history is drawn: the new-features card may attach now
       if (reset) pollAgentStatus();   // a turn that was running before the redraw is followed again
     }
 
@@ -14813,7 +14814,7 @@
 
       const msgId = chat.lastMsgId || appendMessage(chatId, 'assistant', '⏳ Thinking...');
       chat.lastMsgId = msgId;
-      try { window.FeatureCard && FeatureCard.messageArrived(document.getElementById(`messages-${chatId}`)); } catch { /* cosmetic */ }   // a live send: the person's message and the reply bubble just landed
+      try { window.FeatureCard && FeatureCard.messageArrived(document.getElementById(`messages-${chatId}`), { own: true }); } catch { /* cosmetic */ }   // a live send: the person's message and the reply bubble just landed
       const sentAt = Date.now();   // after a lost connection, only history the hub saved since then can be this message
 
       try {

@@ -59,6 +59,8 @@ function page({ first = { status: 200, body: body() }, search = '' } = {}) {
   const mod = { exports: {} };
   const ctx = { module: mod, document: d, fetch, location: { search }, encodeURIComponent, JSON, Promise, console, MutationObserver: MO, Date: { now: () => clock.t }, setTimeout, clearTimeout };
   vm.runInNewContext(SRC, ctx, { filename: FILE });
+  // these tests model a page whose saved history is already drawn (a page that signals nothing is the done test's business)
+  { const ex = mod.exports, shown = ex.chatShown; ex.chatShown = (a, l, o) => { shown(a, l, o); if (l && !ex.noAutoDrawn) ex.historyDrawn(l); }; }
   const settle = async () => { for (let k = 0; k < 10; k++) await new Promise((r) => setImmediate(r)); };
   const answer = async (url, status, b) => {
     const i = waiting.findIndex((w) => w.call.url === url);
@@ -242,7 +244,7 @@ test('an error shows the server text in the row and gives the buttons back', asy
   assert.ok(/could not|try again/i.test(row().text));
 });
 
-test('every row answered: one closing line and no buttons', async () => {
+test('every row answered: the chat copy is one done line (the full closing line is for the Settings copy)', async () => {
   const p = page(); const list = p.mkList();
   p.FC.chatShown('harbor', list); await p.settle();
   const c = () => p.cards(list)[0];
@@ -251,9 +253,13 @@ test('every row answered: one closing line and no buttons', async () => {
   assert.ok(!c().text.includes('All set.'), 'one row is still open');
   p.btns(c(), 'Leave off')[0].click(); await p.settle();
   await p.answer('/api/behaviour-changes/protect-code', 200, { ok: true, rev: 'r1' });
-  assert.ok(c().text.includes('All set. You can change these any time on the Changes page.'));
-  assert.deepStrictEqual(p.btns(c()).map((b) => b.textContent), ['Undo', 'Undo', 'Changes page'], 'only Undo and the Changes page link');
-  assert.strictEqual(c().text.split('All set.').length, 2, 'once');
+  assert.ok(!c().text.includes('All set.'));
+  assert.ok(c().text.startsWith('Done: '));
+  assert.deepStrictEqual(p.btns(c()).map((b) => b.textContent), ['Undo both'], 'only one Undo button, for both rows');
+  p.cur.first = { status: 200, body: body({ entries: [] }) };   // the hub no longer lists them
+  const box = node('div'); await p.FC.renderInto(box);
+  assert.ok(box.text.includes('All set. You can change these any time on the Changes page.'), 'the Settings copy keeps the closing line');
+  assert.strictEqual(box.text.split('All set.').length, 2, 'once');
 });
 
 test('quiet features already on: "<title> is now on. <line>" with Turn off and OK', async () => {
@@ -272,7 +278,7 @@ test('quiet features already on: "<title> is now on. <line>" with Turn off and O
   assert.deepStrictEqual(p.calls.filter((x) => x.method === 'POST')[1].body, { decision: 'seen', expect: 'on' });
   await p.answer('/api/behaviour-changes/quiet-two', 200, { ok: true });
   assert.ok(!c().text.includes('Tidier logs'), 'the OK row disappears');
-  assert.ok(c().text.includes('All set.'));
+  assert.ok(c().text.startsWith('Done: Faster history search off'), c().text);
 });
 
 test('renderInto draws the same card into a Settings element; answering in one copy updates the others; refresh refetches', async () => {
@@ -449,7 +455,7 @@ test('r1 fix7: the header counts only open entry rows; no header when none is op
   await p.answer('/api/behaviour-changes/protect-code', 200, { ok: true });
   const t = p.cards(list)[0].text;
   assert.ok(!/new features? (is|are) off/.test(t), 'no entry header');
-  assert.ok(t.includes('Left off.') && t.includes('All set. You can change these any time on the Changes page.'));
+  assert.ok(t.startsWith('Done: ') && t.includes('Agents may start quick research off') && t.includes('Protect the program files off'), t);
   const q = page({ first: { status: 200, body: body({ entries: [], notices: [N1] }) } }); const l2 = q.mkList();
   q.FC.chatShown('harbor', l2); await q.settle();
   assert.ok(q.cards(l2)[0].text.includes('New features were turned on for you.'));
@@ -713,9 +719,9 @@ test('r4 fix3: the Changes page link in the closing line calls FeatureCard.openC
     let n = 0; const assigned = [];
     if (mode === 'fc') p.FC.openChanges = () => { n++; }; else p.ctx.location = { search: '', assign: (u) => assigned.push(u) };
     p.FC.chatShown('harbor', list); await p.settle();
+    const c = node('div'); await p.FC.renderInto(c);   // the Settings copy keeps the closing line
     p.btns(rowsOf(p, list)[0], 'Leave off')[0].click(); await p.settle();
     await p.answer('/api/behaviour-changes/quick-research', 200, { ok: true, rev: 'r' });
-    const c = p.cards(list)[0];
     assert.ok(c.text.includes('All set. You can change these any time on the Changes page.'));
     p.btns(c, 'Changes page')[0].click();
     if (mode === 'fc') assert.strictEqual(n, 1); else assert.deepStrictEqual(assigned, ['/changes']);

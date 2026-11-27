@@ -8477,6 +8477,7 @@ function paintSaved(bubble, m) {
 
 function renderHistory() {
   const box = chatEl();
+  try { window.FeatureCard && FeatureCard.historyDrawing(box); } catch { /* cosmetic */ }   // the new-features card waits for historyDrawn
   box.innerHTML = '';
   const start = 0;   // the whole loaded list is drawn; older entries come from the hub, a page per tap (loadEarlier)
   if (chatNext != null) {
@@ -8500,6 +8501,7 @@ function renderHistory() {
   if (!chatHistory.length && chatNext == null) addNote('No messages yet');
   if (typeof simpleEmptyPaint === 'function') simpleEmptyPaint(!chatHistory.length && chatNext == null);   // Simple: greeting and starter buttons
   paintBusyCard();   // the redraw cleared the chat, the busy card goes back at the bottom
+  try { window.FeatureCard && FeatureCard.historyDrawn($('messages')); } catch { /* cosmetic */ }   // the history is drawn: the new-features card may attach now
 }
 
 // Turns the hub starts by itself fold into closed cards; the setting is per device ('off' turns it off).
@@ -8788,7 +8790,7 @@ async function openChat(name) {
   current = name; if (typeof voiceHintSync === 'function') voiceHintSync();   // a chat switch takes the hint down
   try { if (window.HandOffCard && typeof HandOffCard.follow === 'function') HandOffCard.follow(); } catch { /* the timer tick follows */ }   // the "Working on" panel follows the chat at once
   teamSetupSlotPaint();   // the lead's chat: the Set up teams offer, the Undo for a team just set up
-  try { window.FeatureCard && FeatureCard.chatShown(name, $('messages')); } catch { /* cosmetic */ }   // the lead's chat: the new-features card at the end of the list
+  try { window.FeatureCard && FeatureCard.chatShown(name, $('messages'), { redraw: true }); } catch { /* cosmetic */ }   // the lead's chat: the new-features card at the end of the list
   localStorage.setItem('hub-mobile-last', name);
   voiceStatusRefresh();   // the mic button shows only while the hub voice is on and ready
   researchLinePaint(); researchLineLoad(name);   // the deep research progress line
@@ -8804,7 +8806,7 @@ async function openChat(name) {
   // Back from another tab while this chat's own reply is still painting into the page: keep it.
   const rec = streams.get(name);
   const ra = reattaches.get(name);
-  if (same && ((rec && bubbleLive(rec)) || (ra && bubbleLive(ra)))) { paintChatStatus(); return; }
+  if (same && ((rec && bubbleLive(rec)) || (ra && bubbleLive(ra)))) { paintChatStatus(); try { window.FeatureCard && FeatureCard.historyDrawn($('messages')); } catch { /* cosmetic */ } return; }   // the list keeps its messages: drawn
   pendingImages = [];
   draftGen++;   // a new draft: pictures and sends that started in the old one do not carry over
   // The old draft's pictures still being prepared are retired: a send in the new draft must not wait for them.
@@ -13229,7 +13231,7 @@ async function sendMessage(fallback) {
   const userEl = fallback ? fallback.userEl : addUserBubble(text, images);
   if (!fallback) setBubbleTime(userEl, msgTimeLabel(Date.now()));
   const bubble = addAssistantBubble();
-  try { window.FeatureCard && FeatureCard.messageArrived($('messages')); } catch { /* cosmetic */ }   // a live send: the person's message and the reply bubble just landed
+  try { window.FeatureCard && FeatureCard.messageArrived($('messages'), { own: true }); } catch { /* cosmetic */ }   // a live send: the person's message and the reply bubble just landed
   bubble.body.innerHTML = '<span style="opacity:.6">⏳ Thinking…</span>';
   scrollChat(true);
 
