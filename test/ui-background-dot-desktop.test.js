@@ -40,7 +40,7 @@ function el(cls = '') {
 function row() { const btn = el('agent-btn'); const info = el('agent-info'); btn.appendChild(info); const dot = el('agent-status live-idle'); btn.appendChild(dot); return { btn, info, dot }; }
 
 function paint(status, name = 'hazel', { busy = false, question = false } = {}) {
-  const body = `${['bgCountOf', 'bgPaintRow'].map(extract).join('\n')}\nreturn { bgCountOf, bgPaintRow };`;
+  const body = `${['agentStateWords', 'bgCountOf', 'bgPaintRow'].map(extract).join('\n')}\nreturn { bgCountOf, bgPaintRow };`;
   const api = new Function('agentStatus', 'AgentDot', 'document', body)(status, AgentDot, { createElement: () => el() });
   const r = row();
   api.bgPaintRow(name, r.dot, r.btn, busy, question);
@@ -102,7 +102,7 @@ test('replying or asking wins over background; background 0 shows no ring and no
   // it was background, now it is not: ring and line go
   const p = paint({ hazel: { background: 2 } });
   const status = { hazel: { background: 0 } };
-  const api = new Function('agentStatus', 'AgentDot', 'document', `${['bgCountOf', 'bgPaintRow'].map(extract).join('\n')}\nreturn { bgPaintRow };`)(status, AgentDot, { createElement: () => el() });
+  const api = new Function('agentStatus', 'AgentDot', 'document', `${['agentStateWords', 'bgCountOf', 'bgPaintRow'].map(extract).join('\n')}\nreturn { bgPaintRow };`)(status, AgentDot, { createElement: () => el() });
   api.bgPaintRow('hazel', p.dot, p.btn, false, false);
   assert.ok(!p.dot.classList.contains('bg-work'));
   assert.strictEqual(p.info.querySelector('agent-bg-line'), null);

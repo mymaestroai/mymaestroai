@@ -11621,7 +11621,7 @@
           const job = info.querySelector('.agent-job-line');
           if (job) info.insertBefore(bl, job); else info.appendChild(bl);
         }
-        const t = AgentDot.bgLine(n);
+        const t = agentStateWords('background', { background: n });
         if (bl.textContent !== t) bl.textContent = t;
         bl.title = AgentDot.dotLabel(state, { background: n, name });
       } else if (bl) bl.remove();
@@ -11637,6 +11637,23 @@
       e.stopPropagation(); e.preventDefault();
       bgOpenChat(name);
     }, true);
+    // The state words a list row shows as its visible line, from ONE place: the sidebar's line (agentLiveState, bgPaintRow)
+    // and the quick switcher both read them here, so the two never drift apart. state: 'question' | 'busy' | 'background'
+    // (AgentDot.dotState's names); anything else (free, idle) shows no words. Same case as the sidebar prints them:
+    //   question   "waiting for your answer"      (sidebar: "❓ waiting for your answer · 2m")
+    //   busy       the turn's words as given      (sidebar: "⏳ Replying to your message · 2m", a worker: "⏳ working")
+    //   background "Free · 2 in background"       (sidebar: the blue line under the name)
+    function agentStateWords(state, { words = '', background = 0 } = {}) {
+      if (state === 'question') return 'waiting for your answer';
+      if (state === 'busy') return String(words || '');
+      if (state === 'background') return AgentDot.bgLine(background);
+      return '';
+    }
+    // The busy words the sidebar prints for one agent: a named agent says what its turn is (agentDoingNow), a temporary worker its activity.
+    function agentBusyWords(name, activity) {
+      const s = agentStatus[name];
+      return agentStateWords('busy', { words: (s && s.worker) ? activity : agentDoingNow(name).words });
+    }
     // One agent's live state for every row that shows it (All Agents, Teams): the dot's class, its tooltip and text, and the
     // busy line. Rows paint from this, so a new state added here shows everywhere.
     function agentLiveState(name) {
@@ -11654,14 +11671,14 @@
       else if (busy) { dotCls = 'live-busy'; tip = `${activity}${elapsed ? ` · ${elapsed}` : ''}`; }
       else if (statusKnown) { dotCls = 'live-idle'; tip = 'Idle'; }
       const named = !question && !(s && s.worker);
-      if (question) line = `❓ waiting for your answer${elapsedShort ? ` · ${elapsedShort}` : ''}`;
+      if (question) line = `❓ ${agentStateWords('question')}${elapsedShort ? ` · ${elapsedShort}` : ''}`;
       else if (busy && named) {
         const d = agentDoingNow(name);
         const det = d.detail ? ` · ${d.detail}` : '';
-        line = `⏳ ${d.words}${elapsedShort ? ` · ${elapsedShort}` : ''}${det}`;
+        line = `⏳ ${agentStateWords('busy', { words: d.words })}${elapsedShort ? ` · ${elapsedShort}` : ''}${det}`;
         lineTitle = `${d.words}${elapsed ? ` · ${elapsed}` : ''}${det}`;
         tip = lineTitle;
-      } else if (busy) line = `⏳ ${activity}${elapsedShort ? ` · ${elapsedShort}` : ''}`;
+      } else if (busy) line = `⏳ ${agentStateWords('busy', { words: activity })}${elapsedShort ? ` · ${elapsedShort}` : ''}`;
       const needsOrigin = named && busy && !!(s && s.busy) && !busyRun[name] && !mine;
       return { busy, question, offer, dotCls, tip, text, line, lineTitle, activity, needsOrigin };
     }
@@ -25839,11 +25856,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       }
       return best;
     }
-    function qsRank(agents, query, { recent = [], unread = new Set() } = {}) {
+    // waiting: names of agents waiting for the owner's answer; they come first, then the order described above.
+    function qsRank(agents, query, { recent = [], unread = new Set(), waiting = new Set() } = {}) {
       const q = String(query || '').trim().toLowerCase();
       const rec = new Map(recent.map((n, i) => [n, i]));
       const label = (a) => String(a.display || a.name || '').toLowerCase();
       return agents.map(a => ({ a, s: qsScore(a, q) })).filter(x => x.s !== Infinity).sort((x, y) => {
+        const wx = waiting.has(x.a.name) ? 0 : 1, wy = waiting.has(y.a.name) ? 0 : 1;
+        if (wx !== wy) return wx - wy;
         if (x.s !== y.s) return x.s - y.s;
         if (!q) { const ux = unread.has(x.a.name) ? 0 : 1, uy = unread.has(y.a.name) ? 0 : 1; if (ux !== uy) return ux - uy; }
         const rx = rec.has(x.a.name) ? rec.get(x.a.name) : Infinity, ry = rec.has(y.a.name) ? rec.get(y.a.name) : Infinity;
@@ -25934,17 +25954,14 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       let mark = null, words = '';
       const live = agentLiveState(name), bg = bgCountOf(name);
       const ds = AgentDot.dotState({ busy: live.busy, question: live.question, background: bg });
-      if (ds === 'question') { mark = 'live-question'; words = AgentDot.dotLabel(ds); }
+      if (ds === 'question') { mark = 'live-question'; words = agentStateWords(ds); }
       else if (ds === 'busy') {
         mark = 'busy';
-        // the sidebar's words for a named (non-worker) agent, as agentLiveState builds its line; else the activity words
-        const s = agentStatus[name];
-        const d = !(s && s.worker) ? agentDoingNow(name) : null;
-        words = String((d && d.words) || live.activity || AgentDot.dotLabel(ds));
-        words = words.charAt(0).toUpperCase() + words.slice(1);
+        // the sidebar's words, as agentLiveState builds its line (agentBusyWords), same case
+        words = agentBusyWords(name, live.activity) || AgentDot.dotLabel(ds);
       }
       else if (unread) { mark = 'unread'; words = 'New replies'; }
-      else if (ds === 'background') { mark = 'bg-work'; words = AgentDot.bgLine(bg); }
+      else if (ds === 'background') { mark = 'bg-work'; words = agentStateWords(ds, { background: bg }); }
       return { mark, words };
     }
     // Writes a state into a row: creates, updates or removes its .qs-state words and aria-hidden .qs-dot marker (last in the row).
@@ -25977,7 +25994,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // updated): it is looked up in the new list, so a row inserted above it does not move the selection onto another agent.
       // A changed query, or an agent that is gone, starts at the first row.
       const keepName = qsList[qsSel] && qsList[qsSel].name;
-      qsList = qsRank(roster, q.value, { recent: qsRecent(), unread });
+      const waiting = new Set(roster.filter(a => agentLiveState(a.name).question).map(a => a.name));   // the sidebar's own "waiting for your answer"
+      qsList = qsRank(roster, q.value, { recent: qsRecent(), unread, waiting });
       const same = q.value === qsLastQ;
       const at = same && keepName ? qsList.findIndex(a => a.name === keepName) : -1;
       qsSel = at >= 0 ? at : 0;
@@ -25995,8 +26013,9 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         const ic = span('qs-ic', a.icon || '🤖'); ic.setAttribute('aria-hidden', 'true');
         row.appendChild(ic);
         row.appendChild(span('qs-name', shown));
-        // the internal name next to a different display name: only when what was typed matched it
-        if (typed && String(shown).toLowerCase() !== String(a.name).toLowerCase() && qsScore({ name: a.name }, typed) !== Infinity) row.appendChild(span('qs-id', a.name));
+        // the short name (id) only when what was typed matched the id and not the display name (a letters-in-order match of
+        // the display name does not count against the id when the id matches better); a display-name match, or no query, shows the display name alone
+        if (typed && qsScore({ name: a.name }, typed) < qsScore({ name: shown }, typed)) row.appendChild(span('qs-id', a.name));
         qsWriteState(row, qsRowState(a.name, unread.has(a.name)));
         list.appendChild(row);
       });

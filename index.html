@@ -2955,7 +2955,7 @@
     .qs-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
     .qs-dot.unread { background: var(--accent); }
     .qs-dot.busy { background: var(--warning); }
-    .qs-dot.live-question { width: 14px; height: 14px; background: var(--blue); color: var(--on-color-text); font-size: 9px; line-height: 14px; font-weight: 700; text-align: center; }   /* the sidebar's "?" marker */
+    .qs-dot.live-question { width: 14px; height: 14px; background: var(--blue); color: var(--on-color-text); font-size: 9px; line-height: 14px; font-weight: 700; text-align: center; animation: pulse 1.6s infinite; }   /* the sidebar's "?" marker, pulsing as the sidebar's does (.agent-status.live-question: no reduced-motion rule there either) */
     .qs-dot.bg-work { box-sizing: border-box; background: transparent; border: 2px solid var(--blue); }   /* the sidebar's ring */
     .qs-status { padding: 14px 18px; color: var(--text-dim); font-size: 0.9rem; }
     .qs-status:empty { display: none; }

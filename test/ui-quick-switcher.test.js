@@ -295,7 +295,7 @@ function page({ agents = [A('aide', 'Aide'), A('researcher', 'Researcher'), A('r
     + ['qsRecentStore', 'qsRecent', 'qsNoteOpened', 'qsRecentKeys', 'qsForgetRecents', 'qsScore', 'qsRank', 'qsUnread', 'qsBlocked', 'closeQuickSwitcher',
       'openQuickSwitcher', 'renderQuickSwitcher', 'qsPaintSel', 'qsKey', 'qsOpen', 'qsShortcut',
       'simpleCloseSettings', 'openSimpleSettings', 'openReasoningFull', 'paintReasoningFull', 'closeReasoningFull', 'openToolsFull', 'closeToolsFull', 'loadAgents'].map(fn).join('')
-    + ['qsRowState', 'qsWriteState', 'qsRefreshStates'].map(fn).join('')
+    + ['qsRowState', 'qsWriteState', 'qsRefreshStates', 'agentStateWords', 'agentBusyWords'].map(fn).join('')
     + one('qsIsOpen') + one('qsRosterChanged') + one('qsRecentBox') + fn('qsStatusChanged') + 'let qsStatusRaf = 0;\n'
     + 'function paintToolsFull() {}\n'   // its painting reads the reply's tool model; opening and closing are real
     + WORKERS_ESC
@@ -635,6 +635,7 @@ test('each row says its state in words (the sidebar\'s), with the sidebar\'s mar
   const p = page({ agents: [A('aide', 'Aide'), A('scout', 'Scout'), A('forge', 'Forge'), A('hazel', 'Hazel'), A('news', 'News'), A('calm', 'Calm')] });
   p.c.live = { scout: { busy: true, activity: 'replying to you' }, forge: { question: true, busy: true }, hazel: { busy: false } };
   p.c.bg = { hazel: 2 };
+  p.c.doing = { scout: { words: 'Replying to you', detail: '' } };
   const tabEl = p.doc.createElement('div'); tabEl.id = 'tab-c9'; tabEl.className = 'chat-tab unread'; p.doc.body.appendChild(tabEl);
   p.c.chats.c9 = { agent: 'news' };
   p.cmdK();
@@ -642,7 +643,7 @@ test('each row says its state in words (the sidebar\'s), with the sidebar\'s mar
   const state = (n) => { const s = row(n).children.find(x => x.cls.has('qs-state')); return s ? s.textContent : null; };
   const dot = (n) => row(n).children.find(x => x.cls.has('qs-dot'));
   assert.strictEqual(state('news'), 'New replies'); assert.ok(dot('news').cls.has('unread'));
-  assert.strictEqual(state('forge'), 'Waiting for your answer', 'the question state, the sidebar\'s words');
+  assert.strictEqual(state('forge'), 'waiting for your answer', 'the question state, the sidebar\'s words');
   assert.ok(dot('forge').cls.has('live-question') && !dot('forge').cls.has('busy'), 'the sidebar\'s marker, not the amber one');
   assert.strictEqual(dot('forge').textContent, '?');
   assert.strictEqual(state('scout'), 'Replying to you'); assert.ok(dot('scout').cls.has('busy'));
@@ -678,9 +679,10 @@ test('one state per row: question > busy > unread > background', () => {
   const p = page({ agents: [A('qa', 'Qa'), A('ba', 'Ba'), A('ua', 'Ua'), A('ga', 'Ga')] });
   p.c.live = { qa: { question: true, busy: true }, ba: { busy: true, activity: 'working' } };
   p.c.bg = { ga: 3 };
+  p.c.doing = { ba: { words: 'Working', detail: '' } };
   for (const [i, n] of ['qa', 'ba', 'ua', 'ga'].entries()) markUnread(p, `c${i}`, n);
   p.cmdK();
-  assert.strictEqual(rowState(p, 'qa'), 'Waiting for your answer');
+  assert.strictEqual(rowState(p, 'qa'), 'waiting for your answer');
   assert.ok(rowDot(p, 'qa').cls.has('live-question') && rowDot(p, 'qa').textContent === '?');
   assert.strictEqual(rowState(p, 'ba'), 'Working', 'busy and unread: the busy words');
   assert.ok(rowDot(p, 'ba').cls.has('busy'));
@@ -696,15 +698,16 @@ test('a busy named agent reads the sidebar\'s words (agentDoingNow), a worker th
   p.c.agentStatus = { wk: { worker: true } };
   p.cmdK();
   assert.strictEqual(rowState(p, 'scout'), 'Replying to your message');
-  assert.strictEqual(rowState(p, 'wk'), 'Working');
+  assert.strictEqual(rowState(p, 'wk'), 'working', 'a worker: the activity words, as the sidebar prints them (no capital added)');
   p.c.doing.scout = { words: 'checking the mail' };
   p.c.api.roster();
-  assert.strictEqual(rowState(p, 'scout'), 'Checking the mail', 'first letter capitalised');
+  assert.strictEqual(rowState(p, 'scout'), 'checking the mail', 'the sidebar\'s case, untouched');
 });
 
 test('an open switcher repaints its rows when the sidebar status changes: once per frame, selection, focus and scroll kept', () => {
   const p = page({ agents: [A('aide', 'Aide'), A('scout', 'Scout'), A('forge', 'Forge')] });
   p.c.live = { scout: { busy: true, activity: 'working' } };
+  p.c.doing = { scout: { words: 'Working', detail: '' } };
   p.c.api.statusChanged();
   assert.strictEqual(p.c.frames.length, 0, 'closed: nothing scheduled');
   p.cmdK();
@@ -717,7 +720,7 @@ test('an open switcher repaints its rows when the sidebar status changes: once p
   assert.strictEqual(p.c.frames.length, 1, 'many calls, one frame');
   assert.strictEqual(rowState(p, 'scout'), 'Working', 'not before the frame');
   p.c.flush();
-  assert.strictEqual(rowState(p, 'scout'), 'Waiting for your answer');
+  assert.strictEqual(rowState(p, 'scout'), 'waiting for your answer');
   assert.strictEqual(p.doc.querySelector('.qs-row.sel').dataset.agent, selBefore);
   assert.strictEqual(p.doc.activeElement, p.q(), 'the focus did not move');
   assert.strictEqual(p.doc.getElementById('qs-list').scrollTop, 40);
@@ -741,7 +744,7 @@ test('a status repaint updates the rows in place: the same row nodes, no row rep
   p.c.live = { scout: { question: true, busy: true } };
   p.c.api.statusChanged(); p.c.flush();
   assert.strictEqual(rowEl('scout'), scoutRow, 'the same row node');
-  assert.strictEqual(rowState(p, 'scout'), 'Waiting for your answer');
+  assert.strictEqual(rowState(p, 'scout'), 'waiting for your answer');
   assert.ok(rowDot(p, 'scout').cls.has('live-question') && !rowDot(p, 'scout').cls.has('busy') && rowDot(p, 'scout').textContent === '?');
   assert.deepStrictEqual(list.children, before, 'every row node kept, in order');
   assert.deepStrictEqual(scoutRow.children.map(x => [...x.cls][0]), ['qs-ic', 'qs-name', 'qs-state', 'qs-dot'], 'same element order as a full paint');
@@ -818,7 +821,7 @@ test('without requestAnimationFrame the repaint falls back to a timer', async ()
   p.c.live = { scout: { question: true } };
   p.c.api.statusChanged();
   await tick();
-  assert.strictEqual(rowState(p, 'scout'), 'Waiting for your answer');
+  assert.strictEqual(rowState(p, 'scout'), 'waiting for your answer');
 });
 
 test('the sidebar status paint tells the open switcher', () => {
