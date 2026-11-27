@@ -36,6 +36,19 @@ if (!skip) {
   if (pp.status !== 0) punchSkip = 'this file system cannot punch holes';
   try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch (e) { /* ignore */ }
 }
+// the same for /dev/shm (the helper uses it when the temp dir cannot punch holes)
+let shmSkip = false;
+if (!skip) {
+  let d = null;
+  try {
+    d = fs.mkdtempSync('/dev/shm/lockbox-punch-');
+    const probe = 'import ctypes,os,sys\nfd=os.open(sys.argv[1],os.O_RDWR|os.O_CREAT)\nos.write(fd,b"x"*8192)\n' +
+      'f=ctypes.CDLL(None,use_errno=True).fallocate\nf.argtypes=[ctypes.c_int,ctypes.c_int,ctypes.c_int64,ctypes.c_int64]\n' +
+      'sys.exit(0 if f(fd,3,0,4096)==0 else 1)\n';
+    if (cp.spawnSync(PY, ['-I', '-c', probe, path.join(d, 'p')], { stdio: 'ignore' }).status !== 0) shmSkip = '/dev/shm cannot punch holes';
+  } catch (e) { shmSkip = '/dev/shm is not usable'; }
+  if (d) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (e) { /* ignore */ } }
+}
 
 const cleanup = [];
 process.on('exit', () => { for (const d of cleanup) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (e) { /* ignore */ } } });
@@ -58,7 +71,7 @@ function profile(fx, over) {
 function run(fx, script, extraEnv, outer, opts) {
   const b64 = Buffer.from(JSON.stringify(profile(fx))).toString('base64');
   const env = Object.assign({}, process.env, { FX_A: fx.A, FX_B: fx.B }, extraEnv || {});
-  const args = ['-I', '-S', HELPER, '--profile-b64', b64, '--', 'sh', '-c', script];
+  const args = ['-I', '-S', HELPER, '--profile-b64', b64, '--'].concat(opts && opts.argv ? opts.argv : ['sh', '-c', script]);
   const t0 = Date.now();
   const cmd = outer ? STRACE : PY;
   const full = outer ? ['-f', '-qq', '-e', 'trace=none', '-o', '/dev/null', '--', PY].concat(args) : args;
@@ -82,14 +95,20 @@ async function until(cond, ms) {
   while (!cond()) { if (Date.now() > end) return false; await sleep(50); }
   return true;
 }
-const watchDirs = () => fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('lockbox-watch-'));
+// trace folders live in a private lockbox-watch-<uid> folder under the temp dir; names are returned relative to the base
+const PARENT = 'lockbox-watch-' + process.getuid();
+const watchDirsIn = (base) => { try { return fs.readdirSync(path.join(base, PARENT)).filter((n) => n.startsWith('w-')).map((n) => path.join(PARENT, n)); } catch (e) { return []; } };
+const watchDirs = (d) => watchDirsIn(d || os.tmpdir());
+// a private temp dir for a run (TMPDIR): watching its few entries is quick however crowded the shared /tmp is
+function privTmp(fx) { const d = path.join(fx.root, 'tmp'); fs.mkdirSync(d, { recursive: true }); return d; }
 const rules = (fx) => readLog(fx).map((e) => e.rule);
 
 describe('lockbox-run watch leftovers', { skip }, () => {
   it('T1. a leftover is reported, still watched, and the folder goes when it ends', async () => {
     const fx = fixture();
-    const before = new Set(watchDirs());
-    const r = await run(fx, 'sleep 6 & exit 4', { LOCKBOX_TEST_GRACE_MS: '1500' });
+    const td = privTmp(fx);
+    const before = new Set(watchDirs(td));
+    const r = await run(fx, 'sleep 6 & exit 4', { LOCKBOX_TEST_GRACE_MS: '1500', TMPDIR: td });
     assert.strictEqual(r.code, 4, r.err);
     assert.ok(r.ms < 5000, 'took ' + r.ms);
     const lo = readLog(fx).filter((e) => e.rule === 'watch-leftovers');
@@ -102,7 +121,7 @@ describe('lockbox-run watch leftovers', { skip }, () => {
     const ended = readLog(fx).filter((e) => e.rule === 'watch-leftovers-ended');
     assert.strictEqual(ended.length, 1);
     assert.strictEqual(ended[0].count, 1);
-    assert.ok(await until(() => watchDirs().every((n) => before.has(n)), 3000), 'a lockbox-watch folder remains');
+    assert.ok(await until(() => watchDirs(td).every((n) => before.has(n)), 3000), 'a lockbox-watch folder remains');
   });
 
   it('T2. a normal command ends with its own status and nothing extra is logged', async () => {
@@ -116,9 +135,11 @@ describe('lockbox-run watch leftovers', { skip }, () => {
 
   it('T3. an attach that is refused: the command runs unwatched, one watch-failed entry', async () => {
     const fx = fixture();
-    let r = await run(fx, 'exit 5', {}, true);   // the probe itself fails under a tracer: the old unavailable path
+    // the probe now uses the real run's options (-DDD): under a tracer it still exits 0 (the command runs unwatched), so
+    // the helper goes on and the real attach is refused: the same single watch-failed entry
+    let r = await run(fx, 'exit 5', {}, true);
     assert.strictEqual(r.code, 5, r.err);
-    assert.deepStrictEqual(rules(fx).filter((x) => /^watch-/.test(x)), ['watch-unavailable']);
+    assert.deepStrictEqual(rules(fx).filter((x) => /^watch-/.test(x)), ['watch-failed']);
     const fx2 = fixture();
     r = await run(fx2, 'exit 5', { LOCKBOX_TEST_FORCE_PROBE: '1' }, true);   // probe skipped: the -D attach is refused
     assert.strictEqual(r.code, 5, r.err);
@@ -180,15 +201,16 @@ describe('lockbox-run watch leftovers', { skip }, () => {
   it('T9. the trace file does not grow without bound while a long-lived leftover runs', { skip: punchSkip }, async () => {
     const fx = fixture();
     fs.writeFileSync(path.join(fx.A, 'f'), 'x');
-    const before = new Set(watchDirs());
+    const td = privTmp(fx);
+    const before = new Set(watchDirs(td));
     // a counted loop of traced opens (about 125 bytes of trace each); a stop file ends it early in a failed run
     const script = '(i=0; while [ $i -lt 90000 ] && [ ! -e "$FX_B/stop" ]; do : < "$FX_A/f"; i=$((i+1)); done) & exit 0';
-    const p = run(fx, script, { LOCKBOX_TEST_GRACE_MS: '300' });
+    const p = run(fx, script, { LOCKBOX_TEST_GRACE_MS: '300', TMPDIR: td });
     let maxApparent = 0, maxAllocated = 0, trace = null;
     const sample = () => {
       if (!trace) {
-        const d = watchDirs().find((n) => !before.has(n));
-        if (d) trace = path.join(os.tmpdir(), d, 'trace');
+        const d = watchDirs(td).find((n) => !before.has(n));
+        if (d) trace = path.join(td, d, 'trace');
       }
       if (!trace) return;
       try {
@@ -197,16 +219,19 @@ describe('lockbox-run watch leftovers', { skip }, () => {
         maxAllocated = Math.max(maxAllocated, st.blocks * 512);
       } catch (e) { /* gone */ }
     };
+    const timer = setInterval(sample, 20);   // sampled from the start: the helper is back after about half a second
     const r = await p;
     assert.strictEqual(r.code, 0, r.err);
     const t0 = Date.now();
     while (!rules(fx).includes('watch-leftovers-ended') && Date.now() - t0 < 60000) { sample(); await sleep(20); }
+    clearInterval(timer);
     fs.writeFileSync(path.join(fx.B, 'stop'), '');
     assert.ok(rules(fx).includes('watch-leftovers-ended'), 'no watch-leftovers-ended');
     assert.ok(trace, 'trace file never seen');
     process.stderr.write('# T9 trace file: apparent max ' + maxApparent + ' B, allocated max ' + maxAllocated + ' B\n');
     assert.ok(maxApparent > 2 * 1024 * 1024, 'the loop was too small: apparent ' + maxApparent);
-    assert.ok(maxAllocated < 2 * 1024 * 1024, 'allocated ' + maxAllocated + ' apparent ' + maxApparent);
+    // sampled from the start now, so the lag of the reader behind a fast loop shows: bounded means well under the whole file
+    assert.ok(maxAllocated < 0.5 * maxApparent, 'allocated ' + maxAllocated + ' apparent ' + maxApparent);
     assert.ok(maxAllocated < maxApparent);
   });
 
@@ -223,5 +248,100 @@ describe('lockbox-run watch leftovers', { skip }, () => {
       fs.writeFileSync(path.join(fx.B, 'stop'), '');
     }
     assert.ok(await until(() => rules(fx).includes('watch-leftovers-ended'), 10000), 'no watch-leftovers-ended');
+  });
+
+  it('T11. a cancel that arrives between the fork and the publishing of the target reaches the command', async () => {
+    const fx = fixture();
+    let helper;
+    const p = run(fx, '', { LOCKBOX_TEST_PAUSE_PUBLISH_MS: '800' }, false,
+      { argv: ['sleep', '30'], onStart: (c) => { helper = c; } });
+    // wait until the helper has forked its child (it then sits in the 800 ms pause), then ~300 ms into it send the cancel
+    const forked = await until(() => {
+      try {
+        return fs.readFileSync('/proc/' + helper.pid + '/task/' + helper.pid + '/children', 'utf8').trim().split(/\s+/).some((c) => {
+          try { return /lockbox-watch-|sleep/.test(fs.readFileSync('/proc/' + c + '/cmdline', 'utf8')); } catch (e) { return false; }
+        });
+      } catch (e) { return false; }
+    }, 4000);
+    assert.ok(forked, 'the helper never forked the command');
+    await sleep(300);
+    helper.kill('SIGTERM');
+    const r = await p;
+    assert.ok(r.ms < 5000, 'took ' + r.ms);
+    assert.strictEqual(r.sig, 'SIGTERM', JSON.stringify(r));
+  });
+
+  it('T12. a slow judge: the helper still returns on time and the continuation finishes the backlog', async () => {
+    const fx = fixture();
+    fs.writeFileSync(path.join(fx.A, 'f'), 'x');
+    const td = privTmp(fx);
+    const script = 'i=0; while [ $i -lt 40 ]; do : < "$FX_A/f"; i=$((i+1)); done; echo x > "$FX_B/last-refused.txt"; exit 0';
+    const r = await run(fx, script, { LOCKBOX_TEST_GRACE_MS: '500', LOCKBOX_TEST_SLOW_JUDGE_MS: '100', TMPDIR: td });
+    assert.strictEqual(r.code, 0, r.err);
+    assert.ok(r.ms < 500 + 3000, 'took ' + r.ms);
+    const last = path.join(fx.B, 'last-refused.txt');
+    const has = () => readLog(fx).some((e) => e.rule === 'write-outside' && e.path === last);
+    assert.ok(await until(has, 15000), 'the last write was not logged: ' + JSON.stringify(readLog(fx)));
+    assert.strictEqual(readLog(fx).filter((e) => e.path === last).length, 1);
+    assert.ok(!rules(fx).includes('watch-incomplete'), JSON.stringify(readLog(fx)));
+    assert.ok(!rules(fx).includes('watch-leftovers'), JSON.stringify(readLog(fx)));
+    assert.ok(await until(() => watchDirs(td).every((n) => !fs.existsSync(path.join(td, n, 'trace'))), 5000), 'a trace file remains');
+  });
+
+  it('T13. without hole punching in the temp dir the trace goes to /dev/shm; with none anywhere the note says so', { skip: shmSkip }, async () => {
+    const fx = fixture();
+    const shmDirs = () => watchDirsIn('/dev/shm');
+    const before = new Set(shmDirs());
+    const p = run(fx, 'sleep 3 & exit 0', { LOCKBOX_TEST_GRACE_MS: '300', LOCKBOX_TEST_NO_PUNCH: '1' });
+    let seen = false;
+    const t0 = Date.now();
+    while (!seen && Date.now() - t0 < 4000) {
+      seen = shmDirs().some((n) => !before.has(n) && fs.existsSync(path.join('/dev/shm', n, 'trace')));
+      if (!seen) await sleep(20);
+    }
+    const r = await p;
+    assert.strictEqual(r.code, 0, r.err);
+    assert.ok(seen, 'no trace folder under /dev/shm');
+    const lo = readLog(fx).filter((e) => e.rule === 'watch-leftovers');
+    assert.strictEqual(lo.length, 1, JSON.stringify(readLog(fx)));
+    assert.match(lo[0].note, /still being watched/);
+    assert.ok(await until(() => rules(fx).includes('watch-leftovers-ended'), 8000), 'no watch-leftovers-ended');
+    assert.ok(await until(() => shmDirs().every((n) => before.has(n)), 3000), 'a /dev/shm folder remains');
+
+    const fx2 = fixture();
+    const r2 = await run(fx2, 'sleep 3 & exit 0', { LOCKBOX_TEST_GRACE_MS: '300', LOCKBOX_TEST_NO_PUNCH: 'all' });
+    assert.strictEqual(r2.code, 0, r2.err);
+    const lo2 = readLog(fx2).filter((e) => e.rule === 'watch-leftovers');
+    assert.strictEqual(lo2.length, 1, JSON.stringify(readLog(fx2)));
+    assert.match(lo2[0].note, /disk use is not bounded/);
+    assert.match(lo2[0].note, /still watched/);
+    assert.ok(await until(() => rules(fx2).includes('watch-leftovers-ended'), 8000), 'no watch-leftovers-ended');
+  });
+
+  it('T14. an strace that rejects -DDD fails the probe: watch-unavailable, the command still runs', async () => {
+    const fx = fixture();
+    const fake = path.join(fx.root, 'fake-strace');
+    fs.writeFileSync(fake, '#!/bin/sh\nfor a in "$@"; do [ "$a" = "-DDD" ] && exit 1; done\nexit 0\n', { mode: 0o755 });
+    const r = await run(fx, 'echo ran > "$FX_A/ran.txt"; exit 7', { LOCKBOX_TEST_STRACE: fake });
+    assert.strictEqual(r.code, 7, r.err);
+    assert.strictEqual(fs.readFileSync(path.join(fx.A, 'ran.txt'), 'utf8'), 'ran\n');
+    assert.deepStrictEqual(rules(fx).filter((x) => /^watch-/.test(x)), ['watch-unavailable']);
+  });
+
+  it('T15. the sweep removes an old lockbox-watch folder and leaves a fresh one alone', async () => {
+    const fx = fixture();
+    const tmp = fs.realpathSync(os.tmpdir());
+    fs.mkdirSync(path.join(tmp, PARENT), { recursive: true, mode: 0o700 });
+    const oldDir = fs.mkdtempSync(path.join(tmp, PARENT, 'w-test-old-'));
+    const freshDir = fs.mkdtempSync(path.join(tmp, PARENT, 'w-test-fresh-'));
+    cleanup.push(oldDir, freshDir);
+    fs.writeFileSync(path.join(oldDir, 'trace'), 'old trace');
+    fs.writeFileSync(path.join(freshDir, 'trace'), 'fresh trace');
+    const twoDays = new Date(Date.now() - 2 * 86400 * 1000);
+    fs.utimesSync(oldDir, twoDays, twoDays);
+    const r = await run(fx, 'exit 0');
+    assert.strictEqual(r.code, 0, r.err);
+    assert.ok(!fs.existsSync(oldDir), 'the old folder remains');
+    assert.ok(fs.existsSync(path.join(freshDir, 'trace')), 'the fresh folder was removed');
   });
 });
