@@ -678,8 +678,15 @@ def strace_works(seccomp=True):
 def exit_like(status):
     if os.WIFSIGNALED(status):
         sig = os.WTERMSIG(status)
-        signal.signal(sig, signal.SIG_DFL)
-        signal.pthread_sigmask(signal.SIG_UNBLOCK, {sig})
+        # SIGKILL and SIGSTOP cannot have a handler set (EINVAL): killing ourselves with them still works
+        try:
+            signal.signal(sig, signal.SIG_DFL)
+        except (OSError, ValueError):
+            pass
+        try:
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, {sig})
+        except (OSError, ValueError):
+            pass
         os.kill(os.getpid(), sig)
         sys.exit(128 + sig)
     sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1)
@@ -723,15 +730,18 @@ class Strace:
             if not name.isdigit() or int(name) == self.not_pid:
                 continue
             try:
+                before = proc_start(int(name))   # the start time is read before and after the checks: same process both times
+                if not before:
+                    continue
                 if os.path.realpath(os.readlink("/proc/%s/exe" % name)) != self.exe:
                     continue
                 with open("/proc/%s/cmdline" % name, "rb") as f:
                     args = f.read().split(b"\0")
                 if self.trace_path not in args:
                     continue
-                st = proc_start(int(name))
-                if st:
-                    self.pid, self.start = int(name), st[0]
+                after = proc_start(int(name))
+                if after and after[0] == before[0]:
+                    self.pid, self.start = int(name), after[0]
                     return True
             except (OSError, ValueError):
                 continue
@@ -743,39 +753,75 @@ class Strace:
         st = proc_start(self.pid)
         return bool(st) and st[0] == self.start and st[1] not in ("Z", "X")
 
-def tail_trace(trace_path, judge, stop, state, start=0):
-    """Feed the complete lines of the trace file to the judge until told to stop (after a last read)."""
-    buf = b""
-    while True:
-        try:
-            f = open(trace_path, "rb")
-            break
-        except OSError:
-            if stop.is_set():
+PUNCH_STEP = 1 << 20
+
+def punch_hole(fd, upto):
+    """Free the disk space of the first `upto` bytes of the file (size kept); any failure is ignored."""
+    try:
+        fa = libc().fallocate
+        fa.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int64, ctypes.c_int64]
+        fa.restype = ctypes.c_int
+        fa(fd, 0x02 | 0x01, 0, upto)   # FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE
+    except Exception:
+        pass
+
+def tail_trace(trace_path, judge, finish, now, state, start=0):
+    """Feed the complete lines of the trace file to the judge. `finish`: read to the end of the file, then return;
+    `now`: return after the line being judged. state["pos"] is the offset just past the last line that was judged."""
+    fd = None
+    while fd is None:
+        for flags in (os.O_RDWR, os.O_RDONLY):   # read-write so judged parts can be given back to the disk
+            try:
+                fd = os.open(trace_path, flags | os.O_CLOEXEC)
+                break
+            except OSError:
+                pass
+        if fd is None:
+            if finish.is_set() or now.is_set():
                 return
-            stop.wait(0.01)   # strace has not created the file yet
-    with f:
-        f.seek(start)
+            time.sleep(0.01)   # strace has not created the file yet
+    try:
+        buf = b""             # bytes from state["pos"] on that are not judged yet
+        read_at = start       # next byte to read
+        cur = start           # offset just past the last judged line
+        punched = start
+        state["pos"] = cur
         while True:
-            final = stop.is_set()
+            final = finish.is_set()
             while True:
+                if now.is_set():
+                    return
                 try:
-                    chunk = f.read(65536)
+                    chunk = os.pread(fd, 65536, read_at)
                 except OSError:
                     chunk = b""
                 if not chunk:
                     break
+                read_at += len(chunk)
                 buf += chunk
-                *lines, buf = buf.split(b"\n")
-                state["pos"] = f.tell() - len(buf)
-                for ln in lines:
+                i = 0
+                while True:
+                    j = buf.find(b"\n", i)
+                    if j < 0:
+                        break
                     try:
-                        judge.feed(ln.decode("utf-8", "surrogateescape") + "\n")
+                        judge.feed(buf[i:j].decode("utf-8", "surrogateescape") + "\n")
                     except Exception:
                         pass
+                    cur += j + 1 - i
+                    i = j + 1
+                    state["pos"] = cur   # moved only past a line that was judged
+                    if now.is_set():
+                        return
+                buf = buf[i:]
+                if cur - punched >= PUNCH_STEP:
+                    punch_hole(fd, cur & ~4095)
+                    punched = cur
             if final:
                 return
-            stop.wait(0.05)
+            finish.wait(0.05)
+    finally:
+        os.close(fd)
 
 def list_tracees(spid):
     names = set()
@@ -806,24 +852,30 @@ def remove_trace(trace_path, tmpdir):
         except OSError:
             pass
 
-def continue_watching(prof, judge, trace_path, tmpdir, strace, count, start):
+NOT_REVIEWED = "the job's command ended; these processes are still running; their later actions are not reviewed"
+
+def continue_watching(prof, judge, trace_path, tmpdir, strace, count, start, gate):
     """Runs in a detached child: keeps judging what the leftovers do until strace is gone."""
     try:
         os.setsid()
         dn = os.open("/dev/null", os.O_RDWR)
         for i in (0, 1, 2):
             os.dup2(dn, i)
-        os.closerange(3, max(65536, os.sysconf("SC_OPEN_MAX") if hasattr(os, "sysconf") else 65536))
+        try:
+            os.read(gate, 1)   # the helper writes its own log lines first; this is released when it closes its end
+        except OSError:
+            pass
+        close_inherited()
         for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
             signal.signal(s, signal.SIG_DFL)
-        stop = threading.Event()
+        finish, now = threading.Event(), threading.Event()
         judge.entries, judge.more = [], 0   # the helper's judge: its folders per process and what it already logged are kept
         # what the helper already judged is not judged again: start where it stopped
-        th = threading.Thread(target=tail_trace, args=(trace_path, judge, stop, {}, start), daemon=True)
+        th = threading.Thread(target=tail_trace, args=(trace_path, judge, finish, now, {}, start), daemon=True)
         th.start()
         while strace.alive():
             time.sleep(0.2)
-        stop.set()
+        finish.set()
         th.join(10)
         write_log(prof, list(judge.entries), judge.more)
         write_log(prof, [{"op": "watch", "path": "", "rule": "watch-leftovers-ended", "count": count}], 0)
@@ -832,6 +884,14 @@ def continue_watching(prof, judge, trace_path, tmpdir, strace, count, start):
         pass
     finally:
         os._exit(0)
+
+def run_unwatched(argv, env):
+    sys.stdout.flush()
+    restore_signals()
+    try:
+        os.execvpe(argv[0], argv, env)
+    except OSError as ex:
+        raise Fail("cannot run %s: %s" % (argv[0], errname(ex.errno)))
 
 def run_watch(prof, argv):
     # Watch runs the command as today: today's environment, not the allow-list enforce would use (UV_USE_IO_URING=0
@@ -847,19 +907,12 @@ def run_watch(prof, argv):
             fallback = True
         else:
             write_log(prof, [{"op": "watch", "path": "", "rule": "watch-unavailable"}], 0)
-            sys.stdout.flush()
-            restore_signals()
-            try:
-                os.execvpe(argv[0], argv, env)
-            except OSError as ex:
-                raise Fail("cannot run %s: %s" % (argv[0], errname(ex.errno)))
+            run_unwatched(argv, env)
     if fallback:
         write_log(prof, [{"op": "watch", "path": "", "rule": "watch-fallback",
                           "reason": "seccomp-bpf tracing is not available here, so this job is watched in the slower mode"}], 0)
-    judge = Judge(prof, os.getcwd())
-    tmpdir = tempfile.mkdtemp(prefix="lockbox-watch-")
-    trace_path = os.path.join(tmpdir, "trace")
     target = {"pid": None}
+    sigstate = {"hit": False}
 
     def forward(sig, _frame):
         if target["pid"]:
@@ -867,12 +920,28 @@ def run_watch(prof, argv):
                 os.kill(target["pid"], sig)
             except OSError:
                 pass
+        else:
+            sigstate["hit"] = True   # after the command ended: ends the grace wait
 
-    for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(s, forward)
-    cmd = [STRACE, "-D", "-I2"] + (["--seccomp-bpf"] if seccomp else []) + [
-        "-f", "-qq", "-y", "-s", "4096", "-e", "signal=none", "-e", "trace=" + TRACE_SET, "-o", trace_path, "--"] + argv
-    pid = os.fork()
+    # Watching must never fail the job: whatever goes wrong before the command started, it runs unwatched.
+    tmpdir = trace_path = None
+    try:
+        judge = Judge(prof, os.getcwd())
+        tmpdir = tempfile.mkdtemp(prefix="lockbox-watch-")
+        trace_path = os.path.join(tmpdir, "trace")
+        for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            signal.signal(s, forward)
+        # -DDD: strace in a session of its own, so a cancel that signals the command's process group cannot reach it
+        # (with seccomp-bpf, strace ending ends everything it traces)
+        cmd = [STRACE, "-DDD", "-I2"] + (["--seccomp-bpf"] if seccomp else []) + [
+            "-f", "-qq", "-y", "-s", "4096", "-e", "signal=none", "-e", "trace=" + TRACE_SET, "-o", trace_path, "--"] + argv
+        pid = os.fork()
+    except Exception as ex:
+        if tmpdir:
+            remove_trace(trace_path, tmpdir)
+        write_log(prof, [{"op": "watch", "path": "", "rule": "watch-failed",
+                          "reason": "the watch could not be set up (%s), so this job ran unwatched" % type(ex).__name__}], 0)
+        run_unwatched(argv, env)
     if pid == 0:
         try:
             restore_signals()
@@ -881,41 +950,67 @@ def run_watch(prof, argv):
             os._exit(127)
     target["pid"] = pid
     strace = Strace(trace_path, pid)
-    stop = threading.Event()
+    finish, now = threading.Event(), threading.Event()
     state = {"pos": 0}
-    reader = threading.Thread(target=tail_trace, args=(trace_path, judge, stop, state), daemon=True)
+    reader = threading.Thread(target=tail_trace, args=(trace_path, judge, finish, now, state), daemon=True)
     try:
         reader.start()
     except Exception:
-        pass
+        reader = None
     _, status = os.waitpid(pid, 0)  # Python retries after a signal handler ran
+    target["pid"] = None            # the pid is reaped: never signal it again
+    sigstate["hit"] = False
     try:
-        watch_end(prof, judge, strace, stop, reader, trace_path, tmpdir, status, state)
+        watch_end(prof, judge, strace, finish, now, reader, trace_path, tmpdir, state, sigstate)
     except Exception:
         pass
     exit_like(status)
 
-def watch_end(prof, judge, strace, stop, reader, trace_path, tmpdir, status, state):
+def watch_end(prof, judge, strace, finish, now, reader, trace_path, tmpdir, state, sigstate):
     # strace is found once, now that the command has ended: alive means leftovers keep it running (with -D the command
     # only starts after strace attached, so a strace that was there and has gone is simply finished)
-    deadline = time.time() + watch_grace()
+    deadline = time.monotonic() + watch_grace()
     strace.scan()
-    while strace.alive() and time.time() < deadline:
+    while strace.alive() and time.monotonic() < deadline and not sigstate["hit"]:
         time.sleep(0.02)
     leftovers = strace.alive()
-    stop.set()
-    reader.join(5)
+    # strace ended: read the trace to its end. Leftovers remain: stop after the current line, the continuation reads on.
+    (now if leftovers else finish).set()
+    if reader is not None:
+        reader.join(1.0 if leftovers else 1.5)
+    reader_alive = reader is not None and reader.is_alive()
     entries = list(judge.entries)
     if leftovers:
         count, names = list_tracees(strace.pid)
-        entries.append({"op": "watch", "path": "", "rule": "watch-leftovers", "count": count, "names": names,
-                        "note": "the job's command ended; these processes are still running and are still being watched until they end"})
-        write_log(prof, entries, judge.more)
+        entry = {"op": "watch", "path": "", "rule": "watch-leftovers", "count": count, "names": names}
+        if reader_alive:
+            # forking while another thread may hold a lock could deadlock the child; strace is left alone
+            entry["note"] = NOT_REVIEWED
+            write_log(prof, entries + [entry], judge.more)
+            return
         sys.stdout.flush()
         sys.stderr.flush()
-        cpid = os.fork()
+        r = w = None
+        try:
+            r, w = os.pipe()
+            cpid = os.fork()
+        except OSError:
+            for fd in (r, w):
+                if fd is not None:
+                    os.close(fd)
+            entry["note"] = NOT_REVIEWED
+            write_log(prof, entries + [entry], judge.more)
+            remove_trace(trace_path, tmpdir)   # strace keeps writing to its open file
+            return
         if cpid == 0:
-            continue_watching(prof, judge, trace_path, tmpdir, strace, count, state["pos"])
+            os.close(w)
+            continue_watching(prof, judge, trace_path, tmpdir, strace, count, state["pos"], r)
+        os.close(r)
+        entry["note"] = "the job's command ended; these processes are still running and are still being watched until they end"
+        try:
+            write_log(prof, entries + [entry], judge.more)
+        finally:
+            os.close(w)   # releases the continuation
         return
     try:
         empty = os.path.getsize(trace_path) == 0
