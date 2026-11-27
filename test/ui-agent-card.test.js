@@ -1128,3 +1128,143 @@ test('configure({guard}) reaches the page\'s card: on a phone the sheet opens th
     if (saved === undefined) delete global.document; else global.document = saved;
   }
 });
+
+// ---- the 'editor' control: a long text kept in a file ---------------------------------------------------------------------
+const editorRows = (o = {}) => {
+  const log = { loads: 0, saves: [], confirmFor: [] };
+  const def = {
+    get: () => ({ value: '', display: '' }), control: { type: 'editor' },
+    load: async () => { log.loads++; if (o.loadFails) throw new Error('the file is not readable'); return o.text === undefined ? 'first line\nsecond line' : o.text; },
+    save: async (agent, text) => { log.saves.push(text); return o.saveFails ? { ok: false, error: 'the disk is full' } : { ok: true }; },
+    confirm: o.confirm,
+  };
+  return { log, rows: new Map([['OPT-0047', def]]) };
+};
+const edBtn = (row, text) => all(row, 'button').find((b) => b.textContent === text);
+const edArea = (row) => all(row, 'textarea')[0];
+const typed = (ta, v) => { ta.value = v; ta.dispatch('input'); };
+async function editorCard(o, over) {
+  const e = editorRows(o);
+  const t = setup(Object.assign({ rows: e.rows }, over || {}));
+  const confirms = [];
+  t.win.confirm = (q) => { confirms.push(q); return (o && o.answer) !== false; };
+  await t.card.open('harbor', { section: 'basics' });
+  return Object.assign(t, e, { confirms, row: () => rowOf(t.card.el(), 'OPT-0047') });
+}
+
+test('editor: an Edit button opens a textarea (monospace, 12 rows) with the loaded text; Save calls save(agent, text) and closes; Cancel closes with no save', async () => {
+  const t = await editorCard();
+  assert.ok(edBtn(t.row(), 'Edit') && !edArea(t.row()), 'closed: only the Edit button');
+  assert.strictEqual(t.log.loads, 0, 'nothing is loaded before Edit');
+  edBtn(t.row(), 'Edit').click();
+  assert.match(t.row().textContent, /Loading…/, 'Loading… while it loads');
+  await flush();
+  const ta = edArea(t.row());
+  assert.strictEqual(ta.value, 'first line\nsecond line');
+  assert.strictEqual(ta.getAttribute('rows'), '12');
+  assert.strictEqual(ta.getAttribute('class'), 'ac-textarea', 'its look (monospace, full width) comes from the pages\' .ac-textarea rule');
+  for (const page of ['index.html', 'mobile.html']) assert.match(require('fs').readFileSync(require('path').join(__dirname, '..', page), 'utf8'), /\.ac-textarea \{[^}]*font-family: var\(--font-mono\)/, page);
+  assert.ok(t.row().classList.contains('ac-editor-open'));
+  typed(ta, 'new text');
+  edBtn(t.row(), 'Save').click(); await flush();
+  assert.deepStrictEqual(t.log.saves, ['new text']);
+  assert.ok(!edArea(t.row()) && edBtn(t.row(), 'Edit'), 'closed after the save');
+  edBtn(t.row(), 'Edit').click(); await flush();
+  edBtn(t.row(), 'Cancel').click(); await flush();
+  assert.deepStrictEqual(t.log.saves, ['new text'], 'Cancel saved nothing');
+  assert.ok(!edArea(t.row()));
+});
+
+test('editor: a load that fails shows its error and no textarea; a save that fails keeps the typed text and shows the error', async () => {
+  const bad = await editorCard({ loadFails: true });
+  edBtn(bad.row(), 'Edit').click(); await flush();
+  assert.match(bad.row().textContent, /the file is not readable/);
+  assert.ok(!edArea(bad.row()) && !edBtn(bad.row(), 'Save'), 'nothing to save when the text did not load');
+  edBtn(bad.row(), 'Cancel').click(); await flush();
+  assert.ok(edBtn(bad.row(), 'Edit'));
+  const t = await editorCard({ saveFails: true });
+  edBtn(t.row(), 'Edit').click(); await flush();
+  typed(edArea(t.row()), 'my work');
+  edBtn(t.row(), 'Save').click(); await flush();
+  assert.strictEqual(edArea(t.row()).value, 'my work', 'the text stays');
+  assert.match(t.row().textContent, /the disk is full/);
+  assert.ok(!edArea(t.row()).disabled && !edBtn(t.row(), 'Save').disabled, 'controls are back after the failure');
+});
+
+test('editor: the typed text survives a redraw of the card (a refresh)', async () => {
+  const t = await editorCard();
+  edBtn(t.row(), 'Edit').click(); await flush();
+  typed(edArea(t.row()), 'half-written');
+  await t.card.refresh(); await flush();
+  assert.strictEqual(edArea(t.row()).value, 'half-written');
+});
+
+test('editor: confirm (a text or a function of the agent) is asked before saving; "no" saves nothing and keeps the text', async () => {
+  const t = await editorCard({ confirm: (agent) => 'Change ' + agent.display + '?', answer: false });
+  edBtn(t.row(), 'Edit').click(); await flush();
+  typed(edArea(t.row()), 'x');
+  edBtn(t.row(), 'Save').click(); await flush();
+  assert.deepStrictEqual(t.confirms, ['Change Harbor?']);
+  assert.deepStrictEqual(t.log.saves, []);
+  assert.strictEqual(edArea(t.row()).value, 'x');
+  const y = await editorCard({ confirm: 'Sure?' });
+  edBtn(y.row(), 'Edit').click(); await flush();
+  typed(edArea(y.row()), 'y');
+  edBtn(y.row(), 'Save').click(); await flush();
+  assert.deepStrictEqual(y.confirms, ['Sure?']);
+  assert.deepStrictEqual(y.log.saves, ['y']);
+});
+
+test('editor: closing the card (× or Escape) with unsaved editor text asks first; "keep" leaves the card open with the text, "discard" closes; no question when nothing was typed', async () => {
+  const t = await editorCard({ answer: false });
+  edBtn(t.row(), 'Edit').click(); await flush();
+  all(t.card.el(), '.ac-x')[0].click();
+  assert.strictEqual(t.card.isOpen(), false, 'nothing typed: closes at once');
+  assert.strictEqual(t.confirms.length, 0);
+  const k = await editorCard({ answer: false });
+  edBtn(k.row(), 'Edit').click(); await flush();
+  typed(edArea(k.row()), 'precious');
+  all(k.card.el(), '.ac-x')[0].click(); await flush();
+  assert.strictEqual(k.confirms.length, 1);
+  assert.match(k.confirms[0], /unsaved text/);
+  assert.strictEqual(k.card.isOpen(), true, 'kept open');
+  assert.strictEqual(edArea(k.row()).value, 'precious');
+  k.card.el().dispatch('keydown', { key: 'Escape' }); await flush();
+  assert.strictEqual(k.confirms.length, 2, 'Escape asks too');
+  assert.strictEqual(k.card.isOpen(), true);
+  k.win.confirm = () => true;   // discard
+  k.card.el().dispatch('keydown', { key: 'Escape' }); await flush();
+  assert.strictEqual(k.card.isOpen(), false);
+  // opening another agent's card does not silently drop the text either
+  const o = await editorCard({ answer: false });
+  edBtn(o.row(), 'Edit').click(); await flush();
+  typed(edArea(o.row()), 'still here');
+  assert.strictEqual(await o.card.open('quill', {}), 'superseded');
+  assert.strictEqual(o.card.el().getAttribute('data-agent'), 'harbor');
+});
+
+test('editor: on the phone the dialog guard owns the close question (the card does not ask a second one)', async () => {
+  const t = await editorCard({ answer: false }, { phone: true });
+  edBtn(t.row(), 'Edit').click(); await flush();
+  typed(edArea(t.row()), 'abc');
+  all(t.card.el(), '.ac-x')[0].click();
+  assert.deepStrictEqual(t.guard.requests.map((r) => r.how), ['close']);
+  assert.strictEqual(t.confirms.length, 0);
+});
+
+test('editor: while a save is running the textarea and buttons are disabled', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const e = editorRows();
+  e.rows.get('OPT-0047').save = async (agent, text) => { await gate; e.log.saves.push(text); return { ok: true }; };
+  const t = setup({ rows: e.rows });
+  await t.card.open('harbor', { section: 'basics' });
+  const row = () => rowOf(t.card.el(), 'OPT-0047');
+  edBtn(row(), 'Edit').click(); await flush();
+  typed(edArea(row()), 'slow');
+  edBtn(row(), 'Save').click(); await flush();
+  assert.ok(edArea(row()).disabled && edBtn(row(), 'Cancel').disabled, 'locked while saving');
+  release(); await flush();
+  assert.deepStrictEqual(e.log.saves, ['slow']);
+  assert.ok(!edArea(row()));
+});

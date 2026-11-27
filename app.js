@@ -9028,6 +9028,12 @@
         el.textContent = on ? 'Building…' : el.dataset.idle;
       });
     }
+    // the agent card's Build team / Optimize team rows call the page's own flows (and open the chat the same way)
+    if (typeof window !== 'undefined') {
+      window.buildTeamStart = buildTeamStart;
+      window.optimizeTeamStart = optimizeTeamStart;
+      if (typeof startSoloChat === 'function') window.startSoloChat = startSoloChat;
+    }
     async function buildTeamStart(name, event) {
       if (event) { event.stopPropagation(); if (event.preventDefault) event.preventDefault(); }
       if (!name || teamBuilding(name)) return;

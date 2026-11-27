@@ -72,13 +72,17 @@ function setup(over = {}) {
   M.resetCache();
   const doc = makeDoc();
   const opened = [];
-  const win = { innerWidth: 1200, location: { pathname: '/', hash: '', search: '' }, addEventListener() {}, removeEventListener() {}, open: (...a) => opened.push(a) };
+  const confirms = []; const prompts = [];
+  const win = { innerWidth: 1200, location: { pathname: '/', hash: '', search: '' }, addEventListener() {}, removeEventListener() {}, open: (...a) => opened.push(a),
+    confirm: (q) => { confirms.push(q); return over.confirm !== false; }, prompt: (q) => { prompts.push(q); return over.promptAnswer === undefined ? null : over.promptAnswer; } };
   if (over.openSchedulePanel) win.openSchedulePanel = () => { opened.push(['scheduler']); };
   const state = Object.assign({
     agents: agentsFix(), fail: null, failRoutes: {},
     records: { records: [{ name: 'BRIEF.md', bytes: 2048 }, { name: 'notes.md', bytes: 6144 }], maxBytes: 65536 },
     compaction: { pct: 42, tokens: 84000, limit: 200000, lastRunAt: null, running: false },
     root: { agent: 'harbor', lead: false, memberOwned: false, sandboxed: false, grant: null, defaultMinutes: 60, maxMinutes: 1440 },
+    recordTexts: { 'BRIEF.md': 'Brief text', 'notes.md': 'Notes text' },
+    files: { 'SOUL.md': 'Be kind.', 'IDENTITY.md': 'Harbor, the port keeper.', 'MEMORY.md': 'Likes tea.', 'TOOLS.md': 'Uses git.', 'USER.md': 'Sam likes short answers.', 'TASKS.md': '- every day: tidy' },
     blocked: { entries: [] }, runStatus: 202,
     tasks: { tasks: [{ id: 't1', agent: 'harbor', status: 'active', nextRunAt: '2026-12-01T14:00:00.000Z' }, { id: 't2', agent: 'harbor', status: 'active', nextRunAt: '2026-12-02T14:00:00.000Z' }, { id: 't3', agent: 'quill', status: 'active', nextRunAt: '2026-12-01T10:00:00.000Z' }], tasksMd: [] },
     work: { ok: true, count: 0, handOffs: [], jobs: [], jobCount: 0, workers: [] },
@@ -103,6 +107,17 @@ function setup(over = {}) {
       return resp(200, { ok: true });
     }
     if (/^\/api\/agents\/harbor\/records$/.test(url)) return resp(200, { ok: true, ...state.records });
+    const rm = /^\/api\/agents\/harbor\/records\/([^/]+)$/.exec(url);
+    if (rm) {
+      const name = decodeURIComponent(rm[1]);
+      if (state.recordFail) return resp(state.recordFail.status, { ok: false, error: state.recordFail.error });
+      if (method === 'GET') return state.recordTexts[name] === undefined ? resp(404, { ok: false, error: 'no such record' }) : resp(200, { ok: true, name, content: state.recordTexts[name] });
+      if (method === 'PUT') { state.recordTexts[name] = body.content; if (!state.records.records.some((r) => r.name === name)) state.records.records.push({ name, bytes: String(body.content).length }); return resp(200, { ok: true }); }
+      if (method === 'DELETE') { delete state.recordTexts[name]; state.records.records = state.records.records.filter((r) => r.name !== name); return resp(200, { ok: true }); }
+    }
+    if (url === '/api/agents/harbor/files' && method === 'GET') return state.filesFail ? resp(500, { error: 'files unavailable' }) : resp(200, { files: state.files });
+    const fm = /^\/api\/agents\/harbor\/files\/([^/]+)$/.exec(url);
+    if (fm && method === 'PUT') { if (state.fileFail) return resp(400, { success: false, error: state.fileFail }); state.files[decodeURIComponent(fm[1])] = body.content; return resp(200, { success: true }); }
     if (/^\/api\/agents\/harbor\/compaction$/.test(url)) return resp(200, { ok: true, ...state.compaction });
     if (/^\/api\/agents\/harbor\/compaction\/run$/.test(url)) return resp(state.runStatus, state.runStatus === 409 ? { error: 'already running' } : { ok: true, started: true });
     if (/^\/api\/root-grants\?agent=harbor$/.test(url)) return resp(200, { ok: true, ...state.root });
@@ -114,12 +129,15 @@ function setup(over = {}) {
     return resp(404, { error: 'no route ' + url });
   };
   const card = C.createCard({ doc, win, fetch, records: () => over.records || REAL, me: () => ('me' in over ? over.me : ADMIN), agentsList: () => JSON.parse(JSON.stringify(state.agents)), subscribe: () => () => {}, help: null, simple: false, phone: false, setTimeout: () => {} });
-  return { card, doc, win, state, calls, opened, patches: () => calls.filter((c) => c.method === 'PATCH'), writes: () => calls.filter((c) => c.method !== 'GET') };
+  return { card, doc, win, state, calls, opened, confirms, prompts, patches: () => calls.filter((c) => c.method === 'PATCH'), writes: () => calls.filter((c) => c.method !== 'GET') };
 }
 async function openAt(t, id) { await t.card.open('harbor', { row: id }); await flush(); return rowOf(t.card.el(), id); }
 const sel = (row, i = 0) => all(row, 'select')[i];
 const inp = (row) => all(row, 'input')[0];
 const change = (el, v) => { if (typeof v === 'boolean') el.checked = v; else el.value = v; el.dispatch('change'); };
+
+// The Access rows that used to be doors to the agent page: lib/ui-agent-card-access.js registers them live now.
+const MOVED = ['OPT-0008', 'OPT-0009', 'OPT-0010', 'OPT-0011', 'OPT-0012', 'OPT-0013', 'OPT-0017', 'OPT-0018', 'OPT-0053', 'OPT-0054', 'OPT-0055'];
 
 // ---- 1. registration and first rows ---------------------------------------------------------------------------------------
 test('every record of Memory, Access and Schedule has a registered row (nothing falls back to the "Change it on the agent page" link), and the first rows are set', async () => {
@@ -133,8 +151,10 @@ test('every record of Memory, Access and Schedule has a registered row (nothing 
     if (more) more.click();
   }
   await flush();
-  assert.strictEqual(all(t.card.el(), 'a').filter((a) => /agent-settings\.html/.test(a.getAttribute('href') || '')).length, 0, 'no record is left on the fallback link');
-  for (const r of REAL) assert.ok(M.ROWS[r.id] || r.id === 'OPT-0040', r.id + ' has a row');
+  assert.strictEqual(all(t.card.el(), 'a').filter((a) => /agent-settings\.html/.test(a.getAttribute('href') || '') && !MOVED.some((id) => (a.getAttribute('href') || '').endsWith('#rec=' + id))).length, 0, 'no record is left on the fallback link');
+  for (const r of REAL) assert.ok(M.ROWS[r.id] || r.id === 'OPT-0040' || MOVED.includes(r.id), r.id + ' has a row');
+  for (const id of MOVED) assert.ok(!M.ROWS[id], id + ' is no door row here any more (lib/ui-agent-card-access.js registers it live)');
+  assert.ok(!('doorUrl' in M), 'no door to the agent page is left in this file');
   assert.deepStrictEqual(M.FIRST_ROWS.memory, ['OPT-0019', 'OPT-0040', 'OPT-0043', 'OPT-0833']);
   assert.deepStrictEqual(C.FIRST_ROWS.memory, M.FIRST_ROWS.memory);
   assert.deepStrictEqual(C.FIRST_ROWS.access, M.FIRST_ROWS.access);
@@ -232,15 +252,145 @@ test('Memory: the shortest-background switch saves {minimalContext}; Compress no
   assert.match(row3.textContent, /This can't be changed right now\./);
 });
 
-test('Memory: the notes files and the record editor open the agent page at their record (a new tab), without saving anything', async () => {
+const btn = (row, text) => all(row, 'button').find((b) => b.textContent === text);
+const area = (row) => all(row, 'textarea')[0];
+const typeIn = (ta, v) => { ta.value = v; ta.dispatch('input'); };
+
+test('Memory: the records row picks a record, loads it in an editor and saves PUT {content}; the editor closes and the list is read again', async () => {
   const t = setup();
-  for (const id of ['OPT-0021', 'OPT-0068', 'OPT-0069', 'OPT-0070', 'OPT-0071', 'OPT-0072']) {
-    const row = await openAt(t, id);
-    all(row, 'button').find((b) => b.getAttribute('class') === 'ac-action').click();
-    await flush();
-    assert.strictEqual(t.opened[t.opened.length - 1][0], '/agent-settings.html?agent=harbor#rec=' + id);
-  }
+  let row = await openAt(t, 'OPT-0021');
+  assert.deepStrictEqual(all(sel(row), 'option').map((o) => o.textContent), ['Choose a record…', 'BRIEF.md', 'notes.md']);
+  assert.ok(!btn(row, 'Edit'), 'no Edit button until a record is chosen');
+  change(sel(row), 'notes.md'); await flush();
+  row = rowOf(t.card.el(), 'OPT-0021');
+  assert.ok(t.calls.some((c) => c.method === 'GET' && c.url === '/api/agents/harbor/records/notes.md'));
+  assert.strictEqual(area(row).value, 'Notes text');
+  typeIn(area(row), 'Notes text, changed');
+  btn(row, 'Save').click(); await flush();
+  assert.deepStrictEqual(t.writes().map((c) => [c.method, c.url, c.body]), [['PUT', '/api/agents/harbor/records/notes.md', { content: 'Notes text, changed' }]]);
+  row = rowOf(t.card.el(), 'OPT-0021');
+  assert.ok(!area(row), 'the editor closed after the save');
+  assert.strictEqual(t.state.recordTexts['notes.md'], 'Notes text, changed');
+});
+
+test('Memory: New record asks for a name (no slashes, not one that exists), opens an empty editor and creates the record only on Save; Cancel creates nothing', async () => {
+  const t = setup({ promptAnswer: 'clients/a.md' });
+  let row = await openAt(t, 'OPT-0021');
+  btn(row, 'New record').click(); await flush();
+  assert.match(rowOf(t.card.el(), 'OPT-0021').textContent, /cannot contain slashes/);
+  t.win.prompt = () => 'BRIEF.md';
+  btn(rowOf(t.card.el(), 'OPT-0021'), 'New record').click(); await flush();
+  assert.match(rowOf(t.card.el(), 'OPT-0021').textContent, /BRIEF\.md already exists/);
+  t.win.prompt = () => null;
+  btn(rowOf(t.card.el(), 'OPT-0021'), 'New record').click(); await flush();
+  assert.ok(!area(rowOf(t.card.el(), 'OPT-0021')), 'cancelling the question starts nothing');
+  t.win.prompt = () => ' clients.md ';
+  btn(rowOf(t.card.el(), 'OPT-0021'), 'New record').click(); await flush();
+  row = rowOf(t.card.el(), 'OPT-0021');
+  assert.strictEqual(area(row).value, '');
+  assert.strictEqual(t.writes().length, 0, 'nothing is written before Save');
+  btn(row, 'Cancel').click(); await flush();
   assert.strictEqual(t.writes().length, 0);
+  btn(rowOf(t.card.el(), 'OPT-0021'), 'New record').click(); await flush();
+  typeIn(area(rowOf(t.card.el(), 'OPT-0021')), 'Clients: sam');
+  btn(rowOf(t.card.el(), 'OPT-0021'), 'Save').click(); await flush();
+  assert.deepStrictEqual(t.writes().map((c) => [c.method, c.url, c.body]), [['PUT', '/api/agents/harbor/records/clients.md', { content: 'Clients: sam' }]]);
+});
+
+test('Memory: Delete asks with the record\'s name, then sends DELETE; a "no" deletes nothing; the record leaves the list', async () => {
+  const t = setup({ confirm: false });
+  let row = await openAt(t, 'OPT-0021');
+  change(sel(row), 'BRIEF.md'); await flush();
+  btn(rowOf(t.card.el(), 'OPT-0021'), 'Delete').click(); await flush();
+  assert.match(t.confirms[t.confirms.length - 1], /Delete the record "BRIEF\.md"\?/);
+  assert.strictEqual(t.writes().length, 0, 'declined: nothing deleted');
+  const t2 = setup();
+  row = await openAt(t2, 'OPT-0021');
+  change(sel(row), 'BRIEF.md'); await flush();
+  btn(rowOf(t2.card.el(), 'OPT-0021'), 'Delete').click(); await flush();
+  assert.match(t2.confirms[0], /BRIEF\.md/);
+  assert.deepStrictEqual(t2.writes().map((c) => [c.method, c.url]), [['DELETE', '/api/agents/harbor/records/BRIEF.md']]);
+  row = rowOf(t2.card.el(), 'OPT-0021');
+  assert.ok(!area(row), 'the editor closed');
+  assert.ok(!all(sel(row), 'option').some((o) => o.textContent === 'BRIEF.md'), 'the record is gone from the list');
+});
+
+test('Memory: a record that can not be opened shows the error and no textarea; a save the hub refuses keeps the typed text and shows the error', async () => {
+  const t = setup({ state: { recordFail: { status: 500, error: 'disk is full' } } });
+  let row = await openAt(t, 'OPT-0021');
+  change(sel(row), 'notes.md'); await flush();
+  row = rowOf(t.card.el(), 'OPT-0021');
+  assert.ok(!area(row));
+  assert.match(row.textContent, /disk is full/);
+  const t2 = setup();
+  row = await openAt(t2, 'OPT-0021');
+  change(sel(row), 'notes.md'); await flush();
+  typeIn(area(rowOf(t2.card.el(), 'OPT-0021')), 'my long text');
+  t2.state.recordFail = { status: 400, error: 'record too large' };
+  btn(rowOf(t2.card.el(), 'OPT-0021'), 'Save').click(); await flush();
+  row = rowOf(t2.card.el(), 'OPT-0021');
+  assert.strictEqual(area(row).value, 'my long text', 'the text stays');
+  assert.match(row.textContent, /record too large/);
+});
+
+test('Memory: the notes files load from the files route and save PUT {content}; SOUL.md and IDENTITY.md ask about the character first, the others do not', async () => {
+  const files = { 'OPT-0068': 'SOUL.md', 'OPT-0069': 'IDENTITY.md', 'OPT-0070': 'MEMORY.md', 'OPT-0071': 'TOOLS.md', 'OPT-0072': 'USER.md' };
+  const t = setup();
+  for (const [id, file] of Object.entries(files)) {
+    let row = await openAt(t, id);
+    btn(row, 'Edit').click(); await flush();
+    row = rowOf(t.card.el(), id);
+    assert.strictEqual(area(row).value, t.state.files[file], id + ' shows ' + file);
+    typeIn(area(row), 'changed ' + file);
+    const before = t.confirms.length;
+    btn(row, 'Save').click(); await flush();
+    const asked = t.confirms.length - before;
+    assert.strictEqual(asked, ['SOUL.md', 'IDENTITY.md'].includes(file) ? 1 : 0, file + ' confirmation');
+    if (asked) assert.strictEqual(t.confirms[t.confirms.length - 1], "Change Harbor's character file " + file + '? It takes effect on its next turn.');
+    assert.strictEqual(t.state.files[file], 'changed ' + file);
+    assert.ok(!area(rowOf(t.card.el(), id)), 'closed after the save');
+  }
+  assert.deepStrictEqual(t.writes().map((c) => c.url), Object.values(files).map((f) => '/api/agents/harbor/files/' + f));
+  // a "no" to the character question saves nothing and keeps the text
+  const t2 = setup({ confirm: false });
+  let row = await openAt(t2, 'OPT-0068');
+  btn(row, 'Edit').click(); await flush();
+  typeIn(area(rowOf(t2.card.el(), 'OPT-0068')), 'new soul');
+  btn(rowOf(t2.card.el(), 'OPT-0068'), 'Save').click(); await flush();
+  assert.strictEqual(t2.writes().length, 0);
+  assert.strictEqual(area(rowOf(t2.card.el(), 'OPT-0068')).value, 'new soul');
+});
+
+test('Schedule: the task list is an editor of TASKS.md; its help line says scheduled tasks are re-read when saved; a refusal shows and keeps the text', async () => {
+  const t = setup();
+  let row = await openAt(t, 'OPT-0073');
+  assert.match(row.textContent, /re-read when you save/);
+  btn(row, 'Edit').click(); await flush();
+  typeIn(area(rowOf(t.card.el(), 'OPT-0073')), '- every day: sweep');
+  btn(rowOf(t.card.el(), 'OPT-0073'), 'Save').click(); await flush();
+  assert.deepStrictEqual(t.writes().map((c) => [c.method, c.url, c.body]), [['PUT', '/api/agents/harbor/files/TASKS.md', { content: '- every day: sweep' }]]);
+  assert.strictEqual(t.confirms.length, 0, 'no question for the task list');
+  const t2 = setup({ state: { fileFail: 'Invalid filename' } });
+  row = await openAt(t2, 'OPT-0073');
+  btn(row, 'Edit').click(); await flush();
+  typeIn(area(rowOf(t2.card.el(), 'OPT-0073')), 'x');
+  btn(rowOf(t2.card.el(), 'OPT-0073'), 'Save').click(); await flush();
+  assert.strictEqual(area(rowOf(t2.card.el(), 'OPT-0073')).value, 'x');
+  assert.match(rowOf(t2.card.el(), 'OPT-0073').textContent, /Invalid filename/);
+  const t3 = setup({ state: { filesFail: true } });
+  row = await openAt(t3, 'OPT-0073');
+  btn(row, 'Edit').click(); await flush();
+  assert.match(rowOf(t3.card.el(), 'OPT-0073').textContent, /files unavailable/);
+});
+
+test('Memory: the editor rows are read-only for a member and the Access doors are gone from this file', async () => {
+  const t = setup({ me: MEMBER, records: [rec('OPT-0068', 'Personality notes', 'Agent card > Memory'), rec('OPT-0021', 'Edit a record', 'Agent card > Memory')] });
+  for (const id of ['OPT-0068', 'OPT-0021']) {
+    const row = await openAt(t, id);
+    assert.ok(!btn(row, 'Edit') && !area(row), id);
+    assert.match(row.textContent, /Only an admin can change this\./);
+  }
+  assert.strictEqual(t.calls.filter((c) => /records\/|files\//.test(c.url)).length, 0);
 });
 
 // ---- 3. members -----------------------------------------------------------------------------------------------------------------
@@ -264,30 +414,17 @@ test('a member gets Memory only: Access and Schedule are not drawn and nothing i
 });
 
 // ---- 4. Access ------------------------------------------------------------------------------------------------------------------
-test('Access: every dangerous record is read-only on the card with "Change it on the agent page" and a button to its door; none ever writes', async () => {
+test('Access: the dangerous records are not door rows here (the access module owns them); the list still matches the records and the policy summary still reads', async () => {
   const dangerous = REAL.filter((r) => r.danger === 'dangerous').map((r) => r.id).sort();
   assert.deepStrictEqual(dangerous, M.DANGEROUS_IDS.slice().sort(), 'the list matches the records');
   const t = setup();
-  const checked = [];
-  for (const id of dangerous) {
-    const r = REAL.find((x) => x.id === id);
-    if (r.kind === 'indicator') continue;
+  for (const id of MOVED) {
     const row = await openAt(t, id);
-    assert.match(row.textContent, /Change it on the agent page\./, id);
-    assert.strictEqual(all(row, 'input').length + all(row, 'select').length, 0, id + ' has no editing control');
-    all(row, 'button').find((b) => b.getAttribute('class') === 'ac-action').click();
-    await flush();
-    assert.strictEqual(t.opened[t.opened.length - 1][0], '/agent-settings.html?agent=harbor#rec=' + id, id);
-    checked.push(id);
+    assert.ok(!all(row, 'button').some((b) => b.getAttribute('class') === 'ac-action'), id + ' has no "open the agent page" button');
+    assert.doesNotMatch(row.textContent, /Open the agent page/, id);
   }
-  assert.strictEqual(checked.length, 11);
+  assert.strictEqual(t.opened.length, 0, 'nothing was opened');
   assert.strictEqual(t.writes().length, 0, 'nothing was written');
-  assert.match((await openAt(t, 'OPT-0008')).textContent, /Asks you first/);
-  assert.match((await openAt(t, 'OPT-0009')).textContent, /Follows its role/);
-  assert.match((await openAt(t, 'OPT-0017')).textContent, /1 folder beyond its own/);
-  assert.match((await openAt(t, 'OPT-0018')).textContent, /\/srv\/shared/);
-  assert.match((await openAt(t, 'OPT-0053')).textContent, /Kept in its own box/);
-  assert.match((await openAt(t, 'OPT-0054')).textContent, /Only reports what it would block/);
   assert.match((await openAt(t, 'OPT-0015')).textContent, /1 power of 6 set/);
 });
 
@@ -395,14 +532,14 @@ test('the section summaries follow the mockup', async () => {
   await flush();
   const s = sums(t.card.el());
   assert.strictEqual(s.memory, 'Records · compression on · recall on');
-  assert.strictEqual(s.access, '3 tools · 1 folder · kept in its own box · commands watched');
+  assert.strictEqual(s.access, '3 tools');
   assert.strictEqual(s.schedule, '2 scheduled · 0 running');
   const t2 = setup({ state: { agents: agentsFix().map((a) => (a.name === 'harbor' ? { ...a, minimalContext: true, noTools: true, lockbox: 'enforce', sandbox: 'inherit', policy: undefined, compaction: undefined } : a)) } });
   await t2.card.open('harbor');
   await flush();
   const s2 = sums(t2.card.el());
   assert.strictEqual(s2.memory, 'Records · shortest background');
-  assert.strictEqual(s2.access, 'no tools · commands blocked');
+  assert.strictEqual(s2.access, 'no tools');
 });
 
 test('a member\'s card reads nothing for the Access and Schedule summaries', async () => {

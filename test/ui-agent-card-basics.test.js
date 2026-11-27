@@ -142,6 +142,15 @@ function setup(over = {}) {
       return resp(200, { success: true });
     }
     if (m && method === 'DELETE') { state.agents = state.agents.filter((x) => x.name !== decodeURIComponent(m[1])); return resp(200, { success: true }); }
+    if (url === '/api/recordings' && method === 'GET') return state.recordings ? resp(200, state.recordings) : resp(404, {});
+    m = /^\/api\/agents\/([^/]+)\/model-offer$/.exec(url);
+    if (m && method === 'GET') return resp(200, { offer: state.offer === undefined ? null : state.offer });
+    m = /^\/api\/agents\/([^/]+)\/model-offer\/decline$/.exec(url);
+    if (m && method === 'POST') { state.offer = null; return resp(200, { ok: true }); }
+    if (url === '/api/models/test' && method === 'POST') return state.testAnswer ? resp(state.testAnswer.status || 200, state.testAnswer.body) : resp(200, { success: true, latency: 842, response: 'pong' });
+    m = /^\/api\/agents\/([^/]+)\/(build-team|optimize-team)$/.exec(url);
+    if (m && method === 'POST') return state.teamAnswer ? resp(state.teamAnswer.status, state.teamAnswer.body) : resp(202, m[2] === 'build-team' ? { ok: true, lead: 'maestro' } : { ok: true, reviewer: 'quill' });
+    if (/^\/api\/agents\/[^/]+\/optimize-team\/estimate$/.test(url)) return resp(200, { days: 30, turns: 412, handOffs: 37 });
     return resp(404, {});
   };
   const stale = JSON.parse(JSON.stringify(state.agents));
@@ -164,12 +173,12 @@ test('the Basics first rows are Model, Thinking effort, Notifications, Voice and
   assert.deepStrictEqual(names(C.FIRST_ROWS.basics), ['Model', 'Thinking effort', 'Notifications for this agent', 'Speaks with', 'Call screen for this agent']);
 });
 
-test('every record of Basics and Role and team either has a row, or is one of the few left read-only (a door, an indicator or a list with no control today)', () => {
-  const READ_ONLY = ['OPT-0034', 'OPT-0039', 'OPT-0048', 'OPT-0138', 'OPT-0139', 'OPT-0817', 'OPT-0827', 'OPT-0885'];
+test('every record of Basics and Role and team has a row (the recordings, the model offer, Test and build/optimize team are live now; the menu\'s other doors to build/optimize are not drawn)', () => {
   // OPT-0005 (the short description) is the card's own sample row; this module leaves it as it is.
   const unregistered = RECORDS.map((r) => r.id).filter((id) => !B.ROWS[id] && id !== 'OPT-0005');
-  assert.deepStrictEqual(unregistered.sort(), READ_ONLY.sort());
+  assert.deepStrictEqual(unregistered, []);
   assert.ok(!B.ROWS['OPT-0005']);
+  for (const id of ['OPT-0817', 'OPT-0827', 'OPT-0885']) assert.strictEqual(B.ROWS[id].visible(), false, id + ' repeats Build / Optimize team');
 });
 
 test('records whose control lives on a chip or repeats a row (the three notification triples, the phone model picker, the usage badge) are not drawn', async () => {
@@ -196,12 +205,18 @@ test('Model: the options are the chat header\'s (Auto, then each model with who 
   assert.strictEqual(t.state.agents[1].model, 'openai/gpt-6-astra');
 });
 
-test('Model: a model missing from the list reads "<words> · not in the list"; two options with the same words get their model id', async () => {
+test('Model: a model missing from the list reads "<words> · not offered right now" and the help line says who is not offering it; two options with the same words get their model id', async () => {
   const t = await opened({ tweak: (l) => { l[1].model = 'claude-sdk/claude-opus-5-5'; } });
   const labels = all(all(rowOf(t.card.el(), 'OPT-0047'), 'select')[0], 'option').map((o) => o.textContent);
-  assert.ok(labels.includes('Opus · Subscription · not in the list'), labels.join(' | '));
-  assert.ok(!labels.some((l) => /current; not in/.test(l)));
+  assert.ok(labels.includes('Opus · Subscription · not offered right now'), labels.join(' | '));
+  assert.ok(!labels.some((l) => /not in the list/.test(l)));
   assert.match(rowOf(t.card.el(), 'OPT-0047').textContent, /Opus · Subscription/);
+  assert.match(rowOf(t.card.el(), 'OPT-0047').textContent, /Your subscription isn't offering this model right now\./);
+  const api = await opened({ tweak: (l) => { l[1].model = 'openai/gpt-7-gone'; } });
+  assert.match(rowOf(api.card.el(), 'OPT-0047').textContent, /Your provider isn't offering this model right now\./);
+  assert.ok(all(all(rowOf(api.card.el(), 'OPT-0047'), 'select')[0], 'option').some((o) => o.textContent === 'gpt-7-gone · API $ · not offered right now'));
+  const fine = await opened();
+  assert.doesNotMatch(rowOf(fine.card.el(), 'OPT-0047').textContent, /isn't offering/, 'a listed model says nothing');
   const d = await opened({ models: ['claude-sdk/claude-sonnet-4-6', 'anthropic/claude-sonnet-4-6', 'openai/gpt-6-astra'] });
   const dl = all(all(rowOf(d.card.el(), 'OPT-0047'), 'select')[0], 'option').map((o) => o.textContent);
   assert.ok(dl.includes('Sonnet · Subscription'), dl.join(' | '));
@@ -876,4 +891,136 @@ test('the module uses no innerHTML, no invisible characters, and no real names',
   assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write/.test(src));
   assert.ok(!new RegExp('[' + String.fromCharCode(0xfe0f, 0x200d) + ']').test(src));
   assert.ok(!/\beval\(|new Function/.test(src));
+});
+
+// ---- 10. recordings who/storage, model offer, Test, build and optimize team --------------------------------------------------
+const OWNER_ME = { isAdmin: true, isOwner: true, user: { id: 'u1' } };
+const OTHER_ADMIN = { isAdmin: true, isOwner: false, user: { id: 'u9' } };
+const btnOf = (row, text) => all(row, 'button').find((b) => b.textContent === text);
+async function openRow(over, id, name, pre) {
+  B.reset();
+  const t = setup(over || {});
+  if (pre) pre(t);
+  await t.card.open(name || 'harbor', { row: id });
+  await flush();
+  return t;
+}
+
+test('Recordings who may download: the owner ticks people (PATCH {recordings:{allowed:[ids]}}); another admin sees the names read-only with the owner-only line', async () => {
+  const t = await openRow({ tweak: (l) => { l[1].recordings = { keep: true, allowed: ['u1'], keepReplies: false, consentLine: '', mic: 'processed', announce: 'first' }; } }, 'OPT-0034');
+  const row = rowOf(t.card.el(), 'OPT-0034');
+  const boxes = all(row, 'input');
+  assert.deepStrictEqual(boxes.map((b) => [b.getAttribute('value'), b.checked]), [['u1', true], ['u2', false], ['u3', false]]);
+  assert.match(row.textContent, /Owner/);
+  boxes[2].checked = true; boxes[2].dispatch('change'); await flush();
+  assert.deepStrictEqual(writes(t).map((c) => [c.method, c.url, c.body]), [['PATCH', '/api/agents/harbor', { recordings: { allowed: ['u1', 'u3'] } }]]);
+  const o = await openRow({ me: OTHER_ADMIN, tweak: (l) => { l[1].recordings = { keep: true, allowed: ['u1', 'u3'] }; } }, 'OPT-0034');
+  const ro = rowOf(o.card.el(), 'OPT-0034');
+  assert.strictEqual(all(ro, 'input').length, 0);
+  assert.match(ro.textContent, /Only the owner of this Maestro can change this\./);
+  assert.match(ro.textContent, /Owner, Hazel/);
+  assert.strictEqual(writes(o).length, 0);
+});
+
+test('Recordings storage: a read-only line from GET /api/recordings for this agent; Checking…, Not available and Nothing stored are said plainly', async () => {
+  const t = await openRow({}, 'OPT-0039', 'harbor', (x) => { x.state.recordings = { agents: [{ name: 'harbor', sessions: 3, speechMs: 5400000, bytes: 12582912 }, { name: 'quill', sessions: 9, speechMs: 1, bytes: 1 }] }; });
+  const row = rowOf(t.card.el(), 'OPT-0039');
+  assert.match(row.textContent, /3 calls, 1\.5 hours of speech, 12\.0 MB on this computer/);
+  assert.strictEqual(all(row, 'input').length + all(row, 'select').length + all(row, 'button').filter((b) => b.getAttribute('class') === 'ac-action').length, 0, 'read-only');
+  assert.ok(t.calls.some((c) => c.url === '/api/recordings'));
+  const none = await openRow({}, 'OPT-0039', 'harbor', (x) => { x.state.recordings = { agents: [] }; });
+  assert.match(rowOf(none.card.el(), 'OPT-0039').textContent, /Nothing stored/);
+  const bad = await openRow({}, 'OPT-0039');
+  assert.match(rowOf(bad.card.el(), 'OPT-0039').textContent, /Not available/);
+});
+
+const OFFER_FIX = { to: 'claude-sdk/claude-opus-5-5', kind: 'newer', why: 'it answers better', route: 'on your subscription', cost: 'no extra cost' };
+
+test('Model offer: shown only when the hub has one (short words, Switch and Not now); Switch POSTs the model, Not now POSTs the decline, and the row goes', async () => {
+  const none = await openRow({}, 'OPT-0048');
+  assert.ok(!rowOf(none.card.el(), 'OPT-0048'), 'no offer: the row is not drawn');
+  const t = await openRow({}, 'OPT-0048', 'harbor', (x) => { x.state.offer = OFFER_FIX; });
+  const row = rowOf(t.card.el(), 'OPT-0048');
+  assert.match(row.textContent, /A newer model is available: Opus · Subscription/);
+  assert.match(row.textContent, /it answers better; on your subscription, no extra cost/);
+  btnOf(row, 'Switch').click(); await flush();
+  assert.deepStrictEqual(writes(t).map((c) => [c.method, c.url, c.body]), [['POST', '/api/agents/harbor/model', { model: 'claude-sdk/claude-opus-5-5' }]]);
+  assert.strictEqual(t.state.agents[1].model, 'claude-sdk/claude-opus-5-5');
+  assert.ok(!rowOf(t.card.el(), 'OPT-0048'), 'the suggestion is gone after switching');
+  const d = await openRow({}, 'OPT-0048', 'harbor', (x) => { x.state.offer = Object.assign({}, OFFER_FIX, { kind: 'stronger' }); });
+  assert.match(rowOf(d.card.el(), 'OPT-0048').textContent, /A stronger model for second opinions: Opus/);
+  btnOf(rowOf(d.card.el(), 'OPT-0048'), 'Not now').click(); await flush();
+  assert.deepStrictEqual(writes(d).map((c) => [c.method, c.url, c.body]), [['POST', '/api/agents/harbor/model-offer/decline', { model: 'claude-sdk/claude-opus-5-5' }]]);
+  assert.ok(!rowOf(d.card.el(), 'OPT-0048'));
+  const pinned = await openRow({ tweak: (l) => { l[1].modelPinned = true; } }, 'OPT-0048', 'harbor', (x) => { x.state.offer = OFFER_FIX; });
+  assert.ok(!rowOf(pinned.card.el(), 'OPT-0048'), 'a kept model gets no suggestion');
+  const member = await openRow({ me: MEMBER }, 'OPT-0048', 'harbor', (x) => { x.state.offer = OFFER_FIX; });
+  assert.ok(!rowOf(member.card.el(), 'OPT-0048'), 'a member sees no suggestion');
+});
+
+test('Model offer: a refusal from the hub is shown and the suggestion stays', async () => {
+  const t = await openRow({}, 'OPT-0048', 'harbor', (x) => { x.state.offer = OFFER_FIX; x.state.fail['POST /api/agents/harbor/model'] = { status: 400, error: 'model not available' }; });
+  btnOf(rowOf(t.card.el(), 'OPT-0048'), 'Switch').click(); await flush();
+  assert.match(rowOf(t.card.el(), 'OPT-0048').textContent, /model not available/);
+  assert.ok(btnOf(rowOf(t.card.el(), 'OPT-0048'), 'Switch'), 'still offered');
+});
+
+test('Test model: the Test button POSTs /api/models/test with the agent\'s model and the answer shows in one line; a failure or a model that skips the tools says so', async () => {
+  const t = await openRow({}, 'OPT-0050');
+  assert.match(rowOf(t.card.el(), 'OPT-0050').textContent, /Not checked yet/);
+  btnOf(rowOf(t.card.el(), 'OPT-0050'), 'Test').click(); await flush();
+  assert.deepStrictEqual(writes(t).map((c) => [c.method, c.url, c.body]), [['POST', '/api/models/test', { model: 'claude-sdk/claude-sonnet-4-6' }]]);
+  assert.match(rowOf(t.card.el(), 'OPT-0050').textContent, /It answered in 842 ms: "pong"\./);
+  const bad = await openRow({}, 'OPT-0050', 'harbor', (x) => { x.state.testAnswer = { status: 200, body: { success: false, error: 'no key for this model' } }; });
+  btnOf(rowOf(bad.card.el(), 'OPT-0050'), 'Test').click(); await flush();
+  assert.match(rowOf(bad.card.el(), 'OPT-0050').textContent, /claude-sdk\/claude-sonnet-4-6: no key for this model/);
+  const nt = await openRow({}, 'OPT-0050', 'harbor', (x) => { x.state.testAnswer = { status: 200, body: { success: true, toolCall: false, title: 'Sonnet', what: 'answered but did not use the test tool.', fix: 'Pick another model.' } }; });
+  btnOf(rowOf(nt.card.el(), 'OPT-0050'), 'Test').click(); await flush();
+  assert.match(rowOf(nt.card.el(), 'OPT-0050').textContent, /Sonnet answered but did not use the test tool\. Pick another model\./);
+  const m = await openRow({ me: MEMBER }, 'OPT-0050');
+  assert.ok(!btnOf(rowOf(m.card.el(), 'OPT-0050'), 'Test'), 'a member has no Test button');
+});
+
+const MAIN_QUILL = (l) => { l[2].category = 'primary'; };
+
+test('Build team: an admin sees it for a main agent with no team; it POSTs build-team and opens the lead\'s chat; it is not drawn for an agent with a team or a member', async () => {
+  const t = await openRow({ tweak: MAIN_QUILL }, 'OPT-0138', 'quill');
+  const chats = []; t.win.startSoloChat = (n, m) => chats.push([n, m]);
+  const row = rowOf(t.card.el(), 'OPT-0138');
+  assert.ok(row && !rowOf(t.card.el(), 'OPT-0139'), 'Build, not Optimize, for a main agent with no team');
+  btnOf(row, 'Build team').click(); await flush();
+  assert.deepStrictEqual(writes(t).map((c) => [c.method, c.url, c.body]), [['POST', '/api/agents/quill/build-team', {}]]);
+  assert.deepStrictEqual(chats, [['maestro', 'claude-sdk/claude-sonnet-4-6']]);
+  const hasTeam = await openRow({}, 'OPT-0138', 'maestro');
+  assert.ok(!rowOf(hasTeam.card.el(), 'OPT-0138'), 'an agent with a team is not offered Build');
+  const solo = await openRow({}, 'OPT-0138', 'harbor');
+  assert.ok(!rowOf(solo.card.el(), 'OPT-0138') && !rowOf(solo.card.el(), 'OPT-0139'), 'a specialist is neither');
+  const m = await openRow({ me: MEMBER, tweak: (l) => { MAIN_QUILL(l); l[2].owner = 'u2'; } }, 'OPT-0138', 'quill');
+  assert.ok(m.card.el() && !rowOf(m.card.el(), 'OPT-0138'), 'a member never sees it');
+});
+
+test('Build team: a refusal is shown; the page\'s own buildTeamStart is used when it has one (no request from the card)', async () => {
+  const t = await openRow({ tweak: MAIN_QUILL }, 'OPT-0138', 'quill', (x) => { x.state.teamAnswer = { status: 409, body: { error: 'a team is already being built' } }; });
+  btnOf(rowOf(t.card.el(), 'OPT-0138'), 'Build team').click(); await flush();
+  assert.match(rowOf(t.card.el(), 'OPT-0138').textContent, /a team is already being built/);
+  const p = await openRow({ tweak: MAIN_QUILL }, 'OPT-0138', 'quill', (x) => { x.win.buildTeamStart = (n) => { x.pageCalls = (x.pageCalls || []).concat(n); }; });
+  btnOf(rowOf(p.card.el(), 'OPT-0138'), 'Build team').click(); await flush();
+  assert.deepStrictEqual(p.pageCalls, ['quill']);
+  assert.strictEqual(writes(p).length, 0);
+});
+
+test('Optimize team: for a main agent with a team; the help line reads the estimate; it POSTs optimize-team and opens the reviewer\'s chat', async () => {
+  const t = await openRow({}, 'OPT-0139', 'maestro');
+  const chats = []; t.win.startSoloChat = (n) => chats.push(n);
+  const row = rowOf(t.card.el(), 'OPT-0139');
+  assert.ok(row && !rowOf(t.card.el(), 'OPT-0138'));
+  assert.ok(t.calls.some((c) => c.method === 'GET' && c.url === '/api/agents/maestro/optimize-team/estimate'), 'the estimate is read first');
+  assert.match(row.textContent, /reads 30 days: 412 turns, 37 hand-offs/);
+  btnOf(row, 'Optimize team').click(); await flush();
+  assert.deepStrictEqual(writes(t).map((c) => [c.method, c.url, c.body]), [['POST', '/api/agents/maestro/optimize-team', {}]]);
+  assert.deepStrictEqual(chats, ['quill']);
+  const phone = await openRow({}, 'OPT-0139', 'maestro');
+  const nav = []; phone.win.navigate = (a, b) => nav.push([a, b]);
+  btnOf(rowOf(phone.card.el(), 'OPT-0139'), 'Optimize team').click(); await flush();
+  assert.deepStrictEqual(nav, [['chat', 'quill']], 'the phone opens the chat with navigate');
 });

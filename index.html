@@ -2638,9 +2638,27 @@
     .ac-reset { margin-top: 6px; padding: 4px 10px; font-size: 0.8rem; }
     .ac-bottom { margin-top: 24px; }
     .ac-bottom .ac-remove { border-color: var(--error); color: var(--error); }
+    .ac-row.ac-has-editor { flex-wrap: wrap; }
+    .ac-row.ac-editor-open .ac-ctl { flex: 1 1 100%; width: 100%; max-width: none; }
+    .ac-editor { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+    .ac-editor-tools, .ac-editor-bar, .ac-offer { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .ac-textarea { width: 100%; box-sizing: border-box; min-height: 16em; font-family: var(--font-mono); font-size: 0.85rem; background: var(--bg-input); color: var(--text); border: 1px solid var(--border-strong); border-radius: 6px; padding: 8px; }
+    .ac-action.ac-delete { border-color: var(--error); color: var(--error); }
+    .ac-checks { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+    .ac-check { display: inline-flex; align-items: center; gap: 6px; }
     .ac-more-head { display: block; width: 100%; min-height: 36px; margin-top: 8px; padding: 8px 10px; border-style: dashed; color: var(--text-dim); font-size: 0.8rem; text-align: left; overflow-wrap: anywhere; }
     .ac-row.st-door-hit { background: var(--hover-tint-strong); }
     .ac-foot { margin: 12px 0 0; color: var(--text-dim); font-size: 0.8rem; }
+    .ac-folders { display: flex; flex-wrap: wrap; gap: 8px 24px; text-align: left; }
+    .ac-folder-group { min-width: 160px; }
+    .ac-folder-title { color: var(--text-dim); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+    .ac-folder { display: block; margin: 2px 0; font-size: 0.85rem; cursor: pointer; overflow-wrap: anywhere; }
+    .ac-folder input { margin-right: 6px; vertical-align: middle; }
+    .ac-area { display: block; width: 100%; min-width: 220px; min-height: 60px; resize: vertical; font-family: var(--font-mono); font-size: 0.85rem; }
+    .ac-blocked { text-align: left; font-size: 0.8rem; }
+    .ac-blocked-item { margin: 0 0 6px; }
+    .ac-blocked-when { color: var(--text-dim); }
+    .ac-blocked-what { font-family: var(--font-mono); overflow-wrap: anywhere; }
     .st-recent-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
     .st-recent-what { font-weight: 600; color: var(--text); flex: 1 1 100%; overflow-wrap: anywhere; }
     .st-recent-change { color: var(--text); overflow-wrap: anywhere; flex: 1 1 auto; min-width: 0; }
@@ -3992,6 +4010,7 @@
   <script src="/ui-agent-card.js"></script>
   <script src="/ui-agent-card-basics.js"></script>
   <script src="/ui-agent-card-more.js"></script>
+  <script src="/ui-agent-card-access.js"></script>
   <script defer src="/ui-model-offer-groups.js"></script>
   <script src="/ui-teams.js"></script>
   <script src="/password-eye.js"></script>

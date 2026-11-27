@@ -1270,9 +1270,25 @@
   .ac-reset { margin-top: 8px; min-height: 40px; padding: 6px 12px; font-size: 14px; }
   .ac-bottom { margin-top: 24px; }
   .ac-bottom .ac-remove { border-color: var(--error); color: var(--error); }
+  .ac-row.ac-editor-open .ac-ctl { flex: 1 1 100%; width: 100%; max-width: none; }
+  .ac-editor { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+  .ac-editor-tools, .ac-editor-bar, .ac-offer { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .ac-textarea { width: 100%; box-sizing: border-box; font-family: var(--font-mono); min-height: 50vh; font-size: 14px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border-strong); border-radius: 8px; padding: 10px; }
+  .ac-action.ac-delete { border-color: var(--error); color: var(--error); }
+  .ac-checks { display: flex; flex-direction: column; gap: 10px; }
+  .ac-check { display: flex; align-items: center; gap: 10px; min-height: 44px; }
   .ac-more-head { display: block; width: 100%; min-height: 44px; margin-top: 8px; padding: 10px 12px; border-style: dashed; color: var(--text-dim); font-size: 14px; text-align: left; overflow-wrap: anywhere; }
   .ac-row.st-door-hit { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
   .ac-foot { margin: 16px 0 0; color: var(--text-dim); font-size: 14px; text-align: center; }
+  .ac-folders { display: flex; flex-direction: column; gap: 10px; }
+  .ac-folder-title { color: var(--text-dim); font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
+  .ac-folder { display: flex; align-items: center; gap: 10px; min-height: 44px; font-size: 16px; overflow-wrap: anywhere; }
+  .ac-folder input { width: 22px; height: 22px; flex: none; margin: 0; }
+  .ac-area { display: block; min-height: 88px; resize: vertical; font-family: var(--font-mono); font-size: 15px; }
+  .ac-blocked { font-size: 14px; }
+  .ac-blocked-item { margin: 0 0 8px; }
+  .ac-blocked-when { color: var(--text-dim); }
+  .ac-blocked-what { font-family: var(--font-mono); overflow-wrap: anywhere; }
   /* The ⓘ help beside a setting (lib/ui-settings-help.js): a round button after the label, at least 32 px to tap; the panel is a bottom sheet here */
   .st-info { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 32px; height: 32px; box-sizing: border-box; margin: -9px 0 -9px 4px; padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; background: transparent; color: var(--text-dim); font: inherit; font-size: 17px; line-height: 1; cursor: pointer; vertical-align: middle; }   /* centred on the text line, never taller than it: the 32 px is for the finger, the negative margin keeps the line its own height */
   :is(#notify-agent-sheet, #notify-prefs-sheet, #research-sheet, #settings-sheet, #security-sheet, #profile-sheet) button.st-info { min-height: 0; width: 32px; height: 32px; margin: -9px 0 -9px 4px; padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; background: transparent; color: var(--text-dim); text-align: center; }   /* outranks the sheets' own "#sheet button" tile rule (an id inside :is counts as an id), so the ⓘ is the same round outline in every sheet */
@@ -1853,6 +1869,7 @@ html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, htm
   <script src="/ui-agent-card.js"></script>
   <script src="/ui-agent-card-basics.js"></script>
   <script src="/ui-agent-card-more.js"></script>
+  <script src="/ui-agent-card-access.js"></script>
   <script defer src="/ui-model-offer-groups.js"></script>
   <script src="/ui-teams.js"></script>
   <script src="/password-eye.js"></script>
