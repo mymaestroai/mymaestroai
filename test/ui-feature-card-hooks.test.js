@@ -71,11 +71,12 @@ test('the pages tell the card when the saved history is drawn: renderHistory and
   const WRAPPED = /^\s*try \{ window\.FeatureCard && FeatureCard\.historyDrawn\(.*\); \} catch \{ \/\* cosmetic \*\/ \}/;
   const mobBody = bodyOf(read('mobile.js'), /function renderHistory\s*\(\)\s*\{/);
   const appBody = bodyOf(read('app.js'), /function soloHistoryDraw\s*\([^)]*\)\s*\{/);
-  for (const [name, body, arg] of [['renderHistory', mobBody, "$('messages')"], ['soloHistoryDraw', appBody, 'document.getElementById(`messages-${chatId}`)']]) {
+  // renderHistory passes { fresh: true } (its callers scroll or restore the place straight after); the desktop has already scrolled
+  for (const [name, body, arg] of [['renderHistory', mobBody, "$('messages'), { fresh: true }"], ['soloHistoryDraw', appBody, 'document.getElementById(`messages-${chatId}`)']]) {
     assert.strictEqual(n(body), 1, name + ': one call');
     const line = body.split('\n').find((l) => l.includes(HD));
     assert.ok(WRAPPED.test(line), name + ': wrapped: ' + line.trim());
-    assert.ok(line.includes(HD + arg + ')'), name + ': the right list');
+    assert.ok(line.includes(HD + arg + ')'), name + ': the right list and flag');
   }
   assert.strictEqual(n(read('mobile.js')), 2);   // renderHistory, and openChat's early return for the same chat (its list keeps its messages)
   assert.ok(/if \(same && \(\(rec && bubbleLive\(rec\)\) \|\| \(ra && bubbleLive\(ra\)\)\)\) \{ paintChatStatus\(\); try \{ window\.FeatureCard && FeatureCard\.historyDrawn\(\$\('messages'\)\); \} catch/.test(read('mobile.js')), 'the same-chat early return signals drawn');

@@ -8501,7 +8501,7 @@ function renderHistory() {
   if (!chatHistory.length && chatNext == null) addNote('No messages yet');
   if (typeof simpleEmptyPaint === 'function') simpleEmptyPaint(!chatHistory.length && chatNext == null);   // Simple: greeting and starter buttons
   paintBusyCard();   // the redraw cleared the chat, the busy card goes back at the bottom
-  try { window.FeatureCard && FeatureCard.historyDrawn($('messages')); } catch { /* cosmetic */ }   // the history is drawn: the new-features card may attach now
+  try { window.FeatureCard && FeatureCard.historyDrawn($('messages'), { fresh: true }); } catch { /* cosmetic */ }   // the history is drawn (every caller scrolls or restores the place next): the new-features card may attach now
 }
 
 // Turns the hub starts by itself fold into closed cards; the setting is per device ('off' turns it off).

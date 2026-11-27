@@ -558,7 +558,7 @@ test('(20) the phone order: historyDrawn comes while the emptied list still sits
   FC.historyDrawing(list); list.replaceChildren();
   for (let i = 0; i < 10; i++) list.appendChild(msg(D));
   list.scrollTop = 0;   // the redraw emptied the list: the scroller is at its top until the page scrolls
-  FC.historyDrawn(list);
+  FC.historyDrawn(list, { fresh: true });   // the phone's renderHistory
   assert.strictEqual(list.scrollTop, 992, 'landed on the header although the chat was not at the bottom yet');
   list.scrollTop = list.scrollHeight - list.clientHeight;   // the page scrolls to the bottom right after renderHistory returns
   await sleep(120);
@@ -571,4 +571,26 @@ test('(20) the phone order: historyDrawn comes while the emptied list still sits
   b.FC.chatShown('harbor', l2); await settle();
   assert.ok(cardIn(l2), 'attached');
   assert.strictEqual(l2.scrollTop, 0, 'a reader at the top is not moved');
+});
+
+test('(21) historyDrawn without fresh (the phone keeps the list as it was, a live reply still in it): a reader 600 px above the bottom is not moved', async () => {
+  for (const tall of [true, false]) {
+    const { FC, D, d } = load(); FC.noAutoDrawn = true; FC.FIRST_WAIT_MS = 5000;
+    const mk = d.createElement;
+    d.createElement = (t) => { const n = mk(t); n.getBoundingClientRect = () => { const p = n.parentNode; const i = p ? p.children.indexOf(n) : 0; return { top: i * 100 - (p ? p.scrollTop : 0), height: String(n.className).includes('feature-card') ? (tall ? 600 : 150) : 100 }; }; return n; };
+    const list = scrollList(D); list.clientHeight = 300;
+    list.getBoundingClientRect = () => ({ top: 0, height: 300 });
+    for (let i = 0; i < 20; i++) list.appendChild(msg(D));
+    FC.chatShown('harbor', list); await settle();
+    assert.strictEqual(cardIn(list), undefined, 'not attached before historyDrawn');
+    const top = list.scrollHeight - list.clientHeight - 600;
+    list.scrollTop = top;
+    FC.historyDrawn(list);
+    await sleep(120);
+    assert.ok(cardIn(list), 'attached');
+    assert.strictEqual(list.scrollTop, top, (tall ? 'tall' : 'short') + ' card: the reader stays where they were');
+  }
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'mobile.js'), 'utf8');
+  assert.ok(/FeatureCard\.historyDrawn\(\$\('messages'\), \{ fresh: true \}\)/.test(src), 'renderHistory signals fresh');
+  assert.ok(/paintChatStatus\(\); try \{ window\.FeatureCard && FeatureCard\.historyDrawn\(\$\('messages'\)\); \}/.test(src), 'the kept-list return does not');
 });
