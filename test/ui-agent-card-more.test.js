@@ -112,6 +112,7 @@ function setup(over = {}) {
       const name = decodeURIComponent(rm[1]);
       if (state.recordFail) return resp(state.recordFail.status, { ok: false, error: state.recordFail.error });
       if (method === 'GET') return state.recordTexts[name] === undefined ? resp(404, { ok: false, error: 'no such record' }) : resp(200, { ok: true, name, content: state.recordTexts[name] });
+      if (method === 'PUT' && state.putResult) return resp(200, { ok: true, result: state.putResult(name) });   // the real route: 200 with the status text of records.write
       if (method === 'PUT') { state.recordTexts[name] = body.content; if (!state.records.records.some((r) => r.name === name)) state.records.records.push({ name, bytes: String(body.content).length }); return resp(200, { ok: true }); }
       if (method === 'DELETE') { delete state.recordTexts[name]; state.records.records = state.records.records.filter((r) => r.name !== name); return resp(200, { ok: true }); }
     }
@@ -295,6 +296,29 @@ test('Memory: New record asks for a name (no slashes, not one that exists), open
   typeIn(area(rowOf(t.card.el(), 'OPT-0021')), 'Clients: sam');
   btn(rowOf(t.card.el(), 'OPT-0021'), 'Save').click(); await flush();
   assert.deepStrictEqual(t.writes().map((c) => [c.method, c.url, c.body]), [['PUT', '/api/agents/harbor/records/clients.md', { content: 'Clients: sam' }]]);
+});
+
+test('S1: the records route answers 200 with a status text: only "Record <name> written" is a save; any other text is the error, and the name the hub used is kept', async () => {
+  const t = setup();
+  t.state.putResult = () => 'Bad record name.';
+  let row = await openAt(t, 'OPT-0021');
+  change(sel(row), 'notes.md'); await flush();
+  typeIn(area(rowOf(t.card.el(), 'OPT-0021')), 'changed');
+  btn(rowOf(t.card.el(), 'OPT-0021'), 'Save').click(); await flush();
+  row = rowOf(t.card.el(), 'OPT-0021');
+  assert.match(row.textContent, /Bad record name\./, 'the server\'s text is shown as the failure');
+  assert.ok(area(row), 'the editor stays open with the typed text');
+  assert.strictEqual(area(row).value, 'changed');
+  // a refusal text the hub starts with "not written:" is a failure too
+  t.state.putResult = (n) => 'not written: ' + n + ' would not fit in harbor\'s Records.';
+  btn(row, 'Save').click(); await flush();
+  assert.match(rowOf(t.card.el(), 'OPT-0021').textContent, /not written: notes\.md would not fit/);
+  // a real save: the editor closes
+  t.state.putResult = (n) => 'Record ' + n + '.md written (7 bytes). It is loaded in full on your next turn.';
+  btn(rowOf(t.card.el(), 'OPT-0021'), 'Save').click(); await flush();
+  assert.ok(!area(rowOf(t.card.el(), 'OPT-0021')), 'saved: the editor closed');
+  assert.strictEqual(M.recordNameProblem('.hidden', []), 'A record name cannot start with a dot.');
+  assert.strictEqual(M.recordNameProblem('ok.md', []), '');
 });
 
 test('Memory: Delete asks with the record\'s name, then sends DELETE; a "no" deletes nothing; the record leaves the list', async () => {

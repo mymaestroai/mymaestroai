@@ -80,7 +80,11 @@
         var found = null;
         for (var i = 0; i < list.length; i++) if (list[i] && list[i].id === rec) { found = list[i]; break; }
         var home = found && typeof found.home === 'string' ? found.home : '';
-        go(name, rec, !!home && home.indexOf('Agent card') !== 0);
+        if (!home || home.indexOf('Agent card') === 0) { go(name, rec, false); return; }
+        // Settings is an admin's door: a member whose record lives there goes to the app instead (not knowing who they are keeps the door).
+        return fetch('/api/me', { credentials: 'include' })
+          .then(function (r) { return r && r.ok ? r.json() : null; })
+          .then(function (me) { if (me && me.isAdmin === false) go(null, null, false); else go(name, rec, true); }, function () { go(name, rec, true); });
       })
       .catch(function () { clearTimeout(timer); go(name, rec, false); });
   } catch (e) { clearTimeout(timer); go(name, rec, false); }

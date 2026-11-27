@@ -3420,7 +3420,7 @@
     // The eight groups, which section sits in which and which rows move are in lib/ui-settings-groups.js (window.hubSettingsGroups).
     const STG = window.hubSettingsGroups;
     // The section loaders still name their summary by the old group ids; this says which of the eight groups each one belongs to now.
-    const ST_SUM_HOME = { status: { setup: 'review-checks', security: 'review-checks', health: 'review-checks', memory: 'upkeep', selfcheck: 'upkeep', updates: 'upkeep' }, security: 'safety', backups: 'upkeep', models: 'money', notify: 'you', agents: 'agents', tools: 'tools', money: 'money', voice: 'voice' };
+    const ST_SUM_HOME = { status: { setup: 'review-checks', security: 'review-checks', health: 'review-checks', memory: 'upkeep', selfcheck: 'upkeep', updates: 'upkeep' }, security: 'safety', backups: 'upkeep', models: 'money', notify: 'you', agents: { sb: 'safety', appr: 'safety' }, tools: 'tools', money: 'money', voice: 'voice' };
     const stSumHome = (group, key) => { const h = ST_SUM_HOME[group]; return (h && typeof h === 'object' ? h[key] : h) || group; };
     const stSumParts = {};   // group -> { key: { text, crit } }: the one-line summary on each group's list row
     const stSandboxText = (sbd) => `Sandboxes: members' agents ${sbd.member || 'container'}, admin-side ${sbd.admin || 'off'}`;

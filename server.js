@@ -1779,7 +1779,7 @@ async function handleHttpRequest(req, res) {
       // Voice: a cloud engine for an agent kept on this computer needs the owner (the earliest admin), not just any admin.
       // The audit line (recordings) and the lockbox and team notices are built in lib/settings-apply agentWriteContext.
       const result = await updateAgentField(name, body, settingsApply.agentWriteContext({ isOwner: !req.hubService && !!req.hubUser && hubAuth.isOwner(req.hubUser), user: req.hubUser, ip: hubAuth.clientIp(req) }));
-      if (!result.success && result.status) return jsonResponse(res, result.status, { error: result.error });
+      if (!result.success && result.status) return jsonResponse(res, result.status, result.status === 409 ? { ok: false, error: result.error } : { error: result.error });
       // The steps after a saved change are one shared function (lib/settings-apply afterAgentChange), also run by the lead's tool and by Restore:
       // a head agent handed to a member introduces itself; a change of who may download the recordings is told to the old and the new list;
       // folders, sandbox mode or hands changed: the container is rebuilt on the agent's next turn (removed when the sandbox was switched off).

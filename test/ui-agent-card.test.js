@@ -27,6 +27,7 @@ class El {
       contains: (c) => list().includes(c),
     };
   }
+  setSelectionRange(a, b) { this.selectionStart = a; this.selectionEnd = b; }
   get id() { return this.attrs.id || ''; }
   get isConnected() { for (let n = this; n; n = n.parentNode) if (n === this.ownerDocument) return true; return false; }
   setAttribute(k, v) { this.attrs[k] = String(v); }
@@ -1197,6 +1198,35 @@ test('editor: the typed text survives a redraw of the card (a refresh)', async (
   typed(edArea(t.row()), 'half-written');
   await t.card.refresh(); await flush();
   assert.strictEqual(edArea(t.row()).value, 'half-written');
+});
+
+test('S6: the editor keeps its caret, selection and scroll position across a redraw, and starts clean when opened again', async () => {
+  const t = await editorCard();
+  edBtn(t.row(), 'Edit').click(); await flush();
+  const ta = edArea(t.row());
+  typed(ta, 'a long text that is being edited');
+  ta.selectionStart = 7; ta.selectionEnd = 11; ta.scrollTop = 120; ta.dispatch('keyup');
+  await t.card.refresh(); await flush();
+  const ta2 = edArea(t.row());
+  assert.notStrictEqual(ta2, ta, 'a new element was drawn');
+  assert.deepStrictEqual([ta2.selectionStart, ta2.selectionEnd, ta2.scrollTop], [7, 11, 120]);
+  edBtn(t.row(), 'Cancel').click(); await flush();
+  edBtn(t.row(), 'Edit').click(); await flush();
+  assert.strictEqual(edArea(t.row()).scrollTop, 0, 'a fresh editor does not inherit the old position');
+});
+
+test('S4: a save that answers { ok:true, declined:true } shows "Not changed." under the row; the next save clears it', async () => {
+  let answer = { ok: true, declined: true };
+  const def = { get: () => ({ value: 'a', display: 'A' }), control: { type: 'text', max: 20 }, save: async () => answer };
+  const t = setup({ rows: new Map([['OPT-0047', def]]) });
+  await t.card.open('harbor', { section: 'basics' });
+  const row = () => rowOf(t.card.el(), 'OPT-0047');
+  const input = all(row(), 'input')[0];
+  input.value = 'b'; input.dispatch('change'); await flush();
+  assert.match(row().textContent, /Not changed\./);
+  answer = { ok: true };
+  all(row(), 'input')[0].value = 'c'; all(row(), 'input')[0].dispatch('change'); await flush();
+  assert.doesNotMatch(row().textContent, /Not changed\./);
 });
 
 test('editor: confirm (a text or a function of the agent) is asked before saving; "no" saves nothing and keeps the text', async () => {

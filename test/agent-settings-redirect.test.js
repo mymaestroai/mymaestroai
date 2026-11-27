@@ -35,6 +35,10 @@ async function run(search, hash, opts = {}) {
   };
   const fetch = async (url) => {
     fetched.push(url);
+    if (url === '/api/me') {   // who is asking (opts.me: 'admin' by default, 'member', or 'fail')
+      if (opts.me === 'fail') throw new Error('offline');
+      return { ok: true, json: async () => ({ isAdmin: opts.me !== 'member' }) };
+    }
     if (opts.records === 'fail') throw new Error('offline');
     return { ok: true, json: async () => ({ records: opts.records || LIST }) };
   };
@@ -62,6 +66,18 @@ test('the box link (#rec=OPT-0053) opens the card at that row', async () => {
 
 test('a record homed in Settings (OPT-0014) goes to Settings at that record, not to the card', async () => {
   assert.deepStrictEqual((await run('?agent=hazel', '#rec=OPT-0014')).replaced, ['/#settings-for=OPT-0014']);
+});
+
+test('S7: a member whose record is homed in Settings goes to the app (not the admin-only door); a member on a card record still gets the card; who is asked only for a Settings record', async () => {
+  const m = await run('?agent=hazel', '#rec=OPT-0014', { me: 'member' });
+  assert.deepStrictEqual(m.replaced, ['/']);
+  assert.deepStrictEqual(m.fetched, ['/api/settings-records', '/api/me']);
+  assert.deepStrictEqual((await run('?agent=hazel', '#rec=OPT-0014', { me: 'member', phone: true })).replaced, ['/mobile']);
+  const c = await run('?agent=hazel', '#rec=OPT-0048', { me: 'member' });
+  assert.deepStrictEqual(c.replaced, ['/#agent-card=hazel&row=OPT-0048']);
+  assert.deepStrictEqual(c.fetched, ['/api/settings-records'], 'no second request for a card record');
+  assert.deepStrictEqual((await run('?agent=hazel', '#rec=OPT-0014', { me: 'admin' })).replaced, ['/#settings-for=OPT-0014']);
+  assert.deepStrictEqual((await run('?agent=hazel', '#rec=OPT-0014', { me: 'fail' })).replaced, ['/#settings-for=OPT-0014'], 'not knowing keeps the door');
 });
 
 test('no hash, or a section word, opens the card; nothing is fetched', async () => {

@@ -87,14 +87,20 @@ function setup(over = {}) {
   const calls = [];
   const resolve = (r) => String(r).replace(/^~/, '/home/owner');
   const fetch = async (url, init = {}) => {
-    const method = init.method || 'GET'; const body = init.body ? JSON.parse(init.body) : null;
-    calls.push({ url, method, body });
+    const method = init.method || 'GET'; let body = init.body ? JSON.parse(init.body) : null;
+    const ifMatch = body && 'policyIfMatch' in body ? body.policyIfMatch : undefined;   // kept apart: the checks below read `body` as the change itself
+    if (ifMatch !== undefined) { body = { ...body }; delete body.policyIfMatch; }
+    calls.push({ url, method, body, ifMatch });
     for (const [pat, r] of Object.entries(state.failRoutes)) if (url.includes(pat) && (!r.method || r.method === method)) return resp(r.status, r.json);
     if (url === '/api/agents' && method === 'GET') return resp(200, JSON.parse(JSON.stringify(state.agents)));
     const pm = /^\/api\/agents\/([^/]+)$/.exec(url);
     if (pm && method === 'PATCH') {
       if (state.fail) return resp(400, { error: state.fail });
       const a = state.agents.find((x) => x.name === pm[1]);
+      if (state.racing) { const f = state.racing; state.racing = null; f(a); }   // another card's change lands just before this request
+      if (ifMatch !== undefined && JSON.stringify(ifMatch) !== JSON.stringify(a.policy || {})) {   // the server's compare-and-set
+        return resp(409, { ok: false, error: "This agent's permissions were changed elsewhere. The card now shows them again; make your change once more." });
+      }
       for (const [k, v] of Object.entries(body)) {
         if (k === 'policy') {   // the server replaces the whole policy object
           const ov = v.overrides || {}; const roots = v.roots || [];
@@ -173,9 +179,9 @@ test('"Role default" removes only that override and keeps the others and the roo
   const row = await openAt(t, 'OPT-0011');
   assert.strictEqual(sel(row).value, 'ask');
   t.calls.length = 0;
-  change(sel(row), '');   // role default for send is never: tighter, so no confirm
+  change(sel(row), '');   // what is inherited is not 'allow' now, so clearing the override asks first (the role default is not what decides)
   await flush();
-  assert.strictEqual(t.confirms.length, 0);
+  assert.strictEqual(t.confirms.length, 1);
   assert.deepStrictEqual(t.patches().map((c) => c.body), [{ policy: { overrides: { web: 'ask', destroy: 'deny' }, roots: ['/srv/common'] } }]);
   assert.strictEqual(sel(again(t, 'OPT-0011')).value, '');
 });
@@ -211,7 +217,7 @@ test('the confirm: towards allow asks (never to ask, never to allow, ask to allo
   change(sel(again(t, 'OPT-0009')), '');   // never -> role default (allow): looser
   await flush();
   assert.strictEqual(t.confirms.length, 4);
-  assert.match(t.confirms[3], /^Let Hazel read files outside its own folder without asking\?$/);
+  assert.match(t.confirms[3], /^Stop using this agent's own setting and use the inherited one\? It may let Hazel read files outside its own folder\.$/);
 });
 
 test('tightening a class saves without a confirm', async () => {
@@ -307,7 +313,8 @@ test('other folders: a typed path asks first, saves on blur with the ticked fold
   assert.strictEqual(t.confirms.length, 1);
   assert.match(t.confirms[0], /^Give Hazel write access to \/mnt\/data\?$/);
   assert.strictEqual(t.patches().length, 0);
-  assert.strictEqual(all(again(t, 'OPT-0018'), 'textarea')[0].value, '~/notes', 'the old list shows again');
+  assert.strictEqual(all(again(t, 'OPT-0018'), 'textarea')[0].value, '~/notes\n/mnt/data', 'a declined confirm keeps what was typed');
+  assert.match(again(t, 'OPT-0018').textContent, /Not changed\./);
   t.yes = true;
   const ta2 = all(again(t, 'OPT-0018'), 'textarea')[0];
   ta2.value = '~/notes\n  /mnt/data  \n\n/mnt/data';
@@ -510,6 +517,111 @@ test('lockbox: a later good check brings the controls back', async () => {
   t.state.failRoutes = {};
   A.resetCache();
   assert.strictEqual(all(await openAt(t, 'OPT-0054'), 'select').length, 1);
+});
+
+// ---- review round 1 -------------------------------------------------------------------------------------------------------------------
+test('G3/G4: every policy write sends policyIfMatch (the policy it was built from); a 409 reads everything again and shows the hub\'s words', async () => {
+  const t = setup();
+  const row = await openAt(t, 'OPT-0011');
+  t.calls.length = 0;
+  change(sel(row), 'allow');
+  await flush();
+  assert.deepStrictEqual(t.patches().map((c) => c.ifMatch), [{ overrides: { web: 'ask' }, roots: ['/srv/common', '~/notes'] }], 'a class save');
+  t.calls.length = 0;
+  const fr = await openAt(t, 'OPT-0017');
+  checks(fr)[1].checked = true; checks(fr)[1].dispatch('change');
+  await flush();
+  assert.strictEqual(t.patches().length, 1);
+  assert.deepStrictEqual(t.patches()[0].ifMatch, { overrides: { web: 'ask', send: 'allow' }, roots: ['/srv/common', '~/notes'] }, 'a folders save');
+  // someone else revokes the folder just before the next save: the request is refused, nothing is written, the card reads again
+  t.state.racing = (a) => { a.policy = { overrides: { web: 'ask', send: 'allow' } }; };
+  t.calls.length = 0;
+  change(sel(await openAt(t, 'OPT-0008')), 'deny');
+  await flush();
+  assert.strictEqual(t.patches().length, 1);
+  assert.deepStrictEqual(t.state.agents[1].policy, { overrides: { web: 'ask', send: 'allow' } }, 'nothing was written over the other change');
+  const urls = t.calls.map((c) => c.url);
+  assert.ok(urls.lastIndexOf('/api/policy/hazel') > urls.indexOf('/api/agents/hazel'), 'the policy is read again');
+  assert.ok(urls.lastIndexOf('/api/folders?agent=hazel') > urls.indexOf('/api/agents/hazel'), 'the folders are read again');
+  assert.ok(urls.lastIndexOf('/api/agents') > urls.indexOf('/api/agents/hazel'), 'the agent is read again');
+  assert.match(again(t, 'OPT-0008').textContent, /permissions were changed elsewhere/);
+  assert.strictEqual(sel(again(t, 'OPT-0008')).value, 'ask', 'the row shows what the hub has');
+});
+
+test('G1: a failed folder-list read keeps the draft and sends nothing (the ticked folders would be dropped)', async () => {
+  const t = setup();
+  const row = await openAt(t, 'OPT-0018');
+  t.state.failRoutes = { '/api/folders': { status: 500, json: { error: 'boom' } } };
+  t.calls.length = 0;
+  const ta = all(row, 'textarea')[0];
+  ta.value = '~/notes\n/mnt/data';
+  ta.dispatch('blur');
+  await flush();
+  assert.strictEqual(t.patches().length, 0);
+  assert.strictEqual(t.confirms.length, 0);
+  assert.match(again(t, 'OPT-0018').textContent, /Could not read the folder list just now, so nothing was changed/);
+  assert.strictEqual(all(again(t, 'OPT-0018'), 'textarea')[0].value, '~/notes\n/mnt/data', 'the typed text stays');
+});
+
+test('G2: clearing an override asks unless what is in force now is already allow', async () => {
+  const t = setup();
+  t.state.agents[1].policy = { overrides: { web: 'allow', send: 'deny' }, roots: ['/srv/common'] };
+  let row = await openAt(t, 'OPT-0008');   // web: allowed now
+  change(sel(row), '');
+  await flush();
+  assert.strictEqual(t.confirms.length, 0, 'allow now: nothing can get looser');
+  assert.strictEqual(t.patches().length, 1);
+  t.yes = false;
+  row = await openAt(t, 'OPT-0011');   // send: never now, the role may say otherwise
+  t.calls.length = 0;
+  change(sel(row), '');
+  await flush();
+  assert.strictEqual(t.confirms.length, 1);
+  assert.match(t.confirms[0], /Hazel send things off this computer/);
+  assert.strictEqual(t.patches().length, 0);
+  assert.match(again(t, 'OPT-0011').textContent, /Not changed\./, 'S4: a declined row says so');
+  assert.strictEqual(sel(again(t, 'OPT-0011')).value, 'deny');
+});
+
+test('S3: a permission row is read-only until the policy was read, with the reason', async () => {
+  const t = setup({ state: { failRoutes: { '/api/policy/': { status: 500, json: { error: 'no policy' } } } } });
+  const row = await openAt(t, 'OPT-0008');
+  assert.strictEqual(all(row, 'select').length, 0);
+  assert.match(row.textContent, /Could not read the permissions: no policy/);
+  assert.strictEqual(t.writes().length, 0);
+});
+
+test('G5: adding kept variables asks first and names them; a decline sends nothing; removing needs no confirm; the lockbox status is read again', async () => {
+  const t = setup();
+  t.state.agents[1].lockboxEnv = ['EDITOR'];
+  const row = await openAt(t, 'OPT-0055');
+  t.yes = false; t.calls.length = 0;
+  change(all(row, 'input')[0], 'EDITOR, PAGER, TOKEN');
+  await flush();
+  assert.strictEqual(t.confirms.length, 1);
+  assert.match(t.confirms[0], /PAGER, TOKEN/);
+  assert.doesNotMatch(t.confirms[0], /EDITOR/);
+  assert.strictEqual(t.patches().length, 0);
+  assert.match(again(t, 'OPT-0055').textContent, /Not changed\./);
+  t.yes = true;
+  change(all(again(t, 'OPT-0055'), 'input')[0], 'EDITOR, PAGER');
+  await flush();
+  assert.deepStrictEqual(t.patches().map((c) => c.body), [{ lockboxEnv: ['EDITOR', 'PAGER'] }]);
+  assert.ok(t.calls.map((c) => c.url).lastIndexOf('/api/lockbox/status') > t.calls.map((c) => c.url).indexOf('/api/agents/hazel'));
+  const n = t.confirms.length;
+  change(all(again(t, 'OPT-0055'), 'input')[0], 'EDITOR');
+  await flush();
+  assert.strictEqual(t.confirms.length, n, 'removing a name needs no confirm');
+});
+
+test('S5: an unknown lockbox default counts as off (switching to watch is not a loosening)', async () => {
+  const t = setup({ state: { lockDefault: 'strange' } });
+  t.state.agents[1].lockbox = 'enforce';
+  const row = await openAt(t, 'OPT-0054');
+  change(sel(row), 'inherit');   // enforce -> the unknown default (off): a loosening, asks
+  await flush();
+  assert.strictEqual(t.confirms.length, 1);
+  assert.match(t.confirms[0], /Turn the command lockbox off/);
 });
 
 // ---- 6. members -----------------------------------------------------------------------------------------------------------------------

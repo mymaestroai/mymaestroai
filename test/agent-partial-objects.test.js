@@ -228,6 +228,41 @@ test('the journal records exactly the changed keys of a partial update', async (
   assert.deepStrictEqual(await changedKeys(() => upd({ voiceDefaults: { preset: null } })), ['agents.biographer.voiceDefaults.preset']);
 });
 
+// ---- policy compare-and-set (policyIfMatch): the card sends the policy it built its change from ----
+const MSG_409 = "This agent's permissions were changed elsewhere. The card now shows them again; make your change once more.";
+test('policyIfMatch: a matching policy writes (normalised like the stored one, a missing policy is {}) and is never stored', async () => {
+  assert.deepStrictEqual(await upd({ policy: { roots: ['/a'] }, policyIfMatch: {} }), { success: true }, 'no policy stored = {}');
+  assert.deepStrictEqual(onDisk('biographer').policy, { roots: ['/a'] });
+  assert.ok(!('policyIfMatch' in onDisk('biographer')));
+  // unknown classes and padding in the sent copy do not make a difference
+  assert.deepStrictEqual(await upd({ policy: { overrides: { web: 'ask' }, roots: ['/a'] }, policyIfMatch: { roots: [' /a '], overrides: { bogus: 'allow' } } }), { success: true });
+  assert.deepStrictEqual(onDisk('biographer').policy, { overrides: { web: 'ask' }, roots: ['/a'] });
+});
+
+test('policyIfMatch: a different stored policy answers 409 with the words, writes nothing and journals nothing', async () => {
+  seed([base({ policy: { overrides: { send: 'deny' }, roots: ['/a'] } })]);
+  const before = fs.readFileSync(AGENTS_FILE, 'utf8');
+  let r;
+  const keys = await changedKeys(async () => { r = await upd({ policy: { roots: ['/a', '/b'] }, policyIfMatch: { roots: ['/a', '/b', '/c'] } }); });
+  assert.deepStrictEqual([r.success, r.status, r.error], [false, 409, MSG_409]);
+  assert.strictEqual(fs.readFileSync(AGENTS_FILE, 'utf8'), before, 'the agents file is untouched');
+  assert.deepStrictEqual(keys, [], 'the journal is unchanged');
+  // a stale card that thinks there is no policy
+  assert.strictEqual((await upd({ policy: { roots: ['/x'] }, policyIfMatch: {} })).status, 409);
+});
+
+test('policyIfMatch alone is ignored (nothing stored, nothing refused)', async () => {
+  seed([base({ policy: { roots: ['/a'] } })]);
+  assert.deepStrictEqual(await upd({ policyIfMatch: { roots: ['/zzz'] }, blurb: 'hi' }), { success: true });
+  assert.deepStrictEqual(onDisk('biographer').policy, { roots: ['/a'] });
+  assert.ok(!('policyIfMatch' in onDisk('biographer')));
+});
+
+test('the route answers a refused policyIfMatch with 409 { ok:false, error }', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert.match(src, /result\.status === 409 \? \{ ok: false, error: result\.error \}/);
+});
+
 // removed (P4-2): 'agent-settings.html Custom call timing sends preset:null with the four numbers' pinned the old page's source; the card's Call timing row does it
 // and test/ui-agent-card-basics.test.js ('Call timing: Patient saves the preset, Custom the four numbers (and drops the preset)') pins the same body.
 

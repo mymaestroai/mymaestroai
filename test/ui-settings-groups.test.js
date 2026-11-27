@@ -205,9 +205,9 @@ test('the panel is grouped right after it is drawn: a list of eight group button
   // every summary the loaders set lands in a real group
   const homes = new Set(G.GROUPS.map((g) => g.id));
   // the Setup/Security/Health summaries no longer sit on the first group's row (P4-4B: it says "2 problems · 1 new feature"); 'review-checks' has no row
-  const SUM = { status: { setup: 'review-checks', security: 'review-checks', health: 'review-checks', memory: 'upkeep', selfcheck: 'upkeep', updates: 'upkeep' }, security: 'safety', backups: 'upkeep', models: 'money', notify: 'you', agents: 'agents', tools: 'tools', money: 'money', voice: 'voice' };
+  const SUM = { status: { setup: 'review-checks', security: 'review-checks', health: 'review-checks', memory: 'upkeep', selfcheck: 'upkeep', updates: 'upkeep' }, security: 'safety', backups: 'upkeep', models: 'money', notify: 'you', agents: { sb: 'safety', appr: 'safety' }, tools: 'tools', money: 'money', voice: 'voice' };
   for (const h of Object.values(SUM).flatMap((v) => (typeof v === 'object' ? Object.values(v) : [v]))) assert.ok(homes.has(h) || h === 'review-checks', h);
-  assert.ok(app.includes("const ST_SUM_HOME = { status: { setup: 'review-checks', security: 'review-checks', health: 'review-checks', memory: 'upkeep', selfcheck: 'upkeep', updates: 'upkeep' }, security: 'safety', backups: 'upkeep', models: 'money', notify: 'you', agents: 'agents', tools: 'tools', money: 'money', voice: 'voice' };"));
+  assert.ok(app.includes("const ST_SUM_HOME = { status: { setup: 'review-checks', security: 'review-checks', health: 'review-checks', memory: 'upkeep', selfcheck: 'upkeep', updates: 'upkeep' }, security: 'safety', backups: 'upkeep', models: 'money', notify: 'you', agents: { sb: 'safety', appr: 'safety' }, tools: 'tools', money: 'money', voice: 'voice' };"));
   // summaries still follow changes made inside Settings
   assert.match(app, /stSum\('agents', 'appr', `approval cards \$\{on \? 'on' : 'off'\}`\);/);
   assert.match(app, /if \(r\.ok\) stSum\('notify', 'q', stQuestionsText\(questionAfterMinutes\)\);/);
