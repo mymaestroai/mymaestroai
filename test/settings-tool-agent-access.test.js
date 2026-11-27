@@ -253,6 +253,33 @@ test('folders: the roots changed while the card was open give ONE new card made 
   assert.deepEqual(agentOf('hazel').policy.roots, ['/tmp/acc-keep', '/tmp/acc-concurrent', '/tmp/acc-two']);
 });
 
+test('stored folder paths are free text: reading or echoing them in a turn makes a later everyday change in that turn need the card', async () => {
+  const EVERYDAY = 'OPT-0130';
+  const typedFor = () => `Turn ${records.byId(EVERYDAY).name} on.`;
+  const settingsLib = L('settings');
+  const everyday = async (t) => { settingsLib.updateSettings({ sidebarGuide: false }); return run({ action: 'set', setting: EVERYDAY, value: true, reason: 'x' }, { t, answer: 'Cancel' }); };
+  reset();
+  // control: a clean turn changes it at once (no card)
+  const clean = await everyday(turn({ typed: typedFor() }));
+  assert.equal(clean.cards.length, 0, 'a clean turn goes at once');
+  // a get of the stored folder paths, then the everyday change in the same turn: the card
+  for (const rec of [OTHER, SHARED]) {
+    const t = turn({ typed: typedFor() });
+    const g = await run({ action: 'get', setting: rec, agent: 'hazel' }, { t });
+    assert.match(g.out, /acc-keep/, 'the stored path is in the answer');
+    assert.equal(t.tainted, true, rec + ' get marks the turn');
+    assert.equal((await everyday(t)).cards.length, 1, rec + ': the card, not at once');
+  }
+  // a set whose answer or error echoes the stored paths
+  for (const value of [{ remove: '/tmp/acc-keep' }, { remove: '/tmp/not-there' }, { add: '/tmp/acc-keep' }]) {
+    reset();
+    const t = turn({ typed: typedFor() });
+    await run({ action: 'set', setting: OTHER, agent: 'hazel', value, reason: 'x' }, { t, answer: 'Cancel' });
+    assert.equal(t.tainted, true, JSON.stringify(value) + ' marks the turn');
+    assert.equal((await everyday(t)).cards.length, 1);
+  }
+});
+
 test('the tool description tells the lead about the box, folders and command lockbox with the owner\'s confirm', () => {
   assert.match(tool.DESCRIPTION, /box.*folders.*command lockbox.*confirm/s);
   assert.ok(agentsLib.AGENT_PATCH_FIELDS.includes('lockbox'));

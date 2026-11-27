@@ -624,6 +624,84 @@ test('S5: an unknown lockbox default counts as off (switching to watch is not a 
   assert.match(t.confirms[0], /Turn the command lockbox off/);
 });
 
+// ---- review round 2 -------------------------------------------------------------------------------------------------------------------
+test('R2-1: a stale folder checkbox list sends only its own click, so another card\'s grant is kept', async () => {
+  const t = setup();
+  t.state.agents[1].policy = { roots: ['/srv/common'] };
+  const stale = await openAt(t, 'OPT-0017');   // card 2: folder A (common) ticked
+  // card 1 adds folder B while card 2 still shows only A
+  t.state.agents[1].policy = { roots: ['/srv/common', '/srv/team/ops'] };
+  t.calls.length = 0;
+  change(checks(stale)[0], false);   // card 2 unticks A
+  await flush();
+  assert.strictEqual(t.confirms.length, 0, 'unticking needs no confirm');
+  assert.deepStrictEqual(t.state.agents[1].policy, { roots: ['/srv/team/ops'] }, 'A removed, B kept');
+  assert.deepStrictEqual(t.patches()[0].ifMatch, { roots: ['/srv/common', '/srv/team/ops'] }, 'built from the fresh policy');
+});
+
+test('R2-1: a stale card ticking a folder adds only that one and asks only for it', async () => {
+  const t = setup();
+  t.state.agents[1].policy = { roots: ['/srv/common'] };
+  const stale = await openAt(t, 'OPT-0017');
+  t.state.agents[1].policy = { roots: ['/srv/common', '/srv/team/ops', '~/notes'] };
+  change(checks(stale)[2], true);   // legal
+  await flush();
+  assert.strictEqual(t.confirms.length, 1);
+  assert.match(t.confirms[0], /^Give Hazel write access to Legal team\?$/);
+  assert.deepStrictEqual(t.state.agents[1].policy.roots.slice().sort(), ['/srv/common', '/srv/team/legal', '/srv/team/ops', '~/notes'].sort());
+});
+
+test('R2-2: a class changed elsewhere since the control was drawn is refused and redrawn, never written', async () => {
+  const t = setup();
+  t.state.agents[1].policy = { overrides: { web: 'allow' }, roots: ['/srv/common'] };
+  const row = await openAt(t, 'OPT-0008');
+  assert.strictEqual(sel(row).value, 'allow');
+  t.state.agents[1].policy = { overrides: { web: 'deny' }, roots: ['/srv/common'] };   // another card set Never
+  t.calls.length = 0;
+  change(sel(row), 'ask');
+  await flush();
+  assert.strictEqual(t.patches().length, 0, 'nothing is written');
+  assert.match(again(t, 'OPT-0008').textContent, /permissions were changed elsewhere\. The card now shows them again; make your change once more\./);
+  assert.strictEqual(sel(again(t, 'OPT-0008')).value, 'deny', 'the row shows what the hub has');
+  // made again on the fresh card, it is a loosening and asks
+  change(sel(again(t, 'OPT-0008')), 'ask');
+  await flush();
+  assert.strictEqual(t.confirms.length, 1);
+  assert.strictEqual(t.patches().length, 1);
+});
+
+test('R2-3: kept variables are applied as a diff: a stale card removing one name does not bring back another card\'s removal', async () => {
+  const t = setup();
+  t.state.agents[1].lockboxEnv = ['TOKEN', 'REGION'];
+  const row = await openAt(t, 'OPT-0055');
+  t.state.agents[1].lockboxEnv = ['REGION'];   // card 1 removed TOKEN
+  t.calls.length = 0;
+  change(all(row, 'input')[0], 'TOKEN');   // card 2 (stale) removes REGION
+  await flush();
+  assert.deepStrictEqual(t.state.agents[1].lockboxEnv, [], 'TOKEN is not restored');
+  assert.strictEqual(t.confirms.length, 0);
+});
+
+test('R2-3: a stale add is applied to the fresh list and named in the confirm; the same name changed elsewhere is refused', async () => {
+  const t = setup();
+  t.state.agents[1].lockboxEnv = ['EDITOR'];
+  let row = await openAt(t, 'OPT-0055');
+  t.state.agents[1].lockboxEnv = ['EDITOR', 'PAGER'];   // elsewhere added PAGER
+  change(all(row, 'input')[0], 'EDITOR, TOKEN');   // stale: removes nothing, adds TOKEN
+  await flush();
+  assert.match(t.confirms[0], /TOKEN/);
+  assert.doesNotMatch(t.confirms[0], /PAGER/);
+  assert.deepStrictEqual(t.state.agents[1].lockboxEnv, ['EDITOR', 'PAGER', 'TOKEN']);
+  // the same name touched elsewhere: refused, nothing written
+  row = await openAt(t, 'OPT-0055');
+  t.state.agents[1].lockboxEnv = ['EDITOR', 'PAGER'];   // elsewhere removed TOKEN
+  t.calls.length = 0;
+  change(all(row, 'input')[0], 'EDITOR, PAGER');   // stale: removes TOKEN too
+  await flush();
+  assert.strictEqual(t.patches().length, 0);
+  assert.match(again(t, 'OPT-0055').textContent, /kept variables were changed elsewhere/);
+});
+
 // ---- 6. members -----------------------------------------------------------------------------------------------------------------------
 test('members never get the Access section, and nothing of it is read', async () => {
   const t = setup({ me: MEMBER });
