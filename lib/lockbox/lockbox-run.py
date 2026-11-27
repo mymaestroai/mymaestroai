@@ -741,6 +741,13 @@ def proc_start(pid):
     except (OSError, IndexError):
         return None
 
+def exe_of(pid):
+    """The real path of a process's program; a program file replaced on disk reads '... (deleted)', which is dropped."""
+    p = os.readlink("/proc/%d/exe" % pid)
+    if p.endswith(" (deleted)"):
+        p = p[:-len(" (deleted)")]
+    return os.path.realpath(p)
+
 class Strace:
     """Our strace process, found by its exact trace file name; pid plus start time so a reused pid never matches."""
     def __init__(self, trace_path, not_pid, sbin):
@@ -758,7 +765,7 @@ class Strace:
             before = proc_start(pid)   # the start time is read before and after the checks: same process both times
             if not before:
                 return False
-            if os.path.realpath(os.readlink("/proc/%d/exe" % pid)) != self.exe:
+            if exe_of(pid) != self.exe:
                 return False
             with open("/proc/%d/cmdline" % pid, "rb") as f:
                 args = f.read().split(b"\0")
@@ -795,7 +802,7 @@ class Strace:
             if b"Z" in state.split(b":")[-1][:3]:
                 return "unknown"
             try:
-                exe = os.path.realpath(os.readlink("/proc/%d/exe" % child))
+                exe = exe_of(child)
             except OSError:
                 return "unknown"
             if exe != self.exe and exe != self.py:
@@ -811,7 +818,7 @@ class Strace:
             if not name.isdigit() or int(name) == self.not_pid:
                 continue
             try:
-                if os.path.realpath(os.readlink("/proc/%s/exe" % name)) != self.exe:
+                if exe_of(int(name)) != self.exe:
                     continue
             except OSError:
                 continue
@@ -902,8 +909,11 @@ def choose_trace_dir(prof):
     """The trace folder: in the default temp dir if hole punching works there, else in /dev/shm if it works there and has
     256 MiB free. With neither, nothing is left behind and OSError(ENOTSUP) is raised: a trace that cannot give back disk
     space is never run unbounded."""
-    base = make_trace_dir(tempfile.gettempdir())
-    if punch_works(prof, base, "default"):
+    try:
+        base = make_trace_dir(tempfile.gettempdir())   # a full or read-only temp dir falls through to /dev/shm
+    except OSError:
+        base = None
+    if base and punch_works(prof, base, "default"):
         return base
     shm = None
     try:
@@ -911,13 +921,15 @@ def choose_trace_dir(prof):
         if sv.f_bavail * sv.f_frsize >= SHM_MIN_FREE:
             shm = make_trace_dir("/dev/shm")
             if punch_works(prof, shm, "shm"):
-                remove_dir(base)
+                if base:
+                    remove_dir(base)
                 return shm
     except OSError:
         pass
     if shm:
         remove_dir(shm)
-    remove_dir(base)
+    if base:
+        remove_dir(base)
     raise OSError(errno.ENOTSUP, "no trace folder here can give back disk space")
 
 def sweep_old(prof):
@@ -1020,8 +1032,8 @@ def tail_trace(trace_path, judge, finish, now, state, start=0):
                 buf = buf[i:]
                 if cur - punched >= PUNCH_STEP:
                     ca = cur & ~4095
-                    punch_hole(fd, ca, punched_al)   # only the new range
-                    punched_al = ca
+                    if punch_hole(fd, ca, punched_al):   # only the new range; a failed one is tried again next time
+                        punched_al = ca
                     punched = cur
             if final:
                 return
@@ -1207,6 +1219,13 @@ def run_watch(prof, argv):
     except Exception:
         pass
     status = 1 << 8
+    if pidfd is None:
+        # without a pidfd: keep the ended child unreaped until forwarding by pid is switched off, so a reused pid is never hit
+        try:
+            os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
+        except Exception:
+            pass
+        target["pid"] = None
     while True:
         try:
             _, status = os.waitpid(pid, 0)  # Python retries after a signal handler ran
