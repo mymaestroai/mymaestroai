@@ -323,3 +323,19 @@ test('expect is the value each row last showed, not a newer read-back for anothe
   await host.click('save', 'HUB_SECURITY_CHECK_HOURS');
   assert.strictEqual(posts[1].expect, '12', 'B sends what B showed, so the hub refuses to overwrite the 24 nobody here saw');
 });
+
+test('every startup value and protected row shows its record words with records as the route sends them (no storedAs; proof p3)', () => {
+  const fs = require('fs'), path = require('path');
+  const R = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'templates', 'settings-records.json'), 'utf8'));
+  const routeShaped = (Array.isArray(R) ? R : R.records).map((r) => { const c = Object.assign({}, r); delete c.storedAs; delete c.facts; return c; });
+  const EF = require('../lib/env-file.js');
+  const rows = [...EF.ENV_WRITABLE, ...EF.ENV_READONLY, ...EF.ENV_DANGER].map((k) => ({ key: k, value: null, set: false, writable: EF.ENV_WRITABLE.includes(k), readonly: !EF.ENV_WRITABLE.includes(k), danger: EF.ENV_DANGER.includes(k), running: null, pending: false }));
+  const m = X.models(rows, routeShaped, {});
+  const all = [...m.expert, ...m.file, ...m.protectedRows];
+  assert.strictEqual(all.length, rows.length + X.DANGER_SETTINGS.length);
+  for (const x of all) {
+    assert.ok(x.id, `${x.key}: has its record`);
+    assert.ok(!/^[A-Z_]+$/.test(x.name) && x.name !== x.key, `${x.key}: shown with words, not the key ("${x.name}")`);
+  }
+  assert.strictEqual(m.expert.find((x) => x.key === 'HUB_SECURITY_CHECK_HOURS').name, 'Hours between security checks');
+});

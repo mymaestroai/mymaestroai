@@ -1,5 +1,5 @@
 {
-  "version": "3a2d2e9655d1adb054e0467aa5a637787c5ff589",
+  "version": "e774713b1fc682342b53da16c3b433c30db5df82",
   "records": [
     {
       "id": "OPT-0001",
@@ -29681,14 +29681,14 @@
     {
       "id": "OPT-0992",
       "kind": "setting",
-      "name": "HUB_SELFCHECK",
+      "name": "Self-check at start",
       "labels": [
         "HUB_SELFCHECK"
       ],
-      "what": "",
+      "what": "Set to off to stop your Maestro checking itself after it starts. The Self-check switch in Upkeep turns the same check on or off.",
       "when": "",
       "risk": "",
-      "def": "",
+      "def": "Default: not set, so the self-check runs.",
       "restart": true,
       "danger": "care",
       "who": "admin",
@@ -29779,14 +29779,14 @@
     {
       "id": "OPT-0995",
       "kind": "setting",
-      "name": "HUB_UPDATE_CHECK_HOURS",
+      "name": "Hours between update checks (startup setting)",
       "labels": [
         "HUB_UPDATE_CHECK_HOURS"
       ],
-      "what": "",
+      "what": "How many hours pass between looks for a new version, read when your Maestro starts. When set, it is used instead of the update-check hours in Upkeep.",
       "when": "",
       "risk": "",
-      "def": "",
+      "def": "Default: not set, so the update-check hours in Upkeep decide (every 24 hours).",
       "restart": true,
       "danger": "care",
       "who": "admin",
@@ -29950,14 +29950,14 @@
     {
       "id": "OPT-1000",
       "kind": "setting",
-      "name": "HUB_WALLET_OWNER",
+      "name": "Wallet owner address (startup setting)",
       "labels": [
         "HUB_WALLET_OWNER"
       ],
-      "what": "",
+      "what": "The wallet owner address your Maestro reads when it starts. It is shown here only.",
       "when": "",
       "risk": "",
-      "def": "",
+      "def": "Default: not set.",
       "restart": true,
       "danger": "dangerous",
       "who": "admin",
@@ -29977,14 +29977,14 @@
     {
       "id": "OPT-1001",
       "kind": "setting",
-      "name": "HUB_SDK_AUTO_COMPACT_WINDOW",
+      "name": "Long-chat point for Claude agents",
       "labels": [
         "HUB_SDK_AUTO_COMPACT_WINDOW"
       ],
-      "what": "",
+      "what": "The number of tokens at which Claude agents shorten a long chat, read when your Maestro starts.",
       "when": "",
       "risk": "",
-      "def": "",
+      "def": "Default: not set, so each model decides from its own size.",
       "restart": true,
       "danger": "care",
       "who": "admin",
@@ -30291,14 +30291,14 @@
     {
       "id": "OPT-1010",
       "kind": "setting",
-      "name": "GATEWAY_PROMPT_CACHE",
+      "name": "Reuse earlier text (startup setting)",
       "labels": [
         "GATEWAY_PROMPT_CACHE"
       ],
-      "what": "",
+      "what": "Set to 0 to stop every provider reusing the start of a long chat, read when your Maestro starts. Reuse earlier text in Upkeep is the everyday setting.",
       "when": "",
       "risk": "",
-      "def": "",
+      "def": "Default: not set, so reuse stays on.",
       "restart": true,
       "danger": "care",
       "who": "admin",
