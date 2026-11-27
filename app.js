@@ -6091,24 +6091,27 @@
       if (use) use.hidden = unset;
     }
     // The model lists (member models, plan switch targets) come from the list the pickers use; then every row is painted.
+    // Every row is painted first from the saved settings (a row that does not need the model list never waits for it); when the list
+    // arrives only the controls that list models get their options, each keeping its selection; a control with focus and the picture
+    // model name boxes are left alone.
     async function p5cAfterDraw() {
+      for (const r of STG.P5C) p5cPaint(r);
       let ml = null;
       try { ml = await modelList(); } catch { /* the rows still show what is saved */ }
-      const models = ml ? ml.models : [], billing = ml ? (ml.billing || {}) : {};
+      const models = ml && ml.models || [], billing = ml && ml.billing || {};
       const name = (m) => (billing[m] && billing[m].short) || billingDisplay(m, true);
+      const focused = (el) => !!el && (el === document.activeElement || el.contains(document.activeElement));
       for (const r of STG.P5C) {
         const el = document.getElementById(r.id);
         if (!el) continue;
-        const set = STG.p5cValue(r, p5cData);
-        if (r.kind === 'model') el.innerHTML = `<option value="">Default</option>` + models.map(m => `<option value="${esc(m)}">${esc(name(m))}</option>`).join('');
-        else if (r.kind === 'models') {
-          const all = [...new Set([...models, ...(Array.isArray(set) ? set : [])])];
-          el.innerHTML = all.length ? all.map(m => `<label style="display:flex;gap:6px;align-items:center;font-size:0.85rem"><input type="checkbox" value="${esc(m)}" onchange="p5cSave('${r.opt}')"> ${esc(name(m))}</label>`).join('') : '<span style="font-size:0.8rem;color:var(--text-dim)">No models yet.</span>';
-        } else if (r.kind === 'map') for (const [f] of r.families) {
-          const s = document.getElementById(`${r.id}-${f}`);
-          if (s) s.innerHTML = `<option value="">Default</option>` + models.filter(m => /^claude-sdk\//.test(m)).map(m => `<option value="${esc(m)}">${esc(name(m))}</option>`).join('');
+        if (r.kind === 'model' || r.kind === 'map') STG.p5cFillModels(r, models, (s) => document.getElementById(s ? `${r.id}-${s}` : r.id), { name, mkOption: (v, t) => new Option(t, v), focused });
+        else if (r.kind === 'models' && !focused(el)) {
+          const have = el.querySelector('input[type=checkbox]');
+          const set = STG.p5cValue(r, p5cData);
+          const ticked = new Set(have ? [...el.querySelectorAll('input:checked')].map(c => c.value) : (Array.isArray(set) ? set : []));
+          const all = [...new Set([...models, ...ticked])];
+          el.innerHTML = all.length ? all.map(m => `<label style="display:flex;gap:6px;align-items:center;font-size:0.85rem"><input type="checkbox" value="${esc(m)}"${ticked.has(m) ? ' checked' : ''} onchange="p5cSave('${r.opt}')"> ${esc(name(m))}</label>`).join('') : '<span style="font-size:0.8rem;color:var(--text-dim)">No models yet.</span>';
         }
-        p5cPaint(r);
       }
     }
     function p5cRaw(r) {
@@ -6134,11 +6137,23 @@
         p5cFocus[r.id] = a && ctls.includes(a) ? a : null;
         el.setAttribute('aria-busy', 'true');
         for (const c of ctls) { c.disabled = true; c.setAttribute('aria-busy', 'true'); }
+        const row = el.closest('.st-row');
+        if (row) {
+          row.classList.add('st-p5c-saving');
+          if (!document.getElementById(`${r.id}-saving`)) { const h = document.createElement('span'); h.id = `${r.id}-saving`; h.className = 'st-p5c-saving-hint'; h.setAttribute('role', 'status'); h.textContent = 'Saving…'; row.appendChild(h); }
+        }
       } else {
         el.removeAttribute('aria-busy');
         for (const c of ctls) { c.disabled = false; c.removeAttribute('aria-busy'); }
-        const f = p5cFocus[r.id]; delete p5cFocus[r.id];
-        if (f && f.isConnected) f.focus();
+        const row = el.closest('.st-row');
+        if (row) row.classList.remove('st-p5c-saving');
+        const hint = document.getElementById(`${r.id}-saving`); if (hint) hint.remove();
+        const remembered = p5cFocus[r.id]; delete p5cFocus[r.id];
+        // focus goes back only when the person has not moved on; a hidden remembered control (Use default after a reset) gives it to the row's main control
+        const shown = (c) => c.isConnected && !c.disabled && !c.closest('[hidden]');
+        const main = (el.tagName === 'INPUT' || el.tagName === 'SELECT') ? el : ctls.find(c => c.tagName !== 'BUTTON');
+        const f = STG.p5cRefocus({ active: document.activeElement, body: document.body, remembered, ctls, main, shown });
+        if (f) f.focus();
       }
     }
     // The saving (one save per row, no queue, read back after a save, the address question) lives in STG.p5cSaver
@@ -6155,7 +6170,11 @@
           const d = await resp.json().catch(() => ({}));
           return { ok: false, error: d.error || `HTTP ${resp.status}` };
         },
-        readBack: async () => { const r = await fetch('/api/settings', { credentials: 'include' }); return r.ok ? r.json() : null; },
+        // 8 seconds at most: a read-back that does not come counts as a failed one (the saver says "saved, but ... could not be asked to confirm it")
+        readBack: async () => {
+          const ac = new AbortController(), timer = setTimeout(() => ac.abort(), 8000);
+          try { const r = await fetch('/api/settings', { credentials: 'include', signal: ac.signal }); return r.ok ? await r.json() : null; } finally { clearTimeout(timer); }
+        },
         confirm: (t) => confirm(t),
         toast: (t) => hubToast(t),
         paint: p5cPaint,

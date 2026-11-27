@@ -278,7 +278,8 @@ test('app.js: admins only, the ⓘ attribute on every control, saves through POS
   assert.ok(app.includes('const di = `id="${r.id}" data-setting="${r.opt}"`;'), 'every control carries data-setting and its id');
   assert.ok(app.includes("p5cSave('${r.opt}', true)") && app.includes('>Use default</button>'), 'Use default');
   assert.ok(app.includes('STG.p5cSaver({') && app.includes("stSaveFetch('/api/settings', { method: 'POST'") && app.includes('JSON.stringify(body)'), 'saved through POST /api/settings by the shared saver');
-  assert.ok(app.includes("readBack: async () => { const r = await fetch('/api/settings'"), 'the stored value is read back');
+  assert.ok(app.includes("readBack: async () => {") && app.includes("fetch('/api/settings', { credentials: 'include', signal: ac.signal })"), 'the stored value is read back');
+  assert.ok(app.includes('new AbortController()') && app.includes('ac.abort(), 8000'), 'the read-back gives up after 8 seconds (a failed read-back)');
   assert.ok(app.includes('confirm: (t) => confirm(t)'), 'the address question goes through the saver, which words it (STG.p5cConfirmText)');
   assert.ok(app.includes('d.error || `HTTP ${resp.status}`'), 'a failure shows the hub\'s words');
   assert.ok(app.includes('paint: p5cPaint'), 'the box put back after');

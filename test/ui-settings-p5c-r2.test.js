@@ -145,6 +145,96 @@ test('Q5: app.js paints the row through STG.p5cFill without a focus guard and lo
   assert.ok(app.includes('lock: p5cLock'));
 });
 
+// ── save path polish: focus, read-back timeout, "still saving", hasUrlOverride, order of painting
+test('focus: given back only when nothing else has it; a hidden remembered control hands it to the row\'s main control', () => {
+  const body = {}, use = { n: 'use' }, main = { n: 'main' }, other = { n: 'other' }, sib = { n: 'sib' };
+  const base = { body, remembered: use, ctls: [main, sib, use], main, shown: () => true };
+  assert.strictEqual(G.p5cRefocus({ ...base, active: null }), use, 'nothing focused');
+  assert.strictEqual(G.p5cRefocus({ ...base, active: body }), use, 'body focused');
+  assert.strictEqual(G.p5cRefocus({ ...base, active: use }), use, 'still on the remembered one');
+  assert.strictEqual(G.p5cRefocus({ ...base, active: sib }), use, 'a control of the same row');
+  assert.strictEqual(G.p5cRefocus({ ...base, active: other }), null, 'the person moved to another control: never pulled back');
+  assert.strictEqual(G.p5cRefocus({ ...base, active: use, shown: (c) => c !== use }), main, 'Use default hid itself: the main control');
+  assert.strictEqual(G.p5cRefocus({ ...base, active: null, shown: () => false }), null, 'nothing can take it');
+  assert.strictEqual(G.p5cRefocus({ ...base, active: other, shown: (c) => c !== use }), null, 'moved on, remembered hidden: still left alone');
+  assert.strictEqual(G.p5cRefocus({ ...base, active: null, remembered: null }), null, 'nothing had focus in the row');
+});
+
+test('read-back timeout: a read-back that fails or times out is "saved, but ... could not be asked to confirm it"', async () => {
+  const f = fakeSaver({ data: { filesMaxUploadMb: 100 }, backFails: true });
+  f.raws['OPT-0951'] = '200';
+  await f.saver.save('OPT-0951');
+  assert.deepStrictEqual(f.toasts, ['Biggest upload (MB): saved, but your Maestro could not be asked to confirm it.']);
+  const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  assert.ok(app.includes('new AbortController()') && app.includes('ac.abort(), 8000') && app.includes('signal: ac.signal') && app.includes('clearTimeout(timer)'));
+});
+
+test('a second save of a row that is still saving says so, and posts nothing more', async () => {
+  const toasts = []; const posts = []; let open;
+  const saver = G.p5cSaver({ data: () => ({}), readRaw: () => '200', post: (b) => new Promise((res) => { posts.push(b); open = () => res({ ok: true }); }),
+    readBack: async () => ({ filesMaxUploadMb: 200 }), confirm: () => true, toast: (t) => toasts.push(t), paint() {} });
+  const first = saver.save('OPT-0951');
+  await tick();
+  await saver.save('OPT-0951');
+  assert.deepStrictEqual(toasts, ['Biggest upload (MB): still saving…']);
+  assert.strictEqual(posts.length, 1);
+  open(); await first;
+  assert.strictEqual(toasts[toasts.length - 1], 'Biggest upload (MB): saved.');
+  const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  assert.ok(app.includes("row.classList.add('st-p5c-saving')") && app.includes("row.classList.remove('st-p5c-saving')") && app.includes("h.textContent = 'Saving…'") && app.includes('hint.remove()'));
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8'), /\.st-row\.st-p5c-saving \{ opacity: \.6; \}/);
+  assert.ok(app.includes('STG.p5cRefocus({') && app.includes('if (f) f.focus();'));
+});
+
+test('hasUrlOverride: a stored address equal to the built-in one is an override: shown, reset asks and posts null', async () => {
+  const r = row('OPT-0934');
+  const mk = (over) => ({ providers: { openai: { url: 'https://api.openai.com/v1', defaultUrl: 'https://api.openai.com/v1', fallbackUrl: 'http://10.0.0.5:9000/v1', hasUrlOverride: over } } });
+  assert.strictEqual(G.p5cValue(r, mk(true)), 'https://api.openai.com/v1', 'shown as set: Use default is visible');
+  assert.strictEqual(G.p5cValue(r, mk(false)), undefined);
+  const f = fakeSaver({ data: mk(true), back: () => ({ providers: { openai: { url: 'http://10.0.0.5:9000/v1', fallbackUrl: 'http://10.0.0.5:9000/v1', hasUrlOverride: false } } }) });
+  await f.saver.save('OPT-0934', true);
+  assert.deepStrictEqual(f.asked, ['Keys and prompts for OpenAI will go to http://10.0.0.5:9000/v1 instead of https://api.openai.com/v1. Change it?']);
+  assert.deepStrictEqual(f.posts, [{ providers: { openai: { url: null } } }]);
+  assert.strictEqual(f.data.providers.openai.hasUrlOverride, false);
+  assert.strictEqual(G.p5cValue(r, f.data), undefined);
+  assert.deepStrictEqual(f.toasts, ['Address for OpenAI: back to the default.']);
+  // a reset with no override stored is a no-op
+  const none = fakeSaver({ data: mk(false) });
+  await none.saver.save('OPT-0934', true);
+  assert.deepStrictEqual(none.posts, []);
+  // typing sets the flag; p5cStore / p5cAssign keep it in step
+  const d = mk(false);
+  G.p5cStore(r, 'https://proxy.example.com', d); assert.strictEqual(d.providers.openai.hasUrlOverride, true);
+  G.p5cStore(r, null, d); assert.strictEqual(d.providers.openai.hasUrlOverride, false);
+  G.p5cAssign(r, 'https://api.openai.com/v1', d, true); assert.strictEqual(d.providers.openai.hasUrlOverride, true);
+  G.p5cAssign(r, '', d); assert.strictEqual(d.providers.openai.hasUrlOverride, false);
+});
+
+test('model list: only the controls that list models get options, keeping their selection; focus and text inputs are left alone', () => {
+  const sel = (value) => { const e = { value, options: [{ value: '', text: 'Default' }], add(o) { this.options.push(o); } }; return e; };
+  const o = { name: (m) => m.toUpperCase(), mkOption: (v, t) => ({ value: v, text: t }), focused: (e) => e.focus === true };
+  const mr = row('OPT-0958'), one = sel('custom-x');
+  G.p5cFillModels(mr, ['claude-sdk/a', 'gpt-x'], () => one, o);
+  assert.deepStrictEqual(one.options.map((x) => x.value), ['', 'claude-sdk/a', 'gpt-x', 'custom-x']);
+  assert.strictEqual(one.value, 'custom-x', 'selection kept, even one the list lacks');
+  const focused = sel('claude-sdk/a'); focused.focus = true;
+  G.p5cFillModels(mr, ['gpt-x'], () => focused, o);
+  assert.deepStrictEqual(focused.options.map((x) => x.value), [''], 'a focused control is not touched');
+  const pm = row('OPT-0946'), fam = { fable: sel('claude-sdk/a'), opus: sel(''), sonnet: sel('') };
+  G.p5cFillModels(pm, ['claude-sdk/a', 'gpt-x'], (s) => fam[s], o);
+  assert.deepStrictEqual(fam.fable.options.map((x) => x.value), ['', 'claude-sdk/a']);
+  assert.strictEqual(fam.fable.value, 'claude-sdk/a');
+  const img = row('OPT-0962'), txt = { value: 'typed', options: [], add() { throw new Error('touched'); } };
+  G.p5cFillModels(img, ['gpt-x'], () => txt, o);
+  assert.strictEqual(txt.value, 'typed');
+  const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  const at = app.indexOf('async function p5cAfterDraw()');
+  const body = app.slice(at, app.indexOf('function p5cRaw(', at));
+  assert.ok(body.indexOf('p5cPaint(r)') > 0 && body.indexOf('p5cPaint(r)') < body.indexOf('await modelList()'), 'rows are painted before the model list is awaited');
+  assert.ok(body.includes('STG.p5cFillModels('));
+  assert.ok(!/p5cPaint\(r\)[^]*await modelList\(\)[^]*p5cPaint\(r\)/.test(body), 'nothing is repainted after the list arrives');
+});
+
 // ── Q6 page part
 test('Q6: a row with note crlf says the line ends in a Windows line break', () => {
   const records = [{ id: 'OPT-0991', name: 'Time zone of this Maestro', storedAs: 'env:HUB_TZ', what: 'Sets the time zone.' }];
