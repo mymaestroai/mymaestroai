@@ -191,6 +191,9 @@ test('the More line uses clean group names: no emoji, no ">" path parts, at most
   assert.ok(!/>/.test(line) && !/[^\x20-\x7E]/.test(line), line);
   assert.strictEqual(C.groupName({ id: 'z', name: '\u{1F514}' }), '', 'a name of only a symbol is empty, and is left out of the line');
   assert.strictEqual(C.moreLine([{ id: 'z', name: '\u{1F514}' }, { id: 'y', name: 'Kept' }]), 'More: Kept');
+  assert.strictEqual(C.groupName({ id: 'w', home: 'Agent card > Schedule > More > Schedule (Task scheduler)', name: 'x' }), 'Schedule', 'a parenthesised part is dropped');
+  assert.strictEqual(C.groupName({ id: 'v', name: '(Task scheduler)' }), '', 'a name that is only a parenthesised part is empty');
+  assert.ok(!/\(/.test(C.moreLine([{ id: 'w', name: 'Schedule (Task scheduler)' }])));
 });
 
 test('FIRST_ROWS are shown first, every other record sits under a closed More that lists the group names (at most four, then "and more")', async () => {
@@ -199,19 +202,21 @@ test('FIRST_ROWS are shown first, every other record sits under a closed More th
   const p = t.card.el();
   assert.deepStrictEqual(rowIds(p), ['OPT-0047', 'OPT-0057'], 'only the first rows of the open section (Basics)');
   const more = all(p, '.ac-more-head')[0];
-  assert.strictEqual(more.textContent, 'More: Longest reply, Voice details, Recordings');
+  assert.strictEqual(more.textContent, '▸ More: Longest reply, Voice details, Recordings');
   assert.strictEqual(more.getAttribute('aria-expanded'), 'false');
   more.click();
+  assert.strictEqual(all(t.card.el(), '.ac-more-head')[0].textContent, '▾ More: Longest reply, Voice details, Recordings');
+  assert.strictEqual(all(t.card.el(), '.ac-more-head')[0].getAttribute('aria-expanded'), 'true');
   assert.deepStrictEqual(rowIds(t.card.el()), ['OPT-0047', 'OPT-0057', 'OPT-0066', 'OPT-0022', 'OPT-0033']);
   const access = all(t.card.el(), '.ac-sec-head')[3];
   access.click();
   const heads = all(t.card.el(), '.ac-more-head').map((e) => e.textContent);
-  assert.ok(heads.includes('More: A, B, C, D and more'), heads.join(' | '));
+  assert.ok(heads.includes('▸ More: A, B, C, D and more'), heads.join(' | '));
   assert.deepStrictEqual(C.FIRST_ROWS.basics, ['OPT-0047', 'OPT-0057', 'OPT-0168', 'OPT-0023', 'OPT-0063']);   // Model, Thinking effort, Notifications, Voice, Call display
   assert.deepStrictEqual(Object.keys(C.FIRST_ROWS), ['basics', 'role', 'memory', 'access', 'schedule']);
 });
 
-test('a row shows the record name, the first sentence of what (at most 90 characters) and the ⓘ that opens the help for that record', async () => {
+test('a row shows the record name, the first sentence of what (at most 200 characters) and the ⓘ that opens the help for that record', async () => {
   const t = setup();
   await t.card.open('harbor');
   const row = rowOf(t.card.el(), 'OPT-0047');
@@ -220,7 +225,9 @@ test('a row shows the record name, the first sentence of what (at most 90 charac
   all(row, '.st-info')[0].click();
   assert.strictEqual(t.helpCalls.length, 1);
   assert.strictEqual(t.helpCalls[0].id, 'OPT-0047');
-  assert.ok(C.firstLine('x'.repeat(200)).length <= 90);
+  assert.ok(C.firstLine('x'.repeat(300)).length <= 200);
+  const sentence = 'A specialist, a helper that does one narrow job well and reports back, and a writer of short plain notes for the whole team to read later on.';
+  assert.strictEqual(C.firstLine(sentence + ' Second one.'), sentence, 'a normal first sentence shows in full');
   const none = setup({ noHelp: true });
   await none.card.open('harbor');
   assert.strictEqual(all(none.card.el(), '.st-info').length, 0, 'no help script, no ⓘ');
@@ -264,7 +271,24 @@ test('a row whose live() says false is read-only with a line saying who can chan
   await t.card.open('harbor');
   const row = rowOf(t.card.el(), 'OPT-0047');
   assert.strictEqual(all(row, 'select').length, 0);
-  assert.match(row.textContent, /can not be changed from here/);
+  assert.match(row.textContent, /Change this on the agent's full settings page\./);
+});
+
+test('whyNot(agent, ctx) replaces the notHere line for an admin; "" draws no line at all, and the row stays read-only', async () => {
+  const mk = (whyNot) => new Map([['OPT-0047', { get: () => ({ value: 'a', display: 'Sonnet' }), control: { type: 'select', options: () => [] }, save: async () => ({ ok: true }), live: () => false, whyNot }]]);
+  const own = setup({ rows: mk((agent) => 'Locked for ' + agent.name + '.'), firstRows: { basics: ['OPT-0047'] } });
+  await own.card.open('harbor');
+  const r1 = rowOf(own.card.el(), 'OPT-0047');
+  assert.match(r1.textContent, /Locked for harbor\./);
+  assert.ok(!r1.textContent.includes(C.TEXT.notHere));
+  const none = setup({ rows: mk(() => ''), firstRows: { basics: ['OPT-0047'] } });
+  await none.card.open('harbor');
+  const r2 = rowOf(none.card.el(), 'OPT-0047');
+  assert.strictEqual(all(r2, '.ac-note').length, 0);
+  assert.strictEqual(all(r2, 'select').length, 0, 'still read-only');
+  const member = setup({ me: MEMBER, rows: mk(() => 'x'), firstRows: { basics: ['OPT-0047'] } });
+  await member.card.open('harbor');
+  assert.match(rowOf(member.card.el(), 'OPT-0047').textContent, /Only an admin can change this\./, 'a member never sees whyNot');
 });
 
 test('Simple mode: the same card with Basics and Memory only, even for an admin', async () => {
@@ -272,6 +296,27 @@ test('Simple mode: the same card with Basics and Memory only, even for an admin'
   await t.card.open('harbor');
   assert.deepStrictEqual(secKeys(t.card.el()), ['basics', 'memory']);
   assert.deepStrictEqual(C.sectionsFor(ADMIN, true), ['basics', 'memory']);
+});
+
+test('Simple mode: an admin gets "More for <name>: …" that opens the other sections on the same card; a member does not', async () => {
+  const t = setup({ simple: true });
+  await t.card.open('harbor');
+  const b = t.card.el().querySelectorAll('button.ac-simple-more')[0] || null;
+  assert.ok(b, 'the row is drawn for an admin');
+  assert.strictEqual(b.textContent, '▸ More for Harbor: Role and team, Access, Schedule and background work');
+  b.click();
+  assert.deepStrictEqual(secKeys(t.card.el()), ['basics', 'role', 'memory', 'access', 'schedule']);
+  assert.strictEqual(t.card.el().querySelectorAll('button.ac-simple-more')[0] || null, null, 'gone once the sections are shown');
+  t.card.close(false);
+  await t.card.open('harbor');
+  assert.deepStrictEqual(secKeys(t.card.el()), ['basics', 'memory'], 'a new opening starts with Simple\'s two sections again');
+  t.card.close(false);
+  await t.card.open('harbor', { section: 'access' });
+  assert.ok(secKeys(t.card.el()).includes('access'), 'a door to Access opens it in Simple');
+  const m = setup({ simple: true, me: MEMBER });
+  await m.card.open('harbor');
+  assert.strictEqual(m.card.el().querySelectorAll('button.ac-simple-more')[0] || null, null);
+  assert.deepStrictEqual(secKeys(m.card.el()), ['basics', 'memory']);
 });
 
 // ---- 3. header, default line, unregistered rows ---------------------------------------------------------------------------

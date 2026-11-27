@@ -185,7 +185,7 @@ test('Model: the options are the chat header\'s (Auto, then each model with who 
   const sel = all(rowOf(t.card.el(), 'OPT-0047'), 'select')[0];
   const labels = all(sel, 'option').map((o) => o.textContent);
   assert.strictEqual(labels[0], 'Auto');
-  assert.ok(labels.includes('claude-sonnet-4-6 · Subscription'));
+  assert.ok(labels.includes('Sonnet · Subscription'), labels.join(' | '));
   assert.ok(labels.includes('gpt-6-astra · API $'));
   assert.ok(labels.includes('qwen3 · Local — ⚠ slow lately'), labels.join(' | '));
   assert.strictEqual(sel.value, 'claude-sdk/claude-sonnet-4-6');
@@ -193,6 +193,23 @@ test('Model: the options are the chat header\'s (Auto, then each model with who 
   await pick(sel, 'openai/gpt-6-astra');
   assert.deepStrictEqual(writes(t).map((c) => [c.method, c.url, c.body]), [['POST', '/api/agents/harbor/model', { model: 'openai/gpt-6-astra' }]]);
   assert.strictEqual(t.state.agents[1].model, 'openai/gpt-6-astra');
+});
+
+test('Model: a model missing from the list reads "<words> · not in the list"; two options with the same words get their model id', async () => {
+  const t = await opened({ tweak: (l) => { l[1].model = 'claude-sdk/claude-opus-5-5'; } });
+  const labels = all(all(rowOf(t.card.el(), 'OPT-0047'), 'select')[0], 'option').map((o) => o.textContent);
+  assert.ok(labels.includes('Opus · Subscription · not in the list'), labels.join(' | '));
+  assert.ok(!labels.some((l) => /current; not in/.test(l)));
+  assert.match(rowOf(t.card.el(), 'OPT-0047').textContent, /Opus · Subscription/);
+  const d = await opened({ models: ['claude-sdk/claude-sonnet-4-6', 'anthropic/claude-sonnet-4-6', 'openai/gpt-6-astra'] });
+  const dl = all(all(rowOf(d.card.el(), 'OPT-0047'), 'select')[0], 'option').map((o) => o.textContent);
+  assert.ok(dl.includes('Sonnet · Subscription'), dl.join(' | '));
+  assert.ok(dl.includes('Sonnet · API $'), dl.join(' | '));
+  const same = await opened({ models: ['claude-sdk/claude-sonnet-4-6', 'claude-sdk/claude-sonnet-4-5', 'openai/gpt-6-astra'] });
+  const sl = all(all(rowOf(same.card.el(), 'OPT-0047'), 'select')[0], 'option').map((o) => o.textContent);
+  assert.ok(sl.includes('Sonnet · Subscription (claude-sonnet-4-6)'), sl.join(' | '));
+  assert.ok(sl.includes('Sonnet · Subscription (claude-sonnet-4-5)'), sl.join(' | '));
+  assert.ok(sl.includes('gpt-6-astra · API $'), 'a unique label gets no id');
 });
 
 test('Model: Auto is PATCH {autoModel:true}; choosing a model while Auto is on also turns Auto off', async () => {
@@ -210,7 +227,7 @@ test('Model, a member: live only when the admin listed models for members, and t
   assert.ok(sel, 'a member with a members list gets the picker');
   const labels = all(sel, 'option').map((o) => o.textContent);
   assert.ok(!labels.includes('Auto'), 'Auto is an admin\'s choice');
-  assert.ok(labels.includes('claude-haiku-4-5 · Subscription'));
+  assert.ok(labels.includes('Haiku · Subscription'), labels.join(' | '));
   assert.ok(!labels.some((l) => l.startsWith('gpt-6-astra')), 'a paid model that is not on the list is not offered');
   await pick(sel, 'claude-sdk/claude-haiku-4-5');
   assert.deepStrictEqual(writes(ok).map((c) => [c.method, c.url, c.body]), [['POST', '/api/agents/harbor/model', { model: 'claude-sdk/claude-haiku-4-5' }]]);
@@ -289,37 +306,52 @@ test('the switch and the preset map to the stored kinds both ways', () => {
   for (const p of ['all', 'asks', 'away', 'off']) assert.strictEqual(B.notifyState({ agents: { harbor: B.presetKinds(p) } }, 'harbor').preset, p);
 });
 
-test('Notifications: a switch and a select; the preset saves all three kinds through PUT /api/notify/prefs; the switch turns the agent off and on', async () => {
+test('Notifications: one select, no switch; "Same as all agents (...)" first, the presets, Off; a preset saves all three kinds through PUT /api/notify/prefs; "Same as all agents" removes them', async () => {
   const t = await opened();
   let row = rowOf(t.card.el(), 'OPT-0168');
-  assert.strictEqual(all(row, 'input')[0].checked, true);
-  assert.deepStrictEqual(all(row, 'option').map((o) => o.textContent), ['Everything', 'Only questions and requests', "Only when I'm away"]);
+  assert.strictEqual(all(row, 'input').length, 0, 'no switch any more');
+  assert.deepStrictEqual(all(row, 'option').map((o) => o.textContent), ['Same as all agents (Everything)', 'Everything', 'Only questions and requests', "Only when I'm away", 'Off']);
+  assert.strictEqual(all(row, 'select')[0].value, '');
+  assert.strictEqual(all(row, 'select')[0].getAttribute('aria-label'), 'Notifications for Harbor');
   assert.match(row.textContent, /Using the default for all agents/);
   await pick(all(row, 'select')[0], 'asks');
   assert.deepStrictEqual(writes(t).map((c) => [c.method, c.url, c.body]), [['PUT', '/api/notify/prefs', { agent: 'harbor', prefs: { questions: 'on', requested: 'on', other: 'off' } }]]);
   row = rowOf(t.card.el(), 'OPT-0168');
   assert.strictEqual(all(row, 'select')[0].value, 'asks');
-  assert.match(row.textContent, /Use default again/);
+  assert.strictEqual(all(row, '.ac-reset').length, 0, 'no "Use default again" button on this row');
   t.calls.length = 0;
-  const sw = all(row, 'input')[0]; sw.checked = false; sw.dispatch('change'); await flush();
+  await pick(all(row, 'select')[0], 'off');
   assert.deepStrictEqual(writes(t).map((c) => c.body), [{ agent: 'harbor', prefs: { questions: 'off', requested: 'off', other: 'off' } }]);
   row = rowOf(t.card.el(), 'OPT-0168');
-  assert.strictEqual(all(row, 'input')[0].checked, false);
-  assert.strictEqual(all(row, 'select')[0].disabled, true, 'a switched-off agent has nothing to choose');
+  assert.strictEqual(all(row, 'select')[0].value, 'off');
+  assert.notStrictEqual(all(row, 'select')[0].disabled, true, 'never disabled');
   t.calls.length = 0;
-  const on = all(row, 'input')[0]; on.checked = true; on.dispatch('change'); await flush();
-  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ agent: 'harbor', prefs: { questions: 'on', requested: 'on', other: 'on' } }], 'switched on again: everything');
+  await pick(all(row, 'select')[0], '');
+  assert.deepStrictEqual(writes(t).map((c) => [c.method, c.url, c.body]), [['PUT', '/api/notify/prefs', { agent: 'harbor', prefs: null }]]);
 });
 
-test('Notifications: the stored kinds show as the preset ("Only when I\'m away"), an odd mix as Custom; Use default again removes the agent\'s own setting', async () => {
+test('Notifications: the first option names the hub default\'s preset', async () => {
+  const t = await opened({ notify: { default: { questions: 'off', requested: 'off', other: 'off' }, agents: {} } });
+  assert.strictEqual(all(rowOf(t.card.el(), 'OPT-0168'), 'option')[0].textContent, 'Same as all agents (Off)');
+  const a = await opened({ notify: { default: { questions: 'away', requested: 'away', other: 'away' }, agents: {} } });
+  assert.strictEqual(all(rowOf(a.card.el(), 'OPT-0168'), 'option')[0].textContent, "Same as all agents (Only when I'm away)");
+  const c = await opened({ notify: { default: { questions: 'on', requested: 'off', other: 'away' }, agents: {} } });
+  assert.strictEqual(all(rowOf(c.card.el(), 'OPT-0168'), 'option')[0].textContent, 'Same as all agents (Custom)');
+});
+
+test('Notifications: the stored kinds show as the preset ("Only when I\'m away"), an odd mix as Custom (only while it is custom); "Same as all agents" removes the agent\'s own setting', async () => {
   const away = await opened({ notify: { default: { questions: 'on', requested: 'on', other: 'on' }, agents: { harbor: { questions: 'away', requested: 'away', other: 'away' } } } });
   assert.strictEqual(all(rowOf(away.card.el(), 'OPT-0168'), 'select')[0].value, 'away');
   const custom = await opened({ notify: { default: { questions: 'on', requested: 'on', other: 'on' }, agents: { harbor: { questions: 'on', requested: 'off', other: 'away' } } } });
   const row = rowOf(custom.card.el(), 'OPT-0168');
   assert.strictEqual(all(row, 'select')[0].value, 'custom');
   assert.match(row.textContent, /Custom \(see More\)/);
-  all(row, '.ac-reset')[0].click(); await flush();
+  assert.strictEqual(all(row, '.ac-reset').length, 0);
+  await pick(all(row, 'select')[0], 'custom');
+  assert.deepStrictEqual(writes(custom), [], 'choosing Custom does nothing');
+  await pick(all(row, 'select')[0], '');
   assert.deepStrictEqual(writes(custom).map((c) => [c.method, c.url, c.body]), [['PUT', '/api/notify/prefs', { agent: 'harbor', prefs: null }]]);
+  assert.ok(!all(rowOf(away.card.el(), 'OPT-0168'), 'option').some((o) => /Custom/.test(o.textContent)), 'no Custom option while the state is not custom');
 });
 
 test('Notifications, the three kinds under More: a select each, saved as one kind; a member may use all of them', async () => {
@@ -330,8 +362,7 @@ test('Notifications, the three kinds under More: a select each, saved as one kin
   await pick(all(q, 'select')[0], 'away');
   assert.deepStrictEqual(writes(t).map((c) => [c.method, c.url, c.body]), [['PUT', '/api/notify/prefs', { agent: 'harbor', prefs: { questions: 'away' } }]]);
   t.calls.length = 0;
-  all(rowOf(t.card.el(), 'OPT-0168'), 'select')[0].value = 'all';
-  const sw = all(rowOf(t.card.el(), 'OPT-0168'), 'input')[0];
+  const sw = all(rowOf(t.card.el(), 'OPT-0168'), 'select')[0];
   assert.ok(sw && !sw.disabled, 'the member\'s notifications row is live (a "both" record)');
   const kind = rowOf(t.card.el(), 'OPT-0171');
   await pick(all(kind, 'select')[0], 'off');
@@ -504,7 +535,7 @@ test('Recordings: only the owner of the Maestro may change them (the route\'s ru
   all(notOwner.card.el(), '.ac-more-head')[0].click();
   const row = rowOf(notOwner.card.el(), 'OPT-0033');
   assert.strictEqual(all(row, 'input').length, 0);
-  assert.match(row.textContent, /can not be changed from here/);
+  assert.match(row.textContent, /Change this on the agent's full settings page\./);
 });
 
 test('Model extras and limits: keep model, Auto per message, speed and price, longest reply, cheapest and fallback model', async () => {
@@ -548,8 +579,9 @@ test('Role and team: Role, Reports to and its job in the team first; rename, own
   const first = rowIds(t.card.el()).filter((id) => !['OPT-0047', 'OPT-0057', 'OPT-0168', 'OPT-0023', 'OPT-0063'].includes(id));
   assert.deepStrictEqual(first, ['OPT-0003', 'OPT-0062', 'OPT-0060']);
   const more = all(all(t.card.el(), '.ac-sec')[1], '.ac-more-head')[0];
-  assert.match(more.textContent, /^More: /);
+  assert.match(more.textContent, /^▸ More: /);
   more.click();
+  assert.match(all(all(t.card.el(), '.ac-sec')[1], '.ac-more-head')[0].textContent, /^▾ More: /);
   const ids = rowIds(t.card.el());
   for (const id of ['OPT-0001', 'OPT-0002', 'OPT-0004', 'OPT-0006', 'OPT-0007', 'OPT-0045', 'OPT-0059', 'OPT-0061']) assert.ok(ids.includes(id), id + ' under More');
   assert.ok(!ids.includes('OPT-0074'), 'Remove is not in a section');
@@ -622,9 +654,19 @@ test('Remove this agent: alone at the very bottom, after the footer line, for ad
   assert.strictEqual(all(t.card.el(), '.ac-bottom').length, 1);
   assert.strictEqual(body.children[body.children.length - 2].textContent, C.TEXT.footer, 'after "You can also ask Maestro"');
   all(last, 'button')[0].click(); await flush();
-  assert.deepStrictEqual(t.confirms, ["Delete this agent? Its files, chats and memory are kept with the hub's deleted agents, and its name is free again."]);
+  assert.deepStrictEqual(t.confirms, ["Delete Harbor? Its files, chats and memory are kept with the hub's deleted agents, and its name is free again."]);
+  assert.ok(t.confirms[0].startsWith('Delete Harbor? '), 'the question names the agent');
   assert.deepStrictEqual(writes(t).map((c) => [c.method, c.url]), [['DELETE', '/api/agents/harbor']]);
   assert.strictEqual(t.card.isOpen(), false);
+});
+
+test('Reports to: a primary agent reads "<name> is a primary agent and takes its work from you." with no "can not be changed" line', async () => {
+  const t = await openRole({ tweak: (l) => { l[1].category = 'primary'; l[1].reportsTo = ''; } });
+  const row = rowOf(t.card.el(), 'OPT-0062');
+  assert.match(row.textContent, /Harbor is a primary agent and takes its work from you\./);
+  assert.strictEqual(all(row, 'select').length, 0);
+  assert.ok(!row.textContent.includes(C.TEXT.notHere), 'no notHere line');
+  assert.strictEqual(all(row, '.ac-note').length, 0);
 });
 
 test('Remove this agent: a declined confirm sends nothing; a refusal is shown under the button; members and Simple never see it', async () => {
