@@ -274,7 +274,7 @@ test('app.js: admins only, the ⓘ attribute on every control, saves through POS
   const app = read('app.js');
   const at = app.indexOf('if (isHubAdmin()) {\n        p5cData = data;');
   assert.ok(at > 0, 'the section is drawn inside an admin check');
-  assert.ok(app.slice(at, at + 700).includes('id="st-expert-section"><h4>Expert values</h4>'));
+  assert.ok(app.slice(at, at + 700).includes('id="st-expert-section"><h4 class="st-vh">Expert values</h4>'));
   assert.ok(app.includes('const di = `id="${r.id}" data-setting="${r.opt}"`;'), 'every control carries data-setting and its id');
   assert.ok(app.includes("p5cSave('${r.opt}', true)") && app.includes('>Use default</button>'), 'Use default');
   assert.ok(app.includes('STG.p5cSaver({') && app.includes("stSaveFetch('/api/settings', { method: 'POST'") && app.includes('JSON.stringify(body)'), 'saved through POST /api/settings by the shared saver');

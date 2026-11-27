@@ -88,9 +88,44 @@ test('html: controls per key, escaped, data-setting on each row', () => {
   assert.ok(html.includes('Takes effect after a restart.'));
   assert.ok(html.includes('Startup values') && !html.includes('Expert values') && html.includes('Set in the .env file') && html.includes('Protected settings'));
   assert.ok(html.includes('Change it in the .env file in your Maestro&#39;s folder; takes effect after a restart.'));
-  assert.ok(html.includes('<select id="st-env-HUB_MEMORY_HEALTH" data-envin="HUB_MEMORY_HEALTH">'));   // the id is the record's anchor for its help
+  // the id and data-setting on the control are the record's anchor for its help; the label's for= points at the id so the ⓘ lands right after the label
+  assert.ok(html.includes('<select id="st-env-HUB_MEMORY_HEALTH" data-envin="HUB_MEMORY_HEALTH" data-setting="OPT-0993">'));
+  assert.ok(html.includes('<label for="st-env-HUB_MEMORY_HEALTH">Nightly memory check</label>'));
   const evil = X.expertHtml(X.models([row('HUB_TZ', { writable: true, value: '"><script>x</script>', set: true })], records, null));
   assert.ok(!evil.includes('<script>'));
+});
+
+test('Startup values rows use the Expert values layout: st-xrow, label + one help paragraph with Default: on the left, box on the right', () => {
+  const recs = [{ id: 'OPT-0950', name: 'Update check', storedAs: 'env:HUB_UPDATE_CHECK_HOURS', what: 'How often your Maestro looks for updates. More.', def: '24 hours' }];
+  const html = X.expertHtml(X.models([row('HUB_UPDATE_CHECK_HOURS', { writable: true })], recs, null));
+  assert.ok(html.includes('<div class="st-row st-xrow" data-expert="HUB_UPDATE_CHECK_HOURS">'));
+  const xl = /<div class="st-xl">([\s\S]*?)<\/div><div class="st-xr">/.exec(html);
+  assert.ok(xl, 'left column');
+  assert.ok(xl[1].startsWith('<label for="st-env-HUB_UPDATE_CHECK_HOURS">Update check</label>'));
+  assert.match(xl[1], /<div class="st-hint st-xhelp">How often your Maestro looks for updates\. Default: <span data-for="HUB_UPDATE_CHECK_HOURS">24 hours<\/span>\.<\/div>/);
+  assert.strictEqual((xl[1].match(/class="st-hint/g) || []).length, 1, 'one dim paragraph');
+  const xr = /<div class="st-xr">([\s\S]*?)<\/div>/.exec(html)[1];
+  assert.ok(xr.includes('<input type="number"') && xr.includes('data-envin="HUB_UPDATE_CHECK_HOURS"') && xr.includes('data-setting="OPT-0950"'));
+  assert.ok(xr.includes('data-act="save"') && xr.includes('data-act="default"') && xr.includes('hours'));
+  assert.ok(!xl[1].includes('<input'), 'the box is not in the left column');
+  assert.match(xr, /placeholder="24"/, 'the placeholder is the default number');
+  assert.ok(!/placeholder="Default"/.test(html));
+});
+
+test('Startup values placeholder: a default that is not one number leaves the box empty; "Default:" in the record is not doubled', () => {
+  const mk = (def) => X.expertHtml(X.models([row('HUB_UPDATE_CHECK_HOURS', { writable: true })], [{ id: 'OPT-0950', name: 'N', storedAs: 'env:HUB_UPDATE_CHECK_HOURS', what: 'Words.', def }], null));
+  assert.match(mk('off'), /placeholder=""/);
+  assert.match(mk('Default: 6 hours.'), /placeholder="6"/);
+  assert.ok(!mk('Default: 6 hours.').includes('Default: Default'));
+  assert.ok(mk('Default: 6 hours.').includes('Default: <span data-for="HUB_UPDATE_CHECK_HOURS">6 hours</span>.'));
+  assert.match(X.expertHtml(X.models([row('HUB_UPDATE_CHECK_HOURS', { writable: true })], [], null)), /placeholder=""/);
+});
+
+test('Startup values: a read-only row keeps its words in the same layout', () => {
+  const html = X.expertHtml(X.models([row('PORT', { value: '3000', set: true, readonly: true, running: '3000' })], records, null));
+  assert.ok(html.includes('<div class="st-row st-xrow" data-readonly="PORT" data-setting="OPT-0800"><div class="st-xl"><label>Port</label>'));
+  assert.ok(html.includes('The port your Maestro listens on.') && html.includes(X.FILE_HELP.replace(/'/g, '&#39;')));
+  assert.match(html, /<div class="st-xr"><span class="st-value" id="st-ro-PORT">3000<\/span><\/div>/);
 });
 
 test('checkValue: numbers refused outside range, empty accepted', () => {

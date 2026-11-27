@@ -3223,7 +3223,8 @@
     // lib/ui-settings-groups.js (a list on the left, the open group on the right). Sections are matched by id; one the list doesn't
     // know lands in Upkeep > More, so a new section can't disappear. The open group is kept per browser (localStorage hub-settings-group).
     // Workers at once (settings.workersAtOnce): one number per AI service, admins only. Rows come from /api/hub/status pacing.caps.
-    const WAO_LABELS = { 'claude-sdk': 'Claude subscription', 'codex-cli': 'ChatGPT subscription', anthropic: 'Anthropic API', openai: 'OpenAI API', codex: 'OpenAI Codex API', google: 'Google Gemini', perplexity: 'Perplexity', lmstudio: 'LM Studio', ollama: 'Ollama' };
+    const WAO_LABELS = { 'claude-sdk': 'Claude subscription', 'codex-cli': 'ChatGPT subscription', anthropic: 'Anthropic API', openai: 'OpenAI API', codex: 'OpenAI Codex API', google: 'Google Gemini', perplexity: 'Perplexity', lmstudio: 'LM Studio', ollama: 'Ollama', local: 'Local' };   // labels only: the saved keys and data-provider values stay as they are
+    const WAO_RECORDS = { 'claude-sdk': 'OPT-0412', 'codex-cli': 'OPT-0413', anthropic: 'OPT-0414', openai: 'OPT-0415', codex: 'OPT-0416', google: 'OPT-0417', perplexity: 'OPT-0418', lmstudio: 'OPT-0419', ollama: 'OPT-0420' };
     let waoStored = {};   // the saved map as the page opened; rows for services not listed keep their value
     async function loadWorkersAtOnce() {
       const box = document.getElementById('st-wao-rows');
@@ -3238,6 +3239,7 @@
           row.className = 'st-row';
           const label = document.createElement('label');
           label.textContent = WAO_LABELS[c.provider] || c.provider;
+          if (WAO_RECORDS[c.provider]) label.dataset.setting = WAO_RECORDS[c.provider];   // each service's own ⓘ sits after its label (records anchor [data-setting="OPT-04xx"])
           const input = document.createElement('input');
           input.type = 'number'; input.min = '1'; input.max = '32'; input.step = '1';
           input.className = 'st-wao-input'; input.style.maxWidth = '90px';
@@ -3398,9 +3400,12 @@
       (stSumParts[group] ||= {})[key] = { text: text || '', crit: !!crit };
       const el = document.getElementById(`st-sum-${group}`);
       if (!el) return;
-      const parts = Object.values(stSumParts[group]);
-      el.textContent = parts.map(p => p.text).filter(Boolean).join(' · ');
-      el.classList.toggle('st-sum-crit', parts.some(p => p.crit && p.text));
+      const shown = Object.values(stSumParts[group]).filter(p => p.text);
+      const allCrit = shown.length > 0 && shown.every(p => p.crit);
+      // a part that is not a fault is never drawn red because another part of the same line is: only the red parts are marked
+      if (!allCrit && shown.some(p => p.crit)) el.innerHTML = shown.map(p => (p.crit ? `<span class="st-sum-first">${esc(p.text)}</span>` : esc(p.text))).join(' · ');
+      else el.textContent = shown.map(p => p.text).join(' · ');
+      el.classList.toggle('st-sum-crit', allCrit);
     }
 
     // Show one group in the right pane (the others are hidden). remember = the person chose it: kept in localStorage 'hub-settings-group'
@@ -3861,13 +3866,13 @@
         h += `<div class="rv-block rv-block-suggest" data-tier="suggest"><button type="button" class="rv-fold" data-rv="fold" aria-expanded="${reviewFoldOpen ? 'true' : 'false'}">${reviewFoldOpen ? '▾' : '▸'} Suggestions (${r.suggestions.length})</button>`
           + `<div class="rv-fold-body"${reviewFoldOpen ? '' : ' hidden'}>${r.suggestions.map((p) => rowOf(p, 'suggest')).join('')}${r.snoozedSuggestions.map((p) => rowOf(p, 'suggest')).join('')}</div></div>`;
       }
-      const shown = r.features.map((f) => ({ id: f.id, title: f.title, text: f.text, snoozedUntil: f.snoozedUntil }));
+      const shown = r.features.map((f) => ({ id: f.id, title: f.title, text: f.text, cost: f.cost, snoozedUntil: f.snoozedUntil }));
       for (const id of Object.keys(reviewDecided)) if (!shown.some((f) => f.id === id)) shown.push({ id, title: reviewDecided[id].title, text: '' });
       if (shown.length) {
         h += `<h4>New features</h4>` + shown.map((f) => {
           const d = reviewDecided[f.id];
           return `<div class="rv-row rv-feature" data-fid="${esc(f.id)}">
-            <div class="rv-main"><div class="rv-title">${esc(f.title)}</div>${f.text ? `<div class="rv-text">${esc(f.text)}</div>` : ''}${f.snoozedUntil && !d ? `<div class="rv-text">${esc(RV.askedAgainLine(f.snoozedUntil))}</div>` : ''}
+            <div class="rv-main"><div class="rv-title">${esc(f.title)}</div>${f.text ? `<div class="rv-text">${esc(f.text)}</div>` : ''}${f.cost ? `<div class="rv-text rv-cost">${esc('Cost: ' + f.cost)}</div>` : ''}${f.snoozedUntil && !d ? `<div class="rv-text">${esc(RV.askedAgainLine(f.snoozedUntil))}</div>` : ''}
             <div class="rv-result" role="status" aria-live="polite">${d ? esc(d.line) : ''}</div></div>
             ${d && d.decision !== 'snooze' ? '' : `<div class="rv-acts">${[['on', 'Turn on'], ['off', 'Leave off'], ...(d || f.snoozedUntil ? [] : [['snooze', 'Ask me in a week']])].map(([k, l]) => `<button type="button" class="st-test-btn" data-rv="decide" data-id="${esc(f.id)}" data-decision="${k}">${l}</button>`).join('')}</div>`}</div>`;
         }).join('');
@@ -4226,7 +4231,7 @@
       // New agent (first in Agents and teams): the one way to make an agent on the phone; admins only. The same dialog as the sidebar's "+ New Agent".
       if (isHubAdmin()) {
         html += `<div class="st-section" id="st-newagent-section"><h4>New agent</h4>
-        <div class="st-row"><label style="flex-basis:150px">New agent</label><button type="button" class="st-test-btn" id="st-new-agent-btn" onclick="openCreateAgent(null)">Make a new agent…</button></div>
+        <div class="st-row"><button type="button" class="st-test-btn" id="st-new-agent-btn" onclick="openCreateAgent(null)">Make a new agent…</button></div>
         <div class="st-hint">Give it a name and describe its role; your Maestro sets it up. You can also ask your lead to make one for you.</div>
       </div>`;
       }
@@ -4373,7 +4378,7 @@
           <input type="number" id="st-hw-minutes" min="0" max="240" step="1" value="${data.handOffWaitMinutes !== undefined && data.handOffWaitMinutes !== null && Number.isFinite(Number(data.handOffWaitMinutes)) ? Number(data.handOffWaitMinutes) : 10}" style="max-width:90px"> <span style="font-size:0.8rem;color:var(--text-dim)">minutes (0 turns it off)</span>
         </div>
         <div class="st-row">
-          <label class="gs-sub"><input type="checkbox" id="st-hw-notice" ${data.buildPartnerNotice !== false ? 'checked' : ''}> Tell the lead when an agent has no build partner</label>
+          <label class="gs-sub" style="flex-basis:auto"><input type="checkbox" id="st-hw-notice" ${data.buildPartnerNotice !== false ? 'checked' : ''}> Tell the lead when an agent has no build partner</label>
         </div>
         <div class="st-hint">An agent that waits a long time on its workers can't talk with you meanwhile. After two such waits in a week, the lead can offer you a build partner. Nothing is created without your yes.</div>
       </div>`;
@@ -4431,7 +4436,7 @@
       // drawn here and moved to their own group by stPlaceRows (lib/ui-settings-groups P5C); each box saves on its own.
       if (isHubAdmin()) {
         p5cData = data;
-        html += `<div class="st-section" id="st-expert-section"><h4>Expert values</h4>
+        html += `<div class="st-section" id="st-expert-section"><h4 class="st-vh">Expert values</h4>
         <div class="st-hint" style="margin-left:0">Numbers that tune your Maestro. Each box saves as you change it; Use default puts the built-in value back.</div>
         ${STG.P5C.map(r => p5cRowHtml(r, data)).join('')}
       </div>`;
@@ -4593,16 +4598,21 @@
           <input type="text" id="st-cap-agent" placeholder="unlimited" inputmode="decimal" style="max-width:120px" disabled>
         </div>
         <div class="st-row">
-          <label style="flex-basis:150px">Daily pay-per-use cap, whole hub ($)</label>
+          <label style="flex-basis:150px">Daily pay-per-use cap, your whole Maestro ($)</label>
           <input type="text" id="st-cap-hub" placeholder="unlimited" inputmode="decimal" style="max-width:120px" disabled>
-          <button class="st-test-btn" id="st-caps-save" onclick="saveSpendCaps()">Save</button>
         </div>
         <div class="st-hint" style="margin-left:158px">Caps count pay-per-use spend only (API keys and paid cloud voices), never plan use. Over a cap, an agent's decided actions (sending, writing outside its folders, admin, destructive) switch to ask for the rest of the day; nothing is silently stopped. Blank = unlimited.</div>
         <div class="st-row">
           <label style="flex-basis:150px" title="A hard stop on pay-per-use spend for the month. Once it is used up, agents on pay-per-use models answer with a short notice until the month starts again or you raise the cap. Plan and local agents keep working.">Monthly cap ($)</label>
           <input type="text" id="st-cap-month" placeholder="no cap" inputmode="decimal" style="max-width:120px" disabled>
-          <span style="font-size:0.78rem;color:var(--text-dim)">month starts on day</span>
+        </div>
+        <div class="st-row">
+          <label style="flex-basis:150px" for="st-cap-month-day">Month starts on day</label>
           <input type="text" id="st-cap-month-day" placeholder="1" inputmode="numeric" style="max-width:44px" title="1 to 28; 1 is the calendar month" disabled>
+        </div>
+        <div class="st-row">
+          <label style="flex-basis:150px"></label>
+          <button class="st-test-btn" id="st-caps-save" onclick="saveSpendCaps()">Save caps</button>
         </div>
         <div class="st-row">
           <label style="flex-basis:150px"></label>
@@ -5679,7 +5689,7 @@
         cxState.data = await cxApi('/api/connectors');
         cxStatus('');
         const n = ((cxState.data && cxState.data.connectors) || []).length;
-        stSum('tools', 'cx', `${n} data connector${n === 1 ? '' : 's'}`);
+        stSum('tools', 'cx', `${n} data connector${n === 1 ? '' : 's'}`, false);   // none set up is not a fault: never red
       } catch (e) {
         cxState.data = { connectors: [], groups: [] };
         cxStatus('Could not load connectors: ' + e.message, true);
@@ -6111,12 +6121,17 @@
     // section and moved to its group by stPlaceRows. Each box saves on its own through POST /api/settings; a failure shows the hub's words and puts
     // the box back. "Use default" sends null for every row so the hub removes the key and falls back to its built-in value.
     let p5cData = {};     // the settings the dialog was drawn with, kept current as rows save
+    // The box's placeholder is the default number itself ("240"); a default that is a word ("on", "off", a name) leaves it empty.
+    function p5cPlaceholder(r) {
+      const m = /^(?:every\s+)?(\d[\d,]*(?:\.\d+)?)(?:\s|$)/.exec(String(r.def || '').trim());
+      return m ? m[1].replace(/,/g, '') : '';
+    }
     function p5cRowHtml(r, data) {
       const di = `id="${r.id}" data-setting="${r.opt}"`;
       const on = `onchange="p5cSave('${r.opt}')"`;
       const dim = 'font-size:0.8rem;color:var(--text-dim)';
       let ctl = '';
-      if (r.kind === 'num') ctl = `<input type="number" ${di} min="${r.min}" max="${r.max}" step="${r.step}" placeholder="default" style="max-width:110px" ${on}> <span style="${dim}">${esc(r.unit)}</span>`;
+      if (r.kind === 'num') ctl = `<input type="number" ${di} min="${r.min}" max="${r.max}" step="${r.step}" placeholder="${esc(p5cPlaceholder(r))}" style="max-width:110px" ${on}> <span style="${dim}">${esc(r.unit)}</span>`;
       else if (r.kind === 'text') ctl = `<input type="text" ${di} placeholder="${esc(r.placeholder)}" autocomplete="off" spellcheck="false" style="max-width:110px" ${on}>`;
       else if (r.kind === 'url') ctl = `<input type="text" ${di} placeholder="${esc(r.dflt)}" autocomplete="off" spellcheck="false" style="flex:1 1 220px;min-width:0;max-width:340px" ${on}>`;
       else if (r.kind === 'switch') ctl = `<label class="toggle-switch"><input type="checkbox" ${di} ${on}><span class="toggle-slider"></span></label>`;
@@ -6126,9 +6141,10 @@
       else if (r.kind === 'map') ctl = `<span ${di} style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${r.families.map(([f, l]) => `<span style="${dim}">${esc(l)} to <select id="${r.id}-${f}" ${on}><option value="">Default</option></select></span>`).join('')}</span>`;
       else if (r.kind === 'images') ctl = `<span ${di} style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${r.providers.map(([p, l]) => ['fast', 'best'].map(w => `<span style="${dim}">${esc(l)} ${w === 'fast' ? 'quick' : 'best'} <input type="text" id="${r.id}-${p}-${w}" placeholder="built-in" autocomplete="off" spellcheck="false" style="max-width:150px" ${on}></span>`).join('')).join('')}</span>`;
       else if (r.kind === 'cache') ctl = `<span ${di} style="display:flex;gap:10px;align-items:center"><label class="toggle-switch"><input type="checkbox" id="${r.id}-on" ${on}><span class="toggle-slider"></span></label><select id="${r.id}-ttl" ${on}><option value="5m">Remember for 5 minutes</option><option value="1h">Remember for 1 hour</option></select></span>`;
-      return `<div class="st-row" style="flex-wrap:wrap;row-gap:6px"><label style="flex-basis:150px"${r.kind === 'num' || r.kind === 'text' || r.kind === 'url' || r.kind === 'select' || r.kind === 'model' ? ` for="${r.id}"` : ''}>${esc(r.name)}</label>${ctl}
-        <span id="${r.id}-def" style="${dim}">${esc(STG.p5cDefaultText(r))}</span><button type="button" class="st-test-btn" id="${r.id}-use" hidden onclick="p5cSave('${r.opt}', true)">Use default</button></div>
-        <div class="st-hint">${esc(r.hint)}</div>`;
+      // One layout for every row (like the agent card rows): on the left the label with its ⓘ right after it and, under it, the help
+      // sentence followed by "Default: ..." in the same dim paragraph; on the right the box (or switch) with its unit and Use default.
+      return `<div class="st-row st-xrow"><div class="st-xl"><label${r.kind === 'num' || r.kind === 'text' || r.kind === 'url' || r.kind === 'select' || r.kind === 'model' ? ` for="${r.id}"` : ''}>${esc(r.name)}</label><div class="st-hint st-xhelp">${esc(r.hint)} <span id="${r.id}-def">${esc(STG.p5cDefaultText(r))}</span></div></div>
+        <div class="st-xr">${ctl}<button type="button" class="st-test-btn" id="${r.id}-use" hidden onclick="p5cSave('${r.opt}', true)">Use default</button></div></div>`;
     }
     // Put one row's controls in line with the saved settings (and show Default: ... only while the key is unset).
     function p5cPaint(r) {
@@ -7622,7 +7638,7 @@
       else box.innerHTML = (paid ? `<b style="color:var(--text)">${amount}</b> pay-per-use over ${t.paidTurns} call${t.paidTurns === 1 ? '' : 's'}${unpriced}${top ? `<div style="margin-top:2px">${top}</div>` : ''}` : 'No pay-per-use spend today.') + plan;
       const caps = t.caps || {};
       stSum('money', 'spend', legacy ? 'restart to see spend' : paid ? `Spent today ${amount}` : 'No pay-per-use spend today');
-      stSum('money', 'caps', caps.perAgentDailyUsd || caps.hubDailyUsd ? `pay-per-use caps: ${[caps.perAgentDailyUsd ? `${usd(caps.perAgentDailyUsd)} per agent` : '', caps.hubDailyUsd ? `${usd(caps.hubDailyUsd)} whole hub` : ''].filter(Boolean).join(', ')}` : 'no daily caps');
+      stSum('money', 'caps', caps.perAgentDailyUsd || caps.hubDailyUsd ? `pay-per-use caps: ${[caps.perAgentDailyUsd ? `${usd(caps.perAgentDailyUsd)} per agent` : '', caps.hubDailyUsd ? `${usd(caps.hubDailyUsd)} for your whole Maestro` : ''].filter(Boolean).join(', ')}` : 'no daily caps');
       const credits = t.credits || [];
       const listEl = document.getElementById('st-credit-list');
       if (listEl) listEl.textContent = credits.length ? credits.map(creditLine).join(' · ') : 'None set. Enter an amount to see it next to today\'s spend.';
@@ -7731,7 +7747,7 @@
         result = e.message;
         if (!opts.quiet) alert(`Could not save caps: ${e.message}`);
       }
-      if (btn) { btn.disabled = false; setTimeout(() => { btn.className = 'st-test-btn'; btn.textContent = 'Save'; }, 3000); }
+      if (btn) { btn.disabled = false; setTimeout(() => { btn.className = 'st-test-btn'; btn.textContent = 'Save caps'; }, 3000); }
       return result;
     }
     setInterval(refreshSpendToday, SPEND_REFRESH_MS);   // the Spend section's data too (a read that failed comes again), so also on the settings-only page

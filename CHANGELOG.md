@@ -6,6 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Settings rows line up and say what they mean.** Expert and startup values show one row shape, with the default in the help line and as the box's hint; each Workers at once service has its own ⓘ; the spend caps have one "Save caps" button after all three caps; new features in For your review show their whole description and cost; the security check speaks of your Maestro.
 - **One Claude sign-in problem shows once.** For your review used to list it three times; now it is one item that says how many agents can't answer, with Sign in again, and the count on the gear drops with it. The two-factor warning for admins is no longer listed twice either.
 - **Counts read as words.** "1 agent", "3 files" and "2 admin accounts" replace "agent(s)", "file(s)" and "account(s)" across Settings, For your review and the security check.
 - **Hear an agent's voice and follow a long-chat step from its card.** The agent card has Play sample next to the voice again, and Compress now shows its progress until the brief is written, with Done, read the brief.

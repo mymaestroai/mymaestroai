@@ -10,8 +10,8 @@ const X = require('../lib/ui-settings-expert.js');
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 const row = (k) => G.P5C.find((r) => r.key === k);
 
-test('the Reuse earlier text default words sit on their own full-width line', () => {
-  assert.match(html, /\.st-row > span\[id\^="st-p5c-"\]\[id\$="-def"\] \{[^}]*flex: 1 0 100%/);
+test('the Reuse earlier text switch and its box wrap inside the right column; Default: ... is in the help paragraph', () => {
+  // (was: the "-def" span sat on its own full-width line; it now ends the help paragraph, see ui-settings-p7-design.test.js)
   assert.match(html, /span\[id\^="st-p5c-"\]\[data-setting\]:has\(> select\) \{[^}]*flex-wrap: wrap/);
 });
 

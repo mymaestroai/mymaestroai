@@ -554,3 +554,18 @@ test('page: reviewRefresh asks the registered sources and shows what they say; i
   } finally { R.unregister('stop-source'); }
   assert.match(read('mobile.js'), /RV\.merge\(RV\.build\(input\), extra, reviewLastResult\)/, 'the phone count reads the same sources');
 });
+
+test('C2: a long feature summary is kept whole and the "Cost: ..." line shows, as on the chat card', async () => {
+  const long = 'Agents will keep a short note of every decision they make for you, so that the next time you ask the same sort of thing they already know how you like it done and do not ask twice about the same choice again and again across every chat you open';
+  const changes = { changes: [pending('long', { on: `${long}. Second sentence.`, costs: 'A few more words of memory per chat. Nothing else.' }), pending('plain', { costs: undefined })] };
+  const r = R.build({ changes, now: NOW });
+  assert.strictEqual(r.features[0].text, `${long}.`, 'whole first sentence, no ellipsis');
+  assert.ok(r.features[0].text.length > 200 && !r.features[0].text.includes('…'));
+  assert.strictEqual(r.features[0].cost, 'A few more words of memory per chat.');
+  assert.strictEqual(r.features[1].cost, '', 'no cost, no cost line');
+  const merged = R.merge(r, [{ id: 's', problems: [], features: [{ id: 'src', title: 'From a source', text: 'Words.', cost: 'Some cost.' }] }]);
+  assert.strictEqual(merged.features.find((f) => f.id === 'src').cost, 'Some cost.', 'a source feature keeps its cost');
+  const app = read('app.js');
+  assert.match(app, /cost: f\.cost, snoozedUntil/, 'the page passes the cost through');
+  assert.match(app, /rv-text rv-cost">\$\{esc\('Cost: ' \+ f\.cost\)\}/, 'and draws it in the dim rv-text style');
+});

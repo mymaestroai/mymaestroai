@@ -213,7 +213,7 @@ test('the panel is grouped right after it is drawn: a list of eight group button
   // summaries still follow changes made inside Settings
   assert.match(app, /stSum\('agents', 'appr', `approval cards \$\{on \? 'on' : 'off'\}`\);/);
   assert.match(app, /if \(r\.ok\) stSum\('notify', 'q', stQuestionsText\(questionAfterMinutes\)\);/);
-  assert.match(app, /el\.classList\.toggle\('st-sum-crit', parts\.some\(p => p\.crit && p\.text\)\);/);
+  assert.match(app, /el\.classList\.toggle\('st-sum-crit', allCrit\);/);   // the whole line is red only when every part of it is (p7 design fix; see ui-settings-p7-design.test.js)
   assert.match(app, /stSum\('status', 'setup', d\.critical \? `Setup: \$\{d\.critical\} to fix`[^\n]*, !!d\.critical\);\s*if \(d\.critical\) stOpenGroup\('status'\);/);
 });
 

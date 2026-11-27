@@ -247,7 +247,7 @@ test('nodeSecurity: installer-managed or the computer\'s own Node.js, branch, qu
   const sys = sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/usr/bin/node', home: '/home/u', env: {}, platform: 'linux', branch: 'main' });
   assert.strictEqual(sys.managed, false);
   assert.match(sys.how, /sudo apt-get update && sudo apt-get install --only-upgrade nodejs/);
-  assert.match(sys.how, /point the hub's service at that new Node\.js/);
+  assert.match(sys.how, /point your Maestro's service at that new Node\.js/);
   assert.match(sc.nodeSecurity({ nodeVersion: 'v22.23.3', execPath: '/opt/homebrew/bin/node', home: '/Users/u', env: {}, platform: 'darwin', branch: 'main' }).how, /brew upgrade node@22, or brew upgrade node; nvm: nvm install 22\.23\.5/);
   const b = (v) => sc.nodeSecurity({ nodeVersion: v, execPath: '/usr/bin/node', env: {}, branch: 'main' }).behind;
   assert.strictEqual(b('v22.23.5'), false);
@@ -442,4 +442,16 @@ test('admin two-factor required (default, or anything but false): output is the 
   assert.strictEqual(byId(base, 'totp').title, '1 admin account without two-factor');
   assert.strictEqual(byId(base, 'admin-2fa-optional'), undefined);
   assert.strictEqual(byId(await adminsCheck([ADMIN_OFF], {}, true), 'totp').level, 'critical');
+});
+
+test('owner-facing words: "the account your Maestro runs as" and "your Maestro", never "the hub\'s user" or "the hub"', async () => {
+  const bad = await sc.createSecurityCheck(BAD).check();
+  assert.match(byId(bad, 'file-modes').fix, /Only the account your Maestro runs as should read them/);
+  assert.match(byId(bad, 'ssh').detail, /where the account your Maestro runs as holds the provider keys and the Claude sign-in/);
+  const tight = await sc.createSecurityCheck({ ...BAD, stat: modeStat({ '/h/hub/.env': 0o600, '/h/hub/data': D | 0o700, '/h/hub/workspaces': D | 0o700 }) }).check();
+  assert.strictEqual(byId(tight, 'file-modes').title, 'Secret files are private to the account your Maestro runs as');
+  const old = /\bthe hub\b|\bthis hub\b|hub's user|hub user's|the hub's/i;
+  for (const r of [bad, tight]) for (const i of r.items) {
+    for (const k of ['title', 'detail', 'fix']) assert.doesNotMatch(String(i[k] || ''), old, `${i.id}.${k}: ${i[k]}`);
+  }
 });
