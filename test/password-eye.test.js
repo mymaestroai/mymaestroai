@@ -245,7 +245,7 @@ test('every page with a typed-password field loads the helper and starts it once
 test('the phone service worker version moved (mobile.html and mobile.js changed); the shell list stays the page and its script', () => {
   const sw = read('sw.js');
   assert.match(sw, /const SHELL = \['\/mobile\.html', '\/mobile\.js'\];/, 'helper scripts are not precached (as with the /ui-*.js files)');
-  assert.match(sw, /const VERSION = 'hub-mobile-v109'/);
+  assert.match(sw, /const VERSION = 'hub-mobile-v111'/);
 });
 
 // The password-type inputs the source holds today: typed passwords (account, backup, restore, step-up, keystore

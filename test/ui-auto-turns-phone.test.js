@@ -163,7 +163,7 @@ test('CSS: kind colours, left border, stack, from line', () => {
 });
 
 test('the service worker is bumped so open phones load this page', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v109'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v111'/);
 });
 
 test('samePrompt and promptRecent: clipped prompts match by start; stale or undated cards are not adopted', () => {
