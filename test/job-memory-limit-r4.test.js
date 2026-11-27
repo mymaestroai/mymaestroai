@@ -27,10 +27,10 @@ const start = async (r) => { const j = await r.runner.run({ owner: 'trader', nam
 const jdir = (r, j) => path.join(r.dataDir, 'jobs', j.id);
 const mark = (r, j, name, body = '') => fs.writeFileSync(path.join(jdir(r, j), name), body);
 
-test('exit 143 + Result oom-kill + peak at the limit -> the limit notice', async () => {
-  const r = rig({ scopeResult: async () => 'oom-kill', scopePeak: async () => 8 * GB });
+test('exit 143 + Result oom-kill + the oom mark -> the limit notice (the peak plays no part)', async () => {
+  const r = rig({ scopeResult: async () => 'oom-kill' });
   const j = await start(r);
-  mark(r, j, 'exit', '143\n');
+  mark(r, j, 'oom'); mark(r, j, 'exit', '143\n');
   await r.runner._tick();
   assert.strictEqual(j.status, 'failed');
   assert.strictEqual(j.memoryKilled, true);
@@ -45,8 +45,8 @@ test('exit 143 + the oom marker -> the limit notice', async () => {
   assert.strictEqual(j.memoryKilled, true);
 });
 
-test('exit 143 + Result oom-kill with a low peak is not the limit notice', async () => {
-  const r = rig({ scopeResult: async () => 'oom-kill', scopePeak: async () => 1 * GB });
+test('exit 143 + Result oom-kill without the oom mark is not the limit notice', async () => {
+  const r = rig({ scopeResult: async () => 'oom-kill' });
   const j = await start(r);
   mark(r, j, 'exit', '143\n');
   await r.runner._tick();

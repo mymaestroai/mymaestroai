@@ -104,32 +104,33 @@ test('an oom marker turns the end into the memory notice', async () => {
   assert.match(r.runner.reportMessage(j, 'x'), /was STOPPED: it used too much memory/);
 });
 
-test('exit 137 with scope Result oom-kill gives the notice', async () => {
+test('exit 137 with scope Result oom-kill and the wrapper\'s oom mark gives the notice', async () => {
   const asked = [];
-  const r = rig({ scopeResult: async (u) => { asked.push(u); return 'oom-kill'; }, scopePeak: async () => 8 * GB });
+  const r = rig({ scopeResult: async (u) => { asked.push(u); return 'oom-kill'; } });
   const j = await start(r);
+  fs.writeFileSync(path.join(jdir(r, j), 'oom'), '');
   fs.writeFileSync(path.join(jdir(r, j), 'exit'), '137\n');
   await r.runner._tick();
-  assert.deepStrictEqual(asked, [`${j.unit}.scope`]);
+  assert.deepStrictEqual(asked, [], 'the mark alone proves it: no systemctl call');
   assert.strictEqual(j.memoryKilled, true);
   assert.strictEqual(j.exitCode, 137);
   assert.strictEqual(j.note, NOTE8);
 });
 
-test('a job that ends with no exit file and Result oom-kill gets the notice (not LOST) when the scope peaked at its limit', async () => {
-  const r = rig({ scopeResult: async () => 'oom-kill', scopePeak: async () => 0.96 * 8 * GB });
+test('a job that ends with no exit file and Result oom-kill is failed (not LOST) with the neutral wording, whatever the peak was', async () => {
+  const r = rig({ scopeResult: async () => 'oom-kill', scopePeak: async () => 8 * GB });   // the peak is not read any more
   const j = await start(r);
   Object.assign(j, { _childExited: true, _childCode: 0 });
   fs.writeFileSync(path.join(jdir(r, j), 'pid'), String(require('child_process').spawnSync('true').pid));   // a dead pid
   await r.runner._tick();
   assert.strictEqual(j.status, 'failed');
-  assert.strictEqual(j.memoryKilled, true);
-  assert.strictEqual(j.note, NOTE8);
+  assert.strictEqual(j.memoryKilled, undefined, 'no local oom mark: no limit claim');
+  assert.strictEqual(j.note, 'Note: a process in this job was killed because the computer ran short of memory.');
 });
 
-test('Result oom-kill alone is not proof of this job\'s limit: a low MemoryPeak (or none) gets the neutral wording, in the heading too', async () => {
+test('Result oom-kill alone is not proof of this job\'s limit: even a peak at the limit gets the neutral wording, in the heading too', async () => {
   const NEUTRAL = 'Note: a process in this job was killed because the computer ran short of memory.';
-  for (const peak of [0.3 * 8 * GB, null, 0.94 * 8 * GB]) {
+  for (const peak of [0.3 * 8 * GB, null, 0.94 * 8 * GB, 8 * GB, 0.99 * 8 * GB]) {
     const r = rig({ scopeResult: async () => 'oom-kill', scopePeak: async () => peak });
     const j = await start(r);
     fs.writeFileSync(path.join(jdir(r, j), 'exit'), '137\n');
@@ -150,9 +151,9 @@ test('Result oom-kill alone is not proof of this job\'s limit: a low MemoryPeak 
   assert.strictEqual(j.memoryKilled, true);
 });
 
-test('the default peak reader asks systemctl for MemoryPeak with the Result (source check)', () => {
+test('the MemoryPeak path is gone: the limit notice comes only from the local oom mark (source check)', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'jobs.js'), 'utf8');
-  assert.match(src, /'show', unit, '-p', 'MemoryPeak', '--value'/);
+  assert.ok(!/MemoryPeak|PEAK_SHARE/.test(src.replace(/\/\/.*$/gm, '')));
 });
 
 test('plain 137 without oom (scope Result success) is an ordinary FAILED (exit 137)', async () => {
@@ -187,7 +188,9 @@ test('setsid-mode watchdog stops an over-limit job with the notice', async () =>
   const r = watchRig(() => 2 * GB);
   const j = await running(r);
   await r.runner._tick();
-  assert.deepStrictEqual(r.killed, [j.id]);
+  // No signal to the pid-file pid or its group (a reused pid could belong to another process): the 'stopping' poll
+  // signals only members verified in a fresh sample (review round 7).
+  assert.deepStrictEqual(r.killed, []);
   assert.strictEqual(j.status, 'stopping', 'stopped, but not finished until its processes have exited');
   await r.runner._tick();   // liveMembers says 0 (the rig default): now it is finished
   assert.strictEqual(j.status, 'failed');
