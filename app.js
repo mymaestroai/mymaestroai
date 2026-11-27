@@ -2475,7 +2475,8 @@
           <td>${badge(j)}${j.restartWarning ? `<br><small style="color:var(--warning)">${esc(j.restartWarning)}</small>` : ''}<br><small>${handoff(j)}</small></td>
           <td><small>${esc(when(j.startedAt))}${j.endedAt ? `<br>ended ${esc(when(j.endedAt))}` : ''}</small></td>
           <td style="white-space:nowrap"><button class="gs-btn secondary" onclick="jobsAct('log', '${esc(j.id)}')">Log</button>
-            ${j.status === 'running' ? `<button class="gs-btn secondary" onclick="jobsAct('cancel', '${esc(j.id)}')">Cancel</button>` : ''}</td>
+            ${j.status === 'running' ? `<button class="gs-btn secondary" onclick="jobsAct('cancel', '${esc(j.id)}')">Cancel</button>` : ''}
+            ${j.status === 'running' && typeof isHubAdmin === 'function' && isHubAdmin() ? `<br><label style="font-size:11px;white-space:normal"><input type="checkbox" ${j.keep ? 'checked' : ''} onchange="jobsAct('keep', '${esc(j.id)}', this.checked)"> Keep running when all agents are stopped</label>` : ''}</td>
         </tr>`).join('') : `<tr><td colspan="5"><i>${!data.jobs.length ? 'No jobs yet. Agents start them with the run_job tool.'
           : v.scope === 'active' ? 'No jobs running.' : `No jobs ${schedScopeWords(v.scope)}.`}</i></td></tr>`;
       let logBox = '';
@@ -2497,8 +2498,9 @@
       const html = await jobsSectionHtml();
       if (document.getElementById('sched-jobs') === box) box.innerHTML = html;
     }
-    async function jobsAct(action, id) {
+    async function jobsAct(action, id, flag) {
       try {
+        if (action === 'keep') { await jobsApi('/keep', { id, keep: flag === true }); return refreshJobsSection(); }
         if (action === 'log') { jobsPanelLog = id; return refreshJobsSection(); }
         if (action === 'hidelog') { jobsPanelLog = null; return refreshJobsSection(); }
         if (action === 'cancel') { if (!confirm('Stop this job? The owner will be told it was cancelled.')) return; const j = await jobsApi('/cancel', { id }); refreshScheduleBadge(); return openSchedulePanel(`Job ${j.id} "${j.name}": ${j.status}.`); }
@@ -3571,7 +3573,7 @@
       stSum('notify', 'q', stQuestionsText(qa));
       stSum('notify', 'push', '');
       for (const k of ['search', 'cx']) stSum('tools', k, '');
-      for (const k of ['spend', 'caps']) stSum('money', k, '');
+      for (const k of ['spend', 'caps', 'month']) stSum('money', k, '');
       // Behaviour changes waiting for the owner (lib/behaviour-changes): the link says how many.
       const chLink = document.getElementById('st-changes-link');
       if (chLink) fetch('/api/behaviour-changes').then((r) => r.ok ? r.json() : null).then((j) => {
@@ -3964,10 +3966,11 @@
 
       html += `<div class="st-section" id="st-emergency-section"><h4>Emergency</h4>
         <div class="st-row">
-          <label>Kill switch</label>
-          <button class="st-test-btn" style="color:var(--on-color-text);background:var(--halt-banner-bg)" onclick="haltHub()">⛔ Halt all agents</button>
+          <label>Stop all agents</label>
+          <button id="st-stop-all" class="st-test-btn" style="color:var(--on-color-text);background:var(--halt-banner-bg)" onclick="haltHub()">⛔ Stop all agents</button>
         </div>
-        <div class="st-hint">Stops every running turn and job and blocks new ones until you press Resume.</div>
+        <div class="st-hint">Stops every running turn, worker, job and research run and blocks new ones until you press Resume. Scheduled tasks that come due meanwhile wait and run after Resume.</div>
+        <div id="st-stop-panel" class="st-hint" style="display:none;margin-left:0"></div>
         <div class="st-row">
           <label>Provider pacing</label>
           <div id="st-pacing" style="flex:1;font-size:0.8rem;display:flex;flex-direction:column;gap:6px"></div>
@@ -4119,6 +4122,16 @@
         </div>
         <div class="st-hint" style="margin-left:158px">Caps count pay-per-use spend only (API keys and paid cloud voices), never plan use. Over a cap, an agent's decided actions (sending, writing outside its folders, admin, destructive) switch to ask for the rest of the day; nothing is silently stopped. Blank = unlimited.</div>
         <div class="st-row">
+          <label style="flex-basis:150px" title="A hard stop on pay-per-use spend for the month. Once it is used up, agents on pay-per-use models answer with a short notice until the month starts again or you raise the cap. Plan and local agents keep working.">Monthly cap ($)</label>
+          <input type="text" id="st-cap-month" placeholder="no cap" inputmode="decimal" style="max-width:120px">
+          <span style="font-size:0.78rem;color:var(--text-dim)">month starts on day</span>
+          <input type="text" id="st-cap-month-day" placeholder="1" inputmode="numeric" style="max-width:44px" title="1 to 28; 1 is the calendar month">
+        </div>
+        <div class="st-row">
+          <label style="flex-basis:150px"></label>
+          <div id="st-month-spend" style="flex:1;font-size:0.8rem;color:var(--text-dim)"></div>
+        </div>
+        <div class="st-row">
           <label style="flex-basis:150px" title="A monthly API credit, for example the one that comes with a Claude Max plan. The header then shows this period's spend through the hub against it.">Monthly API credit ($)</label>
           <select id="st-credit-provider" onchange="fillCreditInputs()" style="max-width:120px">${CREDIT_PROVIDERS.map(([id, label]) => `<option value="${id}">${label}</option>`).join('')}</select>
           <input type="text" id="st-credit-amount" placeholder="none" inputmode="decimal" style="max-width:80px">
@@ -4144,6 +4157,7 @@
       stHelpMount();   // the ⓘ help beside each setting, and the words the search also matches (lib/ui-settings-help.js); after the rows are drawn, never inside their markup
       paintDesktopPush();
       paintPacingSettings();
+      stStopPanelStart();   // Stop all agents: what was stopped, what is finishing, what waits (admins; refreshes while open)
       paintSpendSettings();
       loadRootGrants();
       researchCapsLoad();   // the "Today: n started by agents" line (admin only; hidden when the route fails)
@@ -7076,14 +7090,37 @@
       // A cap typed but not saved (or refused) keeps what was typed: the repaint fills only unchanged fields.
       if (agentInp && document.activeElement !== agentInp && !dialogGuard.changed(agentInp)) agentInp.value = caps.perAgentDailyUsd ? String(caps.perAgentDailyUsd) : '';
       if (hubInp && document.activeElement !== hubInp && !dialogGuard.changed(hubInp)) hubInp.value = caps.hubDailyUsd ? String(caps.hubDailyUsd) : '';
+      paintMonthlyCap(t.monthly);
+    }
+    // Monthly spending cap: the row, the "Spent this month" line and the Money group summary.
+    function monthDateText(iso, zone) {
+      try { return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: zone || undefined }); } catch { return String(iso).slice(0, 10); }
+    }
+    function paintMonthlyCap(m) {
+      const line = document.getElementById('st-month-spend');
+      const capInp = document.getElementById('st-cap-month');
+      const dayInp = document.getElementById('st-cap-month-day');
+      if (!line) return;
+      if (!m) { line.textContent = ''; stSum('money', 'month', ''); return; }   // an older hub: no monthly figures
+      if (capInp && document.activeElement !== capInp && !dialogGuard.changed(capInp)) capInp.value = m.cap ? String(m.cap) : '';
+      if (dayInp && document.activeElement !== dayInp && !dialogGuard.changed(dayInp)) dayInp.value = m.resetDay && m.resetDay !== 1 ? String(m.resetDay) : '';
+      const resets = monthDateText(m.until, m.zone);
+      const unpriced = (m.unpriced || 0) > 0 ? ` (plus ${m.unpriced} call${m.unpriced === 1 ? '' : 's'} with no known price)` : '';
+      line.textContent = m.cap
+        ? `Spent this month: ${usd(m.total)} of ${usd(m.cap)} (${m.pct}%) · resets ${resets}${unpriced}${m.over ? ' · used up: pay-per-use agents wait until the reset or a higher cap' : ''}`
+        : `Spent this month: ${usd(m.total)} · no monthly cap · month resets ${resets}${unpriced}`;
+      line.style.color = m.over ? 'var(--error)' : '';
+      stSum('money', 'month', m.cap ? `monthly cap ${usd(m.cap)}: ${usd(m.total)} spent (${m.pct}%)` : 'no monthly cap', !!m.over);
     }
     async function saveSpendCaps(opts = {}) {
       let result = true;
-      const saved = dialogGuard.savePoint(['st-cap-agent', 'st-cap-hub'].map(id => document.getElementById(id)));
+      const saved = dialogGuard.savePoint(['st-cap-agent', 'st-cap-hub', 'st-cap-month', 'st-cap-month-day'].map(id => document.getElementById(id)));
       const btn = document.getElementById('st-caps-save');
       const val = (id) => { const v = (document.getElementById(id)?.value || '').trim().replace(/^\$/, ''); return v === '' ? null : Number(v); };
       const perAgentDailyUsd = val('st-cap-agent');
       const hubDailyUsd = val('st-cap-hub');
+      const monthlyUsd = (document.getElementById('st-cap-month')?.value || '').trim().replace(/^\$/, '');   // blank = no monthly cap; the hub checks the amount and the day
+      const monthlyResetDay = (document.getElementById('st-cap-month-day')?.value || '').trim();
       for (const v of [perAgentDailyUsd, hubDailyUsd]) if (v !== null && !(Number.isFinite(v) && v >= 0)) {
         const m = 'Caps must be a dollar amount, or blank for unlimited.';
         if (!opts.quiet) alert(m);
@@ -7091,11 +7128,12 @@
       }
       if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
       try {
-        const r = await stSaveFetch('/api/ledger/caps', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ perAgentDailyUsd, hubDailyUsd }) });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        saved();
+        const r = await stSaveFetch('/api/ledger/caps', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ perAgentDailyUsd, hubDailyUsd, monthlyUsd, monthlyResetDay }) });
         const d = await r.json().catch(() => null);
+        if (!r.ok) throw new Error((d && d.error) || `HTTP ${r.status}`);
+        saved();
         if (d && d.caps && spendToday) spendToday.caps = d.caps;
+        if (d && d.monthly) { if (spendToday) spendToday.monthly = d.monthly; paintMonthlyCap(d.monthly); }
         if (btn) { btn.className = 'st-test-btn ok'; btn.textContent = 'Saved'; }
         if (!opts.quiet) {
           document.getElementById('st-saved')?.classList.add('show');
@@ -7204,7 +7242,7 @@
       { label: 'Sandbox defaults', fields: () => ['st-sb-member', 'st-sb-admin', 'st-tools-default'].map(id => document.getElementById(id)), save: (o) => saveSandboxDefaults(o) },
       { label: 'Command lockbox default', fields: () => [document.getElementById('st-lb-default')], save: (o) => saveLockboxDefault(o) },
       { label: 'Plan usage warning', fields: () => [document.getElementById('st-plan-warn')], save: (o) => savePlanWarn(o) },
-      { label: 'Spend caps', fields: () => ['st-cap-agent', 'st-cap-hub'].map(id => document.getElementById(id)), save: (o) => saveSpendCaps(o) },
+      { label: 'Spend caps', fields: () => ['st-cap-agent', 'st-cap-hub', 'st-cap-month', 'st-cap-month-day'].map(id => document.getElementById(id)), save: (o) => saveSpendCaps(o) },
       { label: 'API credit', fields: () => ['st-credit-provider', 'st-credit-amount', 'st-credit-day'].map(id => document.getElementById(id)), save: (o) => saveCredit(o) },
       { label: 'System health', fields: () => hlFieldEls(), save: (o) => saveHealthSettings(o) },
       { label: 'Self-check', fields: () => scFieldEls(), save: (o) => saveSelfCheckSettings(o) },
@@ -11328,22 +11366,64 @@
       bar.querySelector('#hub-halt-text').textContent = '⛔ Hub halted: all agents stopped, nothing new will start' + (reason ? ` (${reason})` : '');
     }
     async function haltHub() {
-      if (!confirm('Halt ALL agents?\n\nEvery running turn and job is stopped and nothing new starts (chat, schedules, delegation) until you press Resume.')) return;
+      if (!confirm('Stop ALL agents?\n\nEvery running turn, worker, job and research run is stopped and nothing new starts until you press Resume. Scheduled tasks that come due wait and run, one at a time, after Resume.')) return;
       try {
-        const r = await fetch('/api/hub/halt', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: 'halted from the desktop UI' }) });
+        const r = await fetch('/api/hub/halt', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: 'stopped from the Settings page' }) });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const d = await r.json();
         paintHubHalt(true, d.reason);
-        document.getElementById('st-overlay')?.remove();
-      } catch (e) { alert(`Halt failed: ${e.message}`); }
+        if (document.getElementById('st-stop-panel')) stStopPanelStart(); else document.getElementById('st-overlay')?.remove();   // the dialog stays open to show what was stopped
+      } catch (e) { alert(`Stop failed: ${e.message}`); }
     }
     async function resumeHub() {
+      let held = 0;
+      try { const s = await (await fetch('/api/hub/stop-status', { credentials: 'include' })).json(); held = ((s.waiting && s.waiting.scheduled) || []).length; } catch {}
+      if (!confirm(`Resume all agents?\n\n${held ? `${held} scheduled task${held === 1 ? '' : 's'} that came due while stopped will run now, one at a time, at least 30 seconds apart.` : 'Agents can work again.'}`)) return;
       try {
         const r = await fetch('/api/hub/resume', { method: 'POST', credentials: 'include' });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         paintHubHalt(false);
+        stStopPanelPaint(null);
       } catch (e) { alert(`Resume failed: ${e.message}`); }
     }
+
+    // ── Stop all agents panel (Settings > Money and safety > Emergency): what was stopped, what is finishing, what waits, what was kept ──
+    let stStopPanelTimer = null;
+    function stStopPanelStart() {
+      if (stStopPanelTimer) { clearInterval(stStopPanelTimer); stStopPanelTimer = null; }
+      if (!document.getElementById('st-stop-panel') || !isHubAdmin()) return;
+      stStopPanelRefresh();
+      stStopPanelTimer = setInterval(() => {
+        if (!document.getElementById('st-stop-panel')) { clearInterval(stStopPanelTimer); stStopPanelTimer = null; return; }
+        stStopPanelRefresh();
+      }, 5000);
+    }
+    async function stStopPanelRefresh() {
+      try {
+        const r = await fetch('/api/hub/stop-status', { credentials: 'include' });
+        if (!r.ok) return stStopPanelPaint(null);
+        stStopPanelPaint(await r.json());
+      } catch { /* keep what is shown */ }
+    }
+    function stStopPanelPaint(s) {
+      const el = document.getElementById('st-stop-panel');
+      if (!el) return;
+      if (!s || !s.halted) { el.style.display = 'none'; el.innerHTML = ''; return; }
+      const names = (a, f) => (a && a.length ? a.map(f || String).join(', ') : 'none');
+      const jobName = (j) => j.name || j.id;
+      const st = s.stopped || {}, fin = s.finishing || {}, wait = s.waiting || {}, kept = s.kept || {};
+      const when = s.at ? new Date(s.at).toLocaleString() : '';
+      const counts = s.counts ? ` (${s.counts.agents || 0} agents, ${s.counts.workers || 0} workers, ${s.counts.jobs || 0} jobs, ${s.counts.research || 0} research runs)` : '';
+      const nSched = (wait.scheduled || []).length;
+      el.style.display = '';
+      el.innerHTML = `<div><b>Stopped at ${esc(when)}${s.by ? ` by ${esc(s.by)}` : ''}</b>${s.reason ? ` (${esc(s.reason)})` : ''}</div>
+        <div>Stopped: agents ${esc(names(st.agents))}; workers ${esc(names(st.workers))}; jobs ${esc(names(st.jobs, jobName))}; research runs ${esc(names(st.research, (x) => x.agent || x.id))}.${esc(counts)}</div>
+        <div>Still finishing: jobs ${esc(names(fin.jobs, jobName))}; turns ${esc(names(fin.turns))}.</div>
+        <div>Waiting: ${nSched} scheduled task${nSched === 1 ? '' : 's'} held (${esc(names(wait.scheduled, (t) => t.label))}); ${wait.tasksMd || 0} TASKS.md task${wait.tasksMd === 1 ? '' : 's'} paused.</div>
+        <div>Kept running: ${esc(names(kept.jobs, jobName))}.</div>
+        <div style="margin-top:6px"><button class="st-test-btn" onclick="stStopPanelResume()">Resume</button></div>`;
+    }
+    async function stStopPanelResume() { await resumeHub(); stStopPanelRefresh(); }
 
     // ── Provider pacing: amber banner while a provider runs one call at a time (after a
     // rate limit / outage) or is ramping its parallelism back up. Fed by status_snapshot

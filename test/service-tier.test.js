@@ -421,7 +421,8 @@ test('member cap: Standard for a member turn or a member agent origin, computed 
   assert.ok(iCap > 0 && iCap < chat.indexOf('if (codexCli.isCodexCliModel(agentModel)) {\n    // The gateway cannot call a subscription model'), 'computed before the routing branches');
   assert.match(chat, /await streamViaCodex\(agent, finalMessage, imagePaths, res, \{[^]*?memberTurn,[^]*?memberOrigin,\n      tier: turnTier,/, 'the Codex path gets it');
   assert.match(chat, /await streamViaGateway\(agent, finalMessage, imagePaths, res, \{[^]*?effort: turnEffortAsked,\n      tier: turnTier,/, 'the gateway path gets it');
-  assert.match(chat, /effort: turnEffort, tier: tierNow \}/, 'the tool loop passes it to chatCompletionStream');
+  // (turnStartedAt follows tier: the monthly spending cap compares a turn's start with the moment the cap was reached)
+  assert.match(chat, /effort: turnEffort, tier: tierNow(?:, turnStartedAt: ledgerStartedAt)? \}/, 'the tool loop passes it to chatCompletionStream');
   assert.match(chat, /let codexServiceTier = \(options\.memberTurn \|\| options\.memberOrigin\) \? null :/, 'Codex defends in depth');
   assert.match(chat, /let tierNow = options\.tier \? tierLib\.normalize\(options\.tier\) : 'standard'/, 'a call with no tier (tiger-team and other internal calls) is Standard');
   assert.ok(!/simpleTurn[^\n]*tier|tier[^\n]*simpleTurn/.test(chat), 'Simple turns keep the agent tier (only members are capped)');

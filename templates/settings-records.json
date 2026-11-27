@@ -17432,11 +17432,12 @@
       "kind": "setting",
       "name": "Stop all agents",
       "labels": [
+        "Stop all agents",
         "Kill switch"
       ],
-      "what": "Stops everything every agent is doing and blocks new work until you press Resume. It survives a restart.",
+      "what": "Stops everything every agent is doing (turns, helpers, background jobs, research runs) and blocks new work until you press Resume. Scheduled tasks that come due meanwhile wait and run after Resume, one at a time. It survives a restart.",
       "when": "Use it in an emergency, if agents are doing something you did not want. Press Resume when it is safe.",
-      "risk": "Everything running stops, including scheduled jobs, so work in progress may be lost or half done.",
+      "risk": "Work in progress stops and may be half done. A job you marked \"Keep running when all agents are stopped\" keeps running. Things outside your Maestro (the computer's own scheduled jobs) are not touched.",
       "def": "Default: not stopped. We recommend leaving it that way and keeping this for emergencies.",
       "restart": false,
       "danger": "everyday",
@@ -17458,10 +17459,10 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "Kill switch"
+          "selector": "#st-stop-all"
         }
       ],
-      "facts": "Flag file data/hub-halt.json, survives restart lib/hub-halt.js:2-9; blocks scheduler lib/scheduler.js:527 and chat lib/sdk-chat.js:59; sends a phone alert lib/push.js:281. Audit class 'everyday' corrected: needs care (stops every agent)."
+      "facts": "Flag file data/hub-halt.json, survives restart lib/hub-halt.js:2-9; blocks scheduler lib/scheduler.js:527 and chat lib/sdk-chat.js:59; sends a phone alert lib/push.js:281. Audit class 'everyday' corrected: needs care (stops every agent). Stop: lib/sdk-chat.js haltHub (also research stopAll, keep-flag jobs spared); Resume releases held tasks lib/scheduled-tasks.js release (30 s apart); lead: Stop at once on a typed command, Resume a confirm card lib/settings-tool.js setAction."
     },
     {
       "id": "OPT-0543",
@@ -32298,6 +32299,79 @@
           "selector": "#p-prefix"
         }
       ]
+    },
+    {
+      "id": "OPT-1083",
+      "kind": "setting",
+      "name": "Monthly spending cap",
+      "labels": [
+        "Monthly cap ($)"
+      ],
+      "what": "Sets how many dollars of pay-per-use spending all your agents together may use in a month. When it is used up, agents on pay-per-use models stop answering until the month starts again or you raise it; agents on a subscription or on this computer keep working.",
+      "when": "Set it if you use pay-per-use models (API keys) and want a hard limit on the bill. Leave it empty for no limit.",
+      "risk": "At the cap, pay-per-use agents cannot answer, so work that needs them waits. A reply already being written finishes first. Subscriptions and local models are never counted or stopped.",
+      "def": "Default: empty, no monthly cap. We recommend setting one if you use pay-per-use models. You get one notice at 80% and one when it is reached.",
+      "restart": false,
+      "danger": "care",
+      "who": "admin",
+      "lead": "confirm",
+      "words": [
+        "monthly",
+        "cap",
+        "limit",
+        "budget",
+        "bill",
+        "spend",
+        "spending",
+        "dollars",
+        "month",
+        "api",
+        "pay per use"
+      ],
+      "scope": "install",
+      "home": "Settings > Models and money",
+      "storedAs": "settings.ledger.monthlyUsd",
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-cap-month"
+        }
+      ],
+      "facts": "settings.ledger.monthlyUsd lib/ledger.js monthlySpend/monthlyGate/checkSpend; guard lib/gateway-client.js spendGuard (every pay-per-use request), lib/voice/cloud.js; route POST /api/ledger/caps server.js."
+    },
+    {
+      "id": "OPT-1084",
+      "kind": "setting",
+      "name": "Month starts on day",
+      "labels": [
+        "Month starts on day"
+      ],
+      "what": "Chooses the day of the month the monthly spending cap starts again, for example the day your provider's bill starts.",
+      "when": "Change it to match your billing day. Leave it at 1 for calendar months.",
+      "risk": "Changing it moves the start of the current month, so this month's total is counted again from the new day.",
+      "def": "Default: 1, calendar months, in this Maestro's time zone.",
+      "restart": false,
+      "danger": "care",
+      "who": "admin",
+      "lead": "confirm",
+      "words": [
+        "reset day",
+        "billing day",
+        "month start",
+        "cycle",
+        "renews",
+        "monthly cap"
+      ],
+      "scope": "install",
+      "home": "Settings > Models and money",
+      "storedAs": "settings.ledger.monthlyResetDay",
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-cap-month-day"
+        }
+      ],
+      "facts": "settings.ledger.monthlyResetDay 1-28 lib/ledger.js cleanMonthly/monthPeriod (hub zone, lib/timezone hubZone)."
     }
   ]
 }

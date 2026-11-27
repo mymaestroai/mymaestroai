@@ -108,7 +108,7 @@ test('the reply path: real replies record health, the spend log books a failed r
   assert.match(chat, /const modelHealth = require\('\.\/model-health'\)\.getModelHealth\(\);/);
   assert.match(chat, /const stopped = !!terminalError && \(terminalError\.name === 'AbortError' \|\| String\(terminalError\.message \|\| ''\)\.includes\('aborted'\)\);\n\s*const failed = !!terminalError && !stopped;/);
   assert.match(chat, /durationMs: Date\.now\(\) - ledgerStartedAt, ok: !failed,/, 'no more ok:true for every reply');
-  assert.match(chat, /if \(!stopped && typeof model === 'string'\) \{ try \{ modelHealth\.record\(model, failed \? \{ ok: false, kind: turnErrorInfo && turnErrorInfo\.kind/);
+  assert.match(chat, /if \(!stopped && !monthlyRefused && typeof model === 'string'\) \{ try \{ modelHealth\.record\(model, failed \? \{ ok: false, kind: turnErrorInfo && turnErrorInfo\.kind/);
 });
 
 test('an agent that consults a failing agent gets the plain explanation, not the raw provider text', () => {

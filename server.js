@@ -48,7 +48,7 @@ const {
   deleteAgent, renameAgent, getAvailableModels, setAgentModel, setAgentDisplay, setAgentIcon, EDITABLE_FILES,
 } = require('./lib/agents');
 const {
-  handleChatStream, handleChat, handleAskResponse, handleInterjection, handleAlert, ensureAlertSecret, resolveToolConfirm, stopAgentTurn, haltHub, resumeHub, getAgentStatuses, getJobRunner, getScheduledTasks, getPacing, getApprovals, getLedger, getAllowances, getEffectivePolicy, getAgentRequests, getCompaction,
+  handleChatStream, handleChat, handleAskResponse, handleInterjection, handleAlert, ensureAlertSecret, resolveToolConfirm, stopAgentTurn, haltHub, resumeHub, stopStatus, getAgentStatuses, getJobRunner, getScheduledTasks, getPacing, getApprovals, getLedger, getAllowances, getEffectivePolicy, getAgentRequests, getCompaction,
   cancelWorker, loadConversationLog, clearConversationLog,
   clearConversation, flushActiveResponses, runTigerTeam, runRoundtable,
   continueTigerTeam, resumeTigerTeam, getTigerTeamState, reconstituteTigerTeam, stopTigerTeam, listTigerTeams,
@@ -283,6 +283,13 @@ function readBodyRaw(req) {
 /** The agent a non-JSON request names: ?agent=<name> or the X-Agent header (audio upload to /api/voice/stt). */
 function agentFromQuery(req) {
   try { return new URL(req.url, 'http://x').searchParams.get('agent') || String(req.headers['x-agent'] || '') || null; } catch { return null; }
+}
+
+// The monthly spending cap's figures for the Settings page: this month's pay-per-use total against the cap, the window as ISO times.
+function monthlyView(l) {
+  const m = l.monthlySpend();
+  return { total: m.total, unpriced: m.unpriced, turns: m.turns, cap: m.cap, pct: m.pct == null ? null : Math.round(m.pct), over: m.over, resetDay: m.resetDay, zone: m.zone,
+    since: new Date(m.start).toISOString(), until: new Date(m.end).toISOString() };
 }
 
 function jsonResponse(res, code, data) {
@@ -1325,7 +1332,7 @@ async function handleHttpRequest(req, res) {
     }
     if (pathname === '/api/ledger/today' && req.method === 'GET') {
       const l = getLedger();
-      return jsonResponse(res, 200, { ...l.today(), caps: l.caps(), credits: l.credits() });
+      return jsonResponse(res, 200, { ...l.today(), caps: l.caps(), credits: l.credits(), monthly: monthlyView(l) });
     }
     // Monthly API credit per provider (e.g. the API credit with a Claude Max plan): { provider, monthlyUsd, resetDay }.
     if (pathname === '/api/ledger/credits' && req.method === 'POST') {
@@ -1348,8 +1355,23 @@ async function handleHttpRequest(req, res) {
       let body = {};
       try { body = JSON.parse((await readBody(req)) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'invalid JSON' }); }
       const num = (v) => { if (v === null || v === undefined || v === '') return null; const n = Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
-      hubSettings.updateSettings({ ledger: { perAgentDailyUsd: num(body.perAgentDailyUsd), hubDailyUsd: num(body.hubDailyUsd) } });
-      return jsonResponse(res, 200, { caps: getLedger().caps() });
+      // The monthly cap (settings.ledger.monthlyUsd / monthlyResetDay): sent together with the daily caps or on its own.
+      const hasMonthly = body.monthlyUsd !== undefined || body.monthlyResetDay !== undefined;
+      const hasDaily = body.perAgentDailyUsd !== undefined || body.hubDailyUsd !== undefined || !hasMonthly;
+      const before = hubSettings.getSetting('ledger', {}) || {};
+      let monthly = { monthlyUsd: before.monthlyUsd ?? null, monthlyResetDay: before.monthlyResetDay ?? 1 };
+      if (hasMonthly) {
+        try { monthly = require('./lib/ledger').cleanMonthly({ monthlyUsd: body.monthlyUsd !== undefined ? body.monthlyUsd : monthly.monthlyUsd, monthlyResetDay: body.monthlyResetDay !== undefined ? body.monthlyResetDay : monthly.monthlyResetDay }); }
+        catch (e) { return jsonResponse(res, 400, { error: e.message }); }
+      }
+      hubSettings.updateSettings({ ledger: {
+        perAgentDailyUsd: hasDaily ? num(body.perAgentDailyUsd) : num(before.perAgentDailyUsd),
+        hubDailyUsd: hasDaily ? num(body.hubDailyUsd) : num(before.hubDailyUsd),
+        monthlyUsd: monthly.monthlyUsd, monthlyResetDay: monthly.monthlyResetDay } });
+      return jsonResponse(res, 200, { caps: getLedger().caps(), monthly: monthlyView(getLedger()) });
+    }
+    if (pathname === '/api/ledger/month' && req.method === 'GET') {
+      return jsonResponse(res, 200, monthlyView(getLedger()));
     }
     if (pathname === '/api/hub/pacing/reset' && req.method === 'POST') {
       let body = {};
@@ -1367,11 +1389,16 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/hub/halt' && req.method === 'POST') {
       let body = {};
       try { body = JSON.parse((await readBody(req)) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'invalid JSON' }); }
-      const r = haltHub(typeof body.reason === 'string' ? body.reason : null);
+      const r = haltHub(typeof body.reason === 'string' ? body.reason : null, { by: req.hubUser ? (req.hubUser.name || req.hubUser.login || req.hubUser.id) : null });
       return jsonResponse(res, 200, r);
     }
     if (pathname === '/api/hub/resume' && req.method === 'POST') {
       return jsonResponse(res, 200, resumeHub());
+    }
+    // What the last Stop all agents stopped, what is still finishing, what waits, what was kept (admins).
+    if (pathname === '/api/hub/stop-status' && req.method === 'GET') {
+      if (!access.isAdmin(req.hubUser || { role: 'admin' })) return jsonResponse(res, 403, { error: 'admin_only' });
+      return jsonResponse(res, 200, stopStatus());
     }
 
     if (pathname === '/api/agents/reload' && req.method === 'POST') {
@@ -2067,6 +2094,13 @@ async function handleHttpRequest(req, res) {
       const id = params.get('id');
       if (id) { try { return jsonResponse(res, 200, runner.status(id, null, { tailLines: Number(params.get('tail') || 40) })); } catch (e) { return jsonResponse(res, 404, { error: e.message }); } }
       return jsonResponse(res, 200, { mode: runner.mode(), jobs: runner.list(null) });
+    }
+    // An admin marks a job "keep running when all agents are stopped" (or clears it).
+    if (pathname === '/api/jobs/keep' && req.method === 'POST') {
+      if (!access.isAdmin(req.hubUser || { role: 'admin' })) return jsonResponse(res, 403, { error: 'admin_only' });
+      let body = {};
+      try { body = JSON.parse((await readBody(req)) || '{}') || {}; } catch { return jsonResponse(res, 400, { error: 'invalid JSON' }); }
+      try { return jsonResponse(res, 200, getJobRunner().setKeep(body.id, body.keep === true)); } catch (e) { return jsonResponse(res, 404, { error: e.message }); }
     }
     if (pathname === '/api/jobs/cancel' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
@@ -3088,6 +3122,8 @@ async function handleHttpRequest(req, res) {
           }
 
           if (provider === 'perplexity') {
+            const capText = require('./lib/spend-gate').refusal({ provider: 'perplexity', model: 'perplexity/sonar' });   // monthly spending cap: this test sends a paid request
+            if (capText) return jsonResponse(res, 200, { ok: false, error: capText });
             const r = await fetch('https://api.perplexity.ai/chat/completions', {
               method: 'POST',
               headers: { 'Authorization': `Bearer ${testKey}`, 'Content-Type': 'application/json' },

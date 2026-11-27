@@ -510,7 +510,8 @@ test('wiring in lib/sdk-chat.js: consults are held before any stand-in; producer
   assert.ok(at('await holdConsultForCall(', nine) < at('const capacity = await isCapacityAgent(agentName);', nine));
   assert.ok(at('await holdConsultForCall(', nine) < at('await standInFor(agentName, prompt, sseCtx, coordinatorName, { ...opts, callerTurn', nine));
   // the queue drain gets the held predicate and releases what it ran
-  assert.ok(src.includes('isHeld: (job) => voiceCall.holds(job.to, { id: consultQueue.jobHoldId(job), kind: \'consultation\''));
+  // (isHeld is a block now: the voice-call hold first, then the resume pacer's turn)
+  assert.ok(src.includes('isHeld: (job) => {') && src.includes('if (voiceCall.holds(job.to, { id: consultQueue.jobHoldId(job), kind: \'consultation\''));
   assert.ok(src.includes('voiceCall.registerProducer(\'consultation\', {') && src.includes("voiceCall.registerProducer('consult_reply'") && src.includes("voiceCall.registerProducer('task'"));
   // scheduled tasks and jobs get the registry
   const ctor = src.slice(at('function getScheduledTasks() {'), at('function getJobRunner() {'));

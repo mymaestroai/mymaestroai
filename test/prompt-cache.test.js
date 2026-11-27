@@ -93,7 +93,8 @@ test('gateway system prompt no longer contains the per-message hits; the loop pa
   const chat = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-chat.js'), 'utf8');
   assert.match(chat, /hitsOut: hubContextOut \}\);/);
   assert.match(chat, /annotateForContext\(trimmed, \{ hubContext: hubContextOut\.text \|\| '', timeZone: timeZoneLib\.zoneForAgent\(agentName\) \}\)/);
-  assert.match(chat, /noRetries: !!recoveryCall, agent: agentName, effort: turnEffort, tier: tierNow \}/);
+  // turnStartedAt (monthly spending cap, lib/ledger monthlyGate) rides along: a turn that began before the cap was reached finishes
+  assert.match(chat, /noRetries: !!recoveryCall, agent: agentName, effort: turnEffort, tier: tierNow(?:, turnStartedAt: ledgerStartedAt)? \}/);
   const agents = fs.readFileSync(path.join(__dirname, '..', 'lib', 'agents.js'), 'utf8');
   assert.match(agents, /if \(opts\.hitsOut && typeof opts\.hitsOut === 'object'\) opts\.hitsOut\.text = hitsText; else sections\.push\(hitsText\);/);
 });
