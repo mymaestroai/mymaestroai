@@ -3664,10 +3664,12 @@
         const X = window.hubSettingsExpert;
         const fj = async (u, o) => { const r = await fetch(u, { credentials: 'include', ...(o || {}) }); const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || 'Request failed'); return j; };
         const up = body('upkeep'), exp = document.getElementById('st-expert-section');
+        // what the module draws is what the hub holds: the dialog guard takes it as saved (Close asks only about real edits)
+        const guardLoaded = (h) => { try { dialogGuard.markLoaded([...h.querySelectorAll('input, select, textarea')]); } catch { /* no guard */ } };
         const recsP = window.hubSettingsHelp ? window.hubSettingsHelp.load(false) : fj('/api/settings-records');
         recsP.then((recs) => {
-          if (up && !document.getElementById('st-mem-limit')) { const d = document.createElement('div'); d.id = 'st-mem-limit'; d.className = 'st-section'; up.insertBefore(d, up.firstChild); X.renderMemoryLimit(d, { records: recs, fetchJson: fj, toast: hubToast }).catch(() => {}); }
-          if (exp && !document.getElementById('st-env-values')) { const d = document.createElement('div'); d.id = 'st-env-values'; exp.appendChild(d); X.render(d, { records: recs, fetchJson: fj, toast: hubToast }).catch(() => {}); }
+          if (up && !document.getElementById('st-mem-limit')) { const d = document.createElement('div'); d.id = 'st-mem-limit'; d.className = 'st-section'; up.insertBefore(d, up.firstChild); X.renderMemoryLimit(d, { records: recs, fetchJson: fj, toast: hubToast, loaded: guardLoaded }).catch(() => {}); }
+          if (exp && !document.getElementById('st-env-values')) { const d = document.createElement('div'); d.id = 'st-env-values'; exp.appendChild(d); X.render(d, { records: recs, fetchJson: fj, toast: hubToast, loaded: guardLoaded }).catch(() => {}); }
         }).catch(() => {});
       }
       document.dispatchEvent(new CustomEvent('hub-settings-drawn'));
@@ -6096,6 +6098,16 @@
         el.placeholder = effective;
         if (def) def.textContent = effective === r.dflt ? STG.p5cDefaultText(r) : `In use now: ${effective} (from the startup settings).`;
       }
+      // the row now shows what the hub holds: its fields are saved as far as the dialog guard is concerned (Close and leaving the
+      // page ask only about real unsaved edits); only this row, so an edit in another row stays an edit
+      try {
+        const fields = [];
+        for (const c of [el, ...document.querySelectorAll(`[id^="${r.id}-"]`)]) {
+          if (/^(INPUT|SELECT|TEXTAREA)$/.test(c.tagName)) fields.push(c);
+          else fields.push(...c.querySelectorAll('input, select, textarea'));   // the member models list: a box of checkboxes
+        }
+        dialogGuard.markLoaded(fields);
+      } catch { /* no guard on this page */ }
     }
     // The model lists (member models, plan switch targets) come from the list the pickers use; then every row is painted.
     // Every row is painted first from the saved settings (a row that does not need the model list never waits for it); when the list
@@ -6118,6 +6130,7 @@
           const ticked = new Set(have ? [...el.querySelectorAll('input:checked')].map(c => c.value) : (Array.isArray(set) ? set : []));
           const all = [...new Set([...models, ...ticked])];
           el.innerHTML = all.length ? all.map(m => `<label style="display:flex;gap:6px;align-items:center;font-size:0.85rem"><input type="checkbox" value="${esc(m)}"${ticked.has(m) ? ' checked' : ''} onchange="p5cSave('${r.opt}')"> ${esc(name(m))}</label>`).join('') : '<span style="font-size:0.8rem;color:var(--text-dim)">No models yet.</span>';
+          try { dialogGuard.markLoaded([...el.querySelectorAll('input')]); } catch { /* no guard on this page */ }   // drawn by the page (each tick saves on its own)
         }
       }
     }

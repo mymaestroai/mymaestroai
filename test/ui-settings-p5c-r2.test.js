@@ -260,3 +260,13 @@ test('an address with no override of its own shows the address in effect, also o
   assert.ok(/el\.placeholder = effective/.test(body));
   assert.ok(body.includes('In use now: ${effective} (from the startup settings).'));
 });
+
+test('the dialog guard takes what the new rows draw as saved: Close and leaving the page ask only about real edits (proof p1)', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'app.js'), 'utf8');
+  const i = src.indexOf('function p5cPaint(r)');
+  const paint = src.slice(i, src.indexOf('\n    }\n', i));
+  assert.ok(/dialogGuard\.markLoaded\(fields\)/.test(paint), 'each painted row marks its own fields loaded');
+  assert.ok(/querySelectorAll\('input, select, textarea'\)/.test(paint), 'including the checkboxes of the member models box');
+  assert.ok(/X\.renderMemoryLimit\(d, \{[^}]*loaded: guardLoaded/.test(src) && /X\.render\(d, \{[^}]*loaded: guardLoaded/.test(src), 'the startup values and the memory limit hand their drawn fields to the guard');
+  assert.ok(/dialogGuard\.markLoaded\(\[\.\.\.el\.querySelectorAll\('input'\)\]\)/.test(src), 'the member models list rebuilt after the catalogue too');
+});
