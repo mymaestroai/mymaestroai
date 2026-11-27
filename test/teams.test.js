@@ -250,14 +250,8 @@ test('static-files: ui-teams.js is served from lib/', () => {
   assert.match(read('lib/static-files.js'), /\['ui-teams\.js', 'lib\/ui-teams\.js'\]/);
 });
 
-test('agent-settings.html: the Reports to select', () => {
-  const h = read('agent-settings.html');
-  assert.match(h, /id="reports-to"[^>]*onchange="saveReportsTo\(\)"/);
-  assert.match(h, /Main agents report to nobody\./);
-  assert.match(h, /Who this agent takes its work from\. Shown in the sidebar's Teams view\./);
-  assert.match(h, /reportsTo: v \|\| null/);
-  assert.match(h, /loadReportsTo\(agent\);/);
-});
+// removed (P4-2): 'agent-settings.html: the Reports to select' pinned the old page's source; the card's Reports to row (OPT-0062) saves PATCH {reportsTo}
+// (test/ui-agent-card-basics.test.js, Role and team). The old page's two help sentences are not on the card.
 
 test('tree: every level is ordered like All Agents (the lead first, then by shown name)', () => {
   const t = require('../lib/ui-teams.js');

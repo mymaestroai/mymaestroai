@@ -198,7 +198,7 @@ test('Simple: the sheet and the sidebar fill start with the same two-part switch
 
 
 // ── Build Team (phone) ──
-const BUILD = () => ROW() + '\n' + fnSource('menuTeamSync');
+const BUILD = () => ROW();
 // changed (Owner 2026-11-24 07:32: "Create a classification of solo agents" / "Instead of 'no team'"): the All Agents second line reads "Solo · Build team"
 test('Build line: an admin sees "Solo · Build team" under a main agent with no team in All Agents; rows with a team and non-admins do not', () => {
   const e = env();
@@ -222,36 +222,17 @@ test('Build line: renderAgents passes build only for the group rows (the source)
   assert.ok(!/active: true, job: activeJobs\[a\.name\], build/.test(RENDER()), 'not in the Active section: no duplicate line');
 });
 
-function fakeEl(over) { return Object.assign({ hidden: false, disabled: false, href: '', textContent: '' }, over); }
-function menuRun({ admin = true, simple = false, cur = 'bea', live = {}, pending = [], alone = [] } = {}) {
-  const els = { 'menu-agent-settings': fakeEl(), 'menu-build-team': fakeEl() };
-  const e = env({ alone, env: { $: (id) => els[id], current: cur, live, isAdmin: () => admin, simpleOn: () => simple, agentByName: (n) => AGENTS.find((a) => a.name === n) } });
-  const api = load(e, BUILD() + '\nfor (const p of ' + JSON.stringify(pending) + ') buildTeamPending.add(p);', '{ menuTeamSync }');
-  api.menuTeamSync();
-  return els;
-}
-test('chat ⋮ menu: Agent settings (admins) points at the agent settings page; Build team only for a main agent with no team', () => {
-  let m = menuRun();
-  assert.strictEqual(m['menu-agent-settings'].hidden, false);
-  assert.strictEqual(m['menu-agent-settings'].href, '/agent-settings.html?agent=bea');
-  assert.strictEqual(m['menu-build-team'].hidden, false);
-  assert.strictEqual(m['menu-build-team'].disabled, false);
-  m = menuRun({ cur: 'ann' });   // has a team
-  assert.strictEqual(m['menu-build-team'].hidden, true);
-  assert.strictEqual(m['menu-agent-settings'].hidden, false);
-  m = menuRun({ cur: 'lia' });   // not a main agent
-  assert.strictEqual(m['menu-build-team'].hidden, true);
-  m = menuRun({ admin: false });
-  assert.ok(m['menu-agent-settings'].hidden && m['menu-build-team'].hidden, 'members: neither');
-  m = menuRun({ simple: true });
-  assert.ok(m['menu-agent-settings'].hidden && m['menu-build-team'].hidden, 'Simple: neither');
-  m = menuRun({ live: { ann: { buildingTeamFor: 'bea' } } });
-  assert.strictEqual(m['menu-build-team'].disabled, true);
-  assert.strictEqual(m['menu-build-team'].textContent, 'Building…');
-  m = menuRun({ pending: ['bea'] });
-  assert.strictEqual(m['menu-build-team'].disabled, true);
-  assert.match(html, /<a id="menu-agent-settings" class="chat-only"[^>]*hidden>[^<]*Agent settings<\/a>/);
-  assert.match(html, /<button id="menu-build-team" class="chat-only" hidden>/);
+// changed (P4-2): the chat's ⋮ menu has no Agent settings, Build team or Optimize team any more; the phone opens the card from the chat header name,
+// and Build team / Optimize team are rows of the card's Role and team section (ui-agent-card-basics tests; "Building…" is the page's buildTeamStart guard, tested below).
+test('chat ⋮ menu: no Agent settings, Build team or Optimize team items; no leftover section', () => {
+  for (const id of ['menu-agent-settings', 'menu-build-team', 'menu-optimize-team']) {
+    assert.ok(!html.includes(id), id + ' is gone from mobile.html');
+    assert.ok(!js.includes(id), id + ' is gone from mobile.js');
+  }
+  assert.doesNotMatch(html, /agent-settings\.html/);
+  assert.doesNotMatch(js, /agent-settings\.html|menuTeamSync/);
+  const menu = html.slice(html.indexOf('<div id="menu">'), html.indexOf('<div id="menu-adv">'));
+  assert.match(menu, /id="menu-settings"[^>]*>[^<]*Settings<\/button>\s*<!-- This device/, 'Settings is followed directly by the This device group: no empty section left behind');
 });
 
 test('buildTeamStart: POST the route, 202 opens the lead chat, an error shows the server text; one request at a time', async () => {
@@ -371,10 +352,9 @@ test('works alone (phone All Agents): the group row passes build only without th
   assert.match(js, /function worksAlone\(name\) \{\n  return isAdmin\(\) && !!\(teamSetup\.alone && Object\.prototype\.hasOwnProperty\.call\(teamSetup\.alone, name\)\) && !!window\.hubTeams && !window\.hubTeams\.hasTeam\(name, agents\);/);
   assert.match(js, /alone: d\.alone && typeof d\.alone === 'object' && !Array\.isArray\(d\.alone\) \? d\.alone : \{\}/);
 });
-test('works alone (phone ⋮ menu): Build team stays in the chat menu so it can be asked again', () => {
-  const m = menuRun({ alone: ['bea'] });
-  assert.strictEqual(m['menu-build-team'].hidden, false);
-  assert.strictEqual(m['menu-build-team'].disabled, false);
+test('works alone (phone): Build team can still be asked again, from the card row (the page keeps buildTeamStart; the ⋮ menu item is gone)', () => {
+  assert.match(js, /async function buildTeamStart\(name\) \{/);
+  assert.doesNotMatch(js, /menu-build-team/);
 });
 test('works alone (phone): a team under the agent ends it at once (the record no longer counts)', () => {
   const real = fs.readFileSync(path.join(__dirname, '..', 'mobile.js'), 'utf8');

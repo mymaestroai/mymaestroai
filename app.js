@@ -8006,26 +8006,15 @@
         for (const n of names) { voiceAgentChipPaint(n); modelPickCardLineRefill(n); }
       }, 600);
     });
-    // The agent row's "Settings", a new agent and a clone open the card; the old popup page only when the card is not there.
+    // A new agent and a clone open the card; if the card script did not load, the page itself opens on the card (the hash door).
     function openAgentSettings(agentName, event, row) {
       if (event && event.stopPropagation) event.stopPropagation();
       if (openAgentCard(agentName, row)) return;
       openAgentSettingsPopup(agentName);
     }
     function openAgentSettingsPopup(agentName) {
-      if (settingsWindows[agentName] && !settingsWindows[agentName].closed) {
-        settingsWindows[agentName].focus();
-        return;
-      }
-      const popup = window.open(
-        `/agent-settings.html?agent=${encodeURIComponent(agentName)}`,
-        `settings-${agentName}`,
-        'width=700,height=600,resizable=yes,scrollbars=yes'
-      );
-      if (popup) {
-        settingsWindows[agentName] = popup;
-        popup.addEventListener('beforeunload', () => { delete settingsWindows[agentName]; });
-      }
+      if (!agentName) return;
+      window.location.href = `/#agent-card=${encodeURIComponent(agentName)}`;
     }
 
     function openCreateAgent(event) {
@@ -8957,10 +8946,9 @@
       } catch (e) { console.warn('loadCyberModels failed', e.message); }
     }
 
-    // ── Row menu (⋯) and Build team (All Agents and Teams rows) ──
-    // One always-visible ⋯ per row opens ONE shared menu: Settings, and Build team for a main agent with no team (admins).
-    // No entries (a member, Simple mode) means no button. In All Agents the row is itself a <button>, so the ⋯ and the
-    // Build team link there are <span role="button"> (a button cannot sit inside a button); Teams rows use real buttons.
+    // ── Build team (All Agents and Teams rows) ──
+    // The rows have no ⋯ menu any more: the agent card opens from the name (Enter on the row's name opens it) and holds Build team and Optimize team.
+    // In All Agents the row is itself a <button>, so the Build team link there is a <span role="button"> (a button cannot sit inside a button); Teams rows use real buttons.
     const buildTeamPending = new Set();   // main agents whose Build team request is in flight from this page
     function teamBuilding(name) {
       if (buildTeamPending.has(name)) return true;
@@ -8971,10 +8959,8 @@
     function agentCanBuildTeam(a, inSimple) {
       return !!a && isHubAdmin() && (!!inSimple || !simpleOn()) && hubTeams.isMain(a) && !hubTeams.hasTeam(a.name, AGENTS);
     }
-    // Optimize team (admins): a main agent WITH a team shows this instead of Build team. Its sublabel is the size of what the review reads,
-    // fetched once per menu opening from GET /api/agents/:name/optimize-team/estimate.
+    // Optimize team (admins): a main agent WITH a team; the card's Role and team section carries the control and the size of what the review reads.
     const optimizeTeamPending = new Set();   // main agents whose Optimize team request is in flight from this page
-    const optimizeEstimates = {};            // name -> { days, turns, handOffs } once fetched (kept until the next menu opening refreshes it)
     function teamReviewing(name) {
       if (optimizeTeamPending.has(name)) return true;
       for (const s of Object.values(agentStatus)) if (s && s.reviewingTeamFor === name) return true;   // the reviewer's status carries it while the turn runs
@@ -8983,25 +8969,19 @@
     function agentCanOptimizeTeam(a) {
       return !!a && isHubAdmin() && !simpleOn() && hubTeams.isMain(a) && hubTeams.hasTeam(a.name, AGENTS);
     }
-    function optimizeSubText(name) {
-      const e = optimizeEstimates[name];
-      if (!e) return 'reads the last 30 days';
-      return `reads ${Number(e.days) || 30} days: ${Number(e.turns) || 0} turns, ${Number(e.handOffs) || 0} hand-offs`;
-    }
-    function agentMenuEntries(a) {
-      if (!a || !isHubAdmin() || simpleOn()) return [];
-      const out = [{ key: 'settings', label: 'Settings' }];
-      if (agentCanBuildTeam(a)) out.push(teamBuilding(a.name) ? { key: 'build', label: 'Building…', disabled: true } : { key: 'build', label: 'Build team' });
-      if (agentCanOptimizeTeam(a)) out.push(teamReviewing(a.name) ? { key: 'optimize', label: 'Reviewing…', disabled: true } : { key: 'optimize', label: 'Optimize team', sub: optimizeSubText(a.name) });
-      return out;
-    }
-    function agentMenuBtnHtml(a, tag) {
-      if (!agentMenuEntries(a).length) return '';
+    // Keyboard way into the card from a row: the name inside the row is role=button tabindex=0; Enter or Space on it opens the card (a click on the row still opens the chat).
+    function agentRowNameAttrs(a) {
       const label = hubEsc(a.display || capName(a.name));
-      const attrs = `class="agent-menu-btn" data-menu-agent="${hubEsc(a.name)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${label}" title="More for ${label}" onclick="agentMenuToggle(this, event)"`;
-      return tag === 'span'
-        ? `<span role="button" tabindex="0" ${attrs} onkeydown="if (event.key === 'Enter' || event.key === ' ') agentMenuToggle(this, event)">⋯</span>`
-        : `<button type="button" ${attrs}>⋯</button>`;
+      return ` role="button" tabindex="0" data-card-agent="${hubEsc(a.name)}" aria-label="Settings for ${label}"`;
+    }
+    if (typeof document !== 'undefined' && document.addEventListener) {
+      document.addEventListener('keydown', e => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        const t = e.target && e.target.closest ? e.target.closest('.name-text[data-card-agent]') : null;
+        if (!t) return;
+        e.preventDefault(); e.stopPropagation();
+        openAgentCard(t.dataset.cardAgent);
+      }, true);
     }
     // The Build team control: kind 'link' (All Agents line) or 'btn' (Teams tab). data-build-team lets paintBuildControls retitle it.
     function buildTeamCtlHtml(a, kind, tag) {
@@ -9074,101 +9054,6 @@
         if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
       }
     }
-    // Reads the size of the review once per menu opening and writes it into the open menu's sublabel.
-    function optimizeEstimateLoad(name, menuEl) {
-      if (typeof fetch !== 'function') return;
-      fetch(`/api/agents/${encodeURIComponent(name)}/optimize-team/estimate`, { credentials: 'include' })
-        .then(r => (r && r.ok ? r.json() : null))
-        .then(d => {
-          if (!d || typeof d !== 'object') return;
-          optimizeEstimates[name] = { days: d.days, turns: d.turns, handOffs: d.handOffs };
-          const sub = menuEl && menuEl.querySelector ? menuEl.querySelector('[data-act="optimize"] .agent-menu-sub') : null;
-          if (sub) sub.textContent = optimizeSubText(name);
-        })
-        .catch(() => { /* the sublabel stays "reads the last 30 days" */ });
-    }
-    let agentMenuEl = null, agentMenuOpener = null, agentMenuOff = null;
-    function agentMenuClose(refocus) {
-      if (agentMenuOff) { agentMenuOff(); agentMenuOff = null; }
-      if (agentMenuEl && agentMenuEl.remove) agentMenuEl.remove();
-      const op = agentMenuOpener;
-      agentMenuEl = null; agentMenuOpener = null;
-      if (op && op.setAttribute) { op.setAttribute('aria-expanded', 'false'); if (refocus && op.focus && op.isConnected !== false) op.focus({ preventScroll: true }); }
-    }
-    // Opens the shared menu for agent `name` at (x, y). Returns false (nothing opened) when the agent has no entries.
-    function agentMenuOpenAt(name, x, y, opener) {
-      const a = AGENTS.find(z => z.name === name);
-      const entries = agentMenuEntries(a);
-      agentMenuClose(false);
-      if (!entries.length) return false;
-      const el = document.createElement('div');
-      el.id = 'agent-row-menu'; el.className = 'agent-row-menu';
-      el.setAttribute('role', 'menu');
-      el.setAttribute('aria-label', `More for ${a.display || capName(a.name)}`);
-      el.innerHTML = entries.map(e => `<button type="button" role="menuitem" class="agent-menu-item" data-act="${e.key}"${e.disabled ? ' disabled' : ''}>${hubEsc(e.label)}${e.sub ? `<small class="agent-menu-sub">${hubEsc(e.sub)}</small>` : ''}</button>`).join('');
-      delete optimizeEstimates[name];   // read afresh at each opening
-      if (entries.some(e => e.key === 'optimize' && !e.disabled)) optimizeEstimateLoad(name, el);
-      el.addEventListener('click', ev => {
-        const b = ev.target && ev.target.closest ? ev.target.closest('.agent-menu-item') : null;
-        if (!b || b.disabled) return;
-        const act = b.dataset.act;
-        agentMenuClose(act === 'settings' ? false : true);
-        if (act === 'settings') openAgentSettings(name, ev);
-        else if (act === 'build') buildTeamStart(name);
-        else if (act === 'optimize') optimizeTeamStart(name);
-      });
-      el.addEventListener('keydown', ev => {
-        const items = Array.from(el.querySelectorAll('.agent-menu-item:not([disabled])'));
-        const i = items.indexOf(document.activeElement);
-        if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); agentMenuClose(true); }
-        else if (ev.key === 'Tab') { ev.preventDefault(); agentMenuClose(true); }   // leaving the menu closes it; focus goes back to the ⋯
-        else if (ev.key === 'ArrowDown' && items.length) { ev.preventDefault(); items[(i + 1) % items.length].focus(); }
-        else if (ev.key === 'ArrowUp' && items.length) { ev.preventDefault(); items[(i <= 0 ? items.length : i) - 1].focus(); }
-      });
-      document.body.appendChild(el);
-      // Placed at the pointer or under the ⋯, kept inside the window.
-      const vw = window.innerWidth || 0, vh = window.innerHeight || 0;
-      const w = el.offsetWidth || 160, h = el.offsetHeight || 60;
-      el.style.left = Math.max(4, Math.min(x, (vw || x + w + 4) - w - 4)) + 'px';
-      el.style.top = Math.max(4, Math.min(y, (vh || y + h + 4) - h - 4)) + 'px';
-      agentMenuEl = el; agentMenuOpener = opener || null;
-      if (opener && opener.setAttribute) opener.setAttribute('aria-expanded', 'true');
-      const away = ev => {
-        if (el.contains(ev.target)) return;
-        if (opener && opener.contains && opener.contains(ev.target)) return;   // the ⋯ itself toggles
-        agentMenuClose(false);
-      };
-      const gone = () => agentMenuClose(false);
-      const escKey = ev => { if (ev.key === 'Escape') { agentMenuClose(true); } };
-      document.addEventListener('mousedown', away, true);
-      document.addEventListener('keydown', escKey, true);
-      window.addEventListener('resize', gone);
-      window.addEventListener('blur', gone);
-      document.addEventListener('scroll', gone, true);
-      agentMenuOff = () => {
-        document.removeEventListener('mousedown', away, true); document.removeEventListener('keydown', escKey, true);
-        window.removeEventListener('resize', gone); window.removeEventListener('blur', gone); document.removeEventListener('scroll', gone, true);
-      };
-      const first = el.querySelector('.agent-menu-item:not([disabled])');
-      if (first && first.focus) first.focus({ preventScroll: true });
-      return true;
-    }
-    function agentMenuToggle(btn, event) {
-      if (event) { event.stopPropagation(); event.preventDefault(); }
-      if (!btn) return;
-      if (agentMenuEl && agentMenuOpener === btn) { agentMenuClose(true); return; }
-      const r = btn.getBoundingClientRect();
-      agentMenuOpenAt(btn.dataset.menuAgent, r.left, r.bottom + 2, btn);
-    }
-    // Right-click on a row opens the same menu at the pointer (nothing happens, and the browser's own menu stays, when the row has no entries).
-    if (typeof document !== 'undefined' && document.addEventListener) {
-      document.addEventListener('contextmenu', e => {
-        const row = e.target && e.target.closest ? e.target.closest('#agent-list .agent-btn[data-agent], #teams-list .teams-row[data-agent]') : null;
-        if (!row) return;
-        if (agentMenuOpenAt(row.dataset.agent, e.clientX, e.clientY, row.querySelector('.agent-menu-btn'))) e.preventDefault();
-      });
-    }
-
     function agentButton(agent) {
       const shortModel = agent.autoModel ? 'Auto' : agent.model.split('/').pop().substring(0, 24);
       const inGroup = selectedGroupAgents.some(a => a.name === agent.name);
@@ -9205,10 +9090,9 @@
         <span class="agent-status" id="agent-status-${safeName}"></span>
         <span class="agent-icon">${hubEsc(agent.icon || '🤖')}</span>
         <span class="agent-info">
-          <span class="name"><span class="name-text">${displayName}</span>${agent.lead ? '<span class="lead-badge" title="Lead agent: may schedule tasks for other agents and see, edit or cancel their tasks. Change in this agent\'s settings.">👑</span>' : ''}</span>
+          <span class="name"><span class="name-text"${agentRowNameAttrs(agent)}>${displayName}</span>${agent.lead ? '<span class="lead-badge" title="Lead agent: may schedule tasks for other agents and see, edit or cancel their tasks. Change in this agent\'s settings.">👑</span>' : ''}</span>
           ${buildLine || `<span class="model">${cyberBadge}${subtitle}${statusBadge || sizeLabel}</span>`}
         </span>
-        ${agentMenuBtnHtml(agent, 'span')}
         <span class="actions">
           <span class="action-btn add-btn" onclick="toggleGroupAgent('${safeName}', '${safeModel}', event)">${inGroup ? '−' : '+'}</span>
           <span class="action-btn sum-btn" onclick="setSummarizer('${safeName}', '${safeModel}', event)">S</span>
@@ -9484,8 +9368,7 @@
       return `<div class="teams-line rank-${rank}${deep ? ' deep' : ''}${kids ? ' has-kids' : ''}${spec ? ' is-spec' : ''}"><div class="teams-row rank-${rank}${deep ? ' deep' : ''}${spec ? ' is-spec' : ''}${l2 ? ' has-l2' : ''}" role="button" tabindex="0" data-agent="${name}" data-model="${hubEsc(a.model || '')}" data-depth="${n.depth}"${rowTip}>
         <span class="teams-dot ${dot}" title="${hubEsc(dotTip)}">${hubEsc(st.text)}</span>
         <span class="agent-icon">${hubEsc(a.icon || '🤖')}</span>
-        <span class="teams-info"><span class="name"><span class="name-text">${label}</span>${a.lead ? '<span class="lead-badge" title="Lead agent">👑</span>' : ''}${pill}${live}</span>${l2}</span>
-        ${agentMenuBtnHtml(a, 'button')}
+        <span class="teams-info"><span class="name"><span class="name-text"${agentRowNameAttrs(a)}>${label}</span>${a.lead ? '<span class="lead-badge" title="Lead agent">👑</span>' : ''}${pill}${live}</span>${l2}</span>
       </div></div>`;
     }
     // One leader (or worker, or deeper node) = ONE block: its row, then only its own people in a wrapper with the connector line.

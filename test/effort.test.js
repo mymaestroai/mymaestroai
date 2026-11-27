@@ -65,8 +65,8 @@ test('wired: Claude client query option, gateway option, Codex; agent field vali
   assert.match(server, /autoModel: !!a\.autoModel, effort: a\.effort \|\| 'default', changed:/);
 });
 
-test('pickers: desktop header next to the model (disabled for members), phone header, agent settings page', () => {
-  const app = read('app.js'), idx = read('index.html'), mob = read('mobile.js'), mh = read('mobile.html'), as = read('agent-settings.html');
+test('pickers: desktop header next to the model (disabled for members), phone header (the agent card has the Thinking effort row)', () => {
+  const app = read('app.js'), idx = read('index.html'), mob = read('mobile.js'), mh = read('mobile.html');
   assert.match(app, /esc\(billingDisplay\(chat\.model, true\)\)\}<\/option><\/select> \$\{effortPickHtml\(chat, chatId\)\}<button type="button" class="plan-badge"/, 'effort picker right after the model (then the plan usage badge)');
   assert.match(app, /\$\{isHubAdmin\(\) \? '' : ' disabled'\}/);
   assert.match(app, /method: 'PATCH', headers: \{ 'Content-Type': 'application\/json' \}, credentials: 'include', body: JSON\.stringify\(\{ effort: level \}\)/);
@@ -74,7 +74,6 @@ test('pickers: desktop header next to the model (disabled for members), phone he
   assert.match(mh, /<select id="chat-effort-pick" aria-label="Reasoning effort"><\/select>/);
   assert.match(mob, /sel\.disabled = !isAdmin\(\);/);
   assert.match(mob, /\$\('chat-effort-pick'\)\?\.addEventListener\('change', changeEffortFromPick\);/);
-  assert.match(as, /<select id="effort-mode" onchange="saveEffort\(\)"/);
 });
 
 test('OpenAI: an effort level with tools goes to /responses (chat/completions refuses the pair); otherwise the endpoint is kept', () => {

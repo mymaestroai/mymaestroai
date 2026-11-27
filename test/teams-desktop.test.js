@@ -107,11 +107,11 @@ function world({ stored, storageThrows, simple, member } = {}) {
     "const TEAMS_OPEN_KEY = 'hub-teams-open'; let teamsLastHtml = null; let teamsTimer = 0; let teamsOpenMem = null; const TEAMS_SOLO_KEYS = ['@sec:solo', '@sec:none', '@sec:alone'];",
     fnSrc('capName'), fnSrc('sidebarViewStored'), fnSrc('sidebarViewOk'), fnSrc('sidebarViewSet'), fnSrc('sidebarTabsApply'),
     'async ' + fnSrc('sidebarTabsLoad'), fnSrc('setupTabs'), fnSrc('teamsOpenGet'), fnSrc('teamsSecFolded'), fnSrc('teamsOpenToggle'), fnSrc('teamsClick'),
-    fnSrc('agentStateWords'), fnSrc('agentLiveState'), fnSrc('bgCountOf'), "const buildTeamPending = new Set(); let agentMenuEl = null, agentMenuOpener = null, agentMenuOff = null;",
-    "const optimizeTeamPending = new Set(); const optimizeEstimates = {};",
-    fnSrc('teamBuilding'), fnSrc('agentCanBuildTeam'), fnSrc('teamReviewing'), fnSrc('agentCanOptimizeTeam'), fnSrc('optimizeSubText'), fnSrc('agentMenuEntries'),
-    'async ' + fnSrc('optimizeTeamStart'), fnSrc('optimizeEstimateLoad'), fnSrc('agentMenuBtnHtml'), fnSrc('buildTeamCtlHtml'), fnSrc('buildLineHtml'),
-    fnSrc('paintBuildControls'), 'async ' + fnSrc('buildTeamStart'), fnSrc('agentMenuClose'), fnSrc('agentMenuOpenAt'), fnSrc('agentMenuToggle'), fnSrc('agentButton'),
+    fnSrc('agentStateWords'), fnSrc('agentLiveState'), fnSrc('bgCountOf'), "const buildTeamPending = new Set();",
+    "const optimizeTeamPending = new Set();",
+    fnSrc('teamBuilding'), fnSrc('agentCanBuildTeam'), fnSrc('teamReviewing'), fnSrc('agentCanOptimizeTeam'), fnSrc('agentRowNameAttrs'),
+    'async ' + fnSrc('optimizeTeamStart'), fnSrc('buildTeamCtlHtml'), fnSrc('buildLineHtml'),
+    fnSrc('paintBuildControls'), 'async ' + fnSrc('buildTeamStart'), fnSrc('agentButton'),
     fnSrc('questionChecklistOf'), fnSrc('questionChecklistHtml'), fnSrc('questionCheckedIds'), fnSrc('askResponseBody'),
     fnSrc('teamsPillText'), fnSrc('teamsPillLabel'), fnSrc('teamsPillHtml'), fnSrc('teamsRowHtml'), fnSrc('teamsBlockHtml'), fnSrc('teamsSubtreeHtml'), fnSrc('renderTeams'), fnSrc('teamsRepaintSoon'),
     // Set up teams (renderTeams, setupTabs and teamsClick call these): the harness carries them so the pinned Teams tests keep running as before.
@@ -119,7 +119,7 @@ function world({ stored, storageThrows, simple, member } = {}) {
     fnSrc('agentWorksAlone'), fnSrc('teamSetupLeadDisplay'), fnSrc('teamSetupBusy'), fnSrc('teamSetupLines'), fnSrc('teamSetupDate'), fnSrc('teamSetupLineHtml'), fnSrc('teamSetupApply'),
     'async ' + fnSrc('teamSetupLoad'), fnSrc('teamSetupLoadSoon'), fnSrc('teamSetupPaint'), fnSrc('teamSetupOfferHtml'), fnSrc('teamSetupUndoRows'), fnSrc('teamSetupChatPaint'),
     'async ' + fnSrc('teamSetupStart'), 'async ' + fnSrc('teamSetupUndo'), 'function setAgentLive() {} function loadAgents() { return Promise.resolve(); }',
-    'this.api = { setupTabs, sidebarViewSet, sidebarTabsApply, renderTeams, teamsClick, teamsRepaintSoon, teamsOpenToggle, agentMenuEntries, agentMenuBtnHtml, buildLineHtml, agentButton, buildTeamStart, optimizeTeamStart, agentMenuOpenAt, agentMenuClose, paintBuildControls, questionChecklistOf, questionChecklistHtml, askResponseBody };'].join('\n');
+    'this.api = { setupTabs, sidebarViewSet, sidebarTabsApply, renderTeams, teamsClick, teamsRepaintSoon, teamsOpenToggle, agentRowNameAttrs, buildLineHtml, agentButton, buildTeamStart, optimizeTeamStart, paintBuildControls, questionChecklistOf, questionChecklistHtml, askResponseBody };'].join('\n');
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(src, ctx);
@@ -307,7 +307,7 @@ test('renderTeams: nobody has a team: the empty-state box says how to start', ()
   assert.doesNotMatch(h, /No team yet/);
   assert.match(h, /Solo agents · 2</);
   assert.strictEqual((h.match(/<span class="teams-sub teams-sub-build"><span role="button"[^>]*class="build-team-link"/g) || []).length, 2, 'one Build team link per main agent without a team, inside its second line');
-  assert.strictEqual((h.match(/<button/g) || []).length, 6, 'Set up teams, a ⋯ on each of the three rows (no Build Team buttons) and the two section header buttons (the headers are fold buttons now)');
+  assert.strictEqual((h.match(/<button/g) || []).length, 3, 'Set up teams and the two section header buttons (the headers are fold buttons now); no ⋯ on the rows, no Build Team buttons');
 });
 test('renderTeams: names are escaped, the dot follows idle / busy / question, no "Reports to" or role lines', () => {
   const w = world({ stored: [['hub-teams-open', JSON.stringify({ lead: true })]] });
@@ -562,32 +562,58 @@ test('renderTeams: the fold control is the pill, a real button with aria-expande
 });
 // ---- Build team: row menu, Build line, Teams button, Building… state, plan card
 const MAIN = (n, over) => A(n, Object.assign({ category: 'primary' }, over));
-test('row menu entries: admin gets Settings, a main agent with no team also Build team; a member gets none', () => {
+// changed (P4-2): the agent row's ⋯ menu is gone. Settings = Enter on the row's name (the card), Build team and Optimize team = rows of the card's Role and team section.
+test('no row menu: Simple and members get no Build team line; the functions and the CSS of the ⋯ menu are gone', () => {
   const w = world();
   w.ctx.AGENTS = [MAIN('boss'), MAIN('solo'), A('sam', { reportsTo: 'boss' })];
-  const e = (n) => w.api.agentMenuEntries(w.ctx.AGENTS.find((a) => a.name === n)).map((x) => x.label);
-  assert.deepStrictEqual([...e('solo')], ['Settings', 'Build team']);
-  assert.deepStrictEqual([...e('boss')], ['Settings', 'Optimize team'], 'a main agent with a team has Optimize team, never Build team');
-  assert.deepStrictEqual([...e('sam')], ['Settings'], 'a worker is not a main agent');
+  assert.match(w.api.buildLineHtml(w.ctx.AGENTS[1]), /Build team/);
   const m = world({ member: true });
   m.ctx.AGENTS = [MAIN('solo')];
-  assert.strictEqual(m.api.agentMenuEntries(m.ctx.AGENTS[0]).length, 0);
-  assert.strictEqual(m.api.agentMenuBtnHtml(m.ctx.AGENTS[0], 'span'), '', 'no entries, no button');
+  assert.strictEqual(m.api.buildLineHtml(m.ctx.AGENTS[0]), '');
   const s = world({ simple: true });
   s.ctx.AGENTS = [MAIN('solo')];
-  assert.strictEqual(s.api.agentMenuEntries(s.ctx.AGENTS[0]).length, 0, 'Simple shows no controls');
-  assert.strictEqual(s.api.buildLineHtml(s.ctx.AGENTS[0]), '');
+  assert.strictEqual(s.api.buildLineHtml(s.ctx.AGENTS[0]), '', 'Simple shows no controls');
+  for (const gone of ['agentMenuBtnHtml', 'agentMenuEntries', 'agentMenuOpenAt', 'agentMenuToggle', 'agentMenuClose', 'optimizeEstimateLoad', 'optimizeSubText']) {
+    assert.ok(!new RegExp('function ' + gone + '\\b').test(app), gone + ' is gone from app.js');
+  }
+  assert.doesNotMatch(app, /agent-menu-btn|agent-menu-item|agent-row-menu|data-menu-agent|agentMenuToggle/);
+  assert.doesNotMatch(html, /agent-menu-btn|agent-menu-item|agent-row-menu|agent-menu-sub/);
+  assert.doesNotMatch(app, /addEventListener\('contextmenu'/, 'a right-click on a row opens nothing of ours');
 });
-test('the ⋯ button: aria-label, menu popup, always present for an admin; span in the All Agents row, button in Teams', () => {
+test('a row has no ⋯ button and its name opens the card from the keyboard: role=button, tabindex 0, an aria-label, Enter and Space', () => {
   const w = world();
   w.ctx.AGENTS = [MAIN('solo', { display: 'Solo' })];
-  const sp = w.api.agentMenuBtnHtml(w.ctx.AGENTS[0], 'span');
-  assert.match(sp, /^<span role="button" tabindex="0" class="agent-menu-btn" data-menu-agent="solo" aria-haspopup="menu" aria-expanded="false" aria-label="More for Solo"/);
-  assert.match(w.api.agentMenuBtnHtml(w.ctx.AGENTS[0], 'button'), /^<button type="button" class="agent-menu-btn"/);
   const row = w.api.agentButton(w.ctx.AGENTS[0]);
-  assert.doesNotMatch(row, /gear-btn|&#9881;/, 'the hover gear is gone');
-  assert.match(row, /class="agent-menu-btn"/);
-  assert.strictEqual((row.match(/<button/g) || []).length, 1, 'only the row itself is a button; the ⋯ is a span role=button inside it');
+  assert.doesNotMatch(row, /⋯|agent-menu-btn|gear-btn|&#9881;/);
+  assert.strictEqual((row.match(/<button/g) || []).length, 1, 'only the row itself is a button');
+  assert.match(row, /<span class="name-text" role="button" tabindex="0" data-card-agent="solo" aria-label="Settings for Solo">Solo<\/span>/);
+  w.api.renderTeams();
+  assert.match(w.list.innerHTML, /<span class="name-text" role="button" tabindex="0" data-card-agent="solo" aria-label="Settings for Solo">/);
+  assert.doesNotMatch(w.list.innerHTML, /⋯|agent-menu-btn/);
+  // a name that holds markup is escaped in the label and the data attribute
+  const evil = w.api.agentRowNameAttrs({ name: 'x', display: '"><b>' });
+  assert.doesNotMatch(evil, /"><b>/);
+  // the key handler is one capture listener on the document that calls the same function the ⋯ Settings item called (openAgentCard)
+  const src = app.slice(app.indexOf('function agentRowNameAttrs'), app.indexOf('// The Build team control'));
+  assert.match(src, /document\.addEventListener\('keydown'[\s\S]*?\.name-text\[data-card-agent\][\s\S]*?openAgentCard\(t\.dataset\.cardAgent\)[\s\S]*?\}, true\)/);
+  const listeners = [];
+  const opened = [];
+  const sandbox = { document: { addEventListener: (t, f, c) => listeners.push([t, f, c]) }, openAgentCard: (n) => opened.push(n), hubEsc: (s) => String(s), capName: (s) => s };
+  vm.createContext(sandbox);
+  vm.runInContext(src, sandbox);
+  assert.strictEqual(listeners.length, 1);
+  assert.strictEqual(listeners[0][2], true, 'capture, so the row\'s own key handler never sees it');
+  const target = { dataset: { cardAgent: 'solo' } };
+  const mk = (key) => { const ev = { key, target: { closest: (sel) => (sel === '.name-text[data-card-agent]' ? target : null) }, prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } }; return ev; };
+  const enter = mk('Enter'); listeners[0][1](enter);
+  assert.deepStrictEqual(opened, ['solo']);
+  assert.ok(enter.prevented && enter.stopped);
+  listeners[0][1](mk(' '));
+  assert.deepStrictEqual(opened, ['solo', 'solo']);
+  listeners[0][1](mk('a'));
+  assert.strictEqual(opened.length, 2, 'other keys do nothing');
+  const other = mk('Enter'); other.target = { closest: () => null }; listeners[0][1](other);
+  assert.strictEqual(opened.length, 2, 'Enter elsewhere in the row does nothing here');
 });
 // changed (Owner 2026-11-24 07:32: "Create a classification of solo agents" / "Instead of 'no team'"): the All Agents second line reads "Solo · Build team"
 test('Build line: admins see "Solo · Build team" on a main agent with no team; rows with a team and other agents do not', () => {
@@ -603,7 +629,7 @@ test('Build line: admins see "Solo · Build team" on a main agent with no team; 
   m.ctx.AGENTS = [MAIN('solo')];
   assert.strictEqual(m.api.buildLineHtml(m.ctx.AGENTS[0]), '', 'members never see it');
 });
-test('Teams tab: the Build team link on the second line of an undecided "Solo agents" main for admins only; a ⋯ on every row', () => {
+test('Teams tab: the Build team link on the second line of an undecided "Solo agents" main for admins only; no ⋯ on any row', () => {
   const w = world();
   w.ctx.AGENTS = [MAIN('boss'), MAIN('solo'), A('sam', { reportsTo: 'boss' })];
   w.api.renderTeams();
@@ -612,18 +638,17 @@ test('Teams tab: the Build team link on the second line of an undecided "Solo ag
   assert.match(h, /<span class="teams-sub teams-sub-build"><span role="button"[^>]*class="build-team-link" data-build-team="solo"[^>]*>Build team<\/span><\/span>/);
   assert.strictEqual((h.match(/data-build-team="/g) || []).length, 1, 'only the main agent without a team');
   assert.doesNotMatch(h, /build-team-btn|tbs-prefix/, 'no separate button, no words before the link');
-  assert.ok((h.match(/class="agent-menu-btn"/g) || []).length >= 2, 'the ⋯ is on the Teams rows');
+  assert.doesNotMatch(h, /agent-menu-btn|⋯/, 'no ⋯ on the Teams rows');
   const m = world({ member: true });
   m.ctx.AGENTS = [MAIN('solo')];
   m.api.renderTeams();
   assert.doesNotMatch(m.list.innerHTML, /build-team-btn|build-team-link|agent-menu-btn/);
 });
-test('Building…: any status entry with buildingTeamFor === name disables the Build team link, the line and the menu entry', () => {
+test('Building…: any status entry with buildingTeamFor === name disables the Build team link and the line', () => {
   const w = world();
   w.ctx.AGENTS = [MAIN('solo'), MAIN('lead')];
   w.ctx.agentStatus = { lead: { busy: true, buildingTeamFor: 'solo' } };
   assert.match(w.api.buildLineHtml(w.ctx.AGENTS[0]), /class="build-team-link is-building"[^>]*aria-disabled="true"[^>]*>Building…</);
-  assert.strictEqual(JSON.stringify(w.api.agentMenuEntries(w.ctx.AGENTS[0]).map((x) => [x.label, !!x.disabled])), '[["Settings",false],["Building…",true]]');
   w.api.renderTeams();
   // changed (tonight): the Teams row's control is the in-row link (a span), disabled through aria-disabled; changed (Teams redesign): no words before it
   assert.match(w.list.innerHTML, /teams-sub-build"><span role="button"[^>]*class="build-team-link is-building"[^>]*aria-disabled="true"[^>]*>Building…<\/span>/);
@@ -655,47 +680,18 @@ test('buildTeamStart: 202 opens the lead\'s chat with its model; an error alerts
   await w.api.buildTeamStart('solo');
   assert.strictEqual(n, 0, 'disabled while building');
 });
-test('the shared menu: right-click path opens it, Escape closes it, a row with no entries opens nothing, Settings opens the settings window', () => {
-  const w = world();
-  w.ctx.AGENTS = [MAIN('solo')];
-  w.ctx.window = { innerWidth: 1000, innerHeight: 800, addEventListener() {}, removeEventListener() {} };
-  assert.strictEqual(w.api.agentMenuOpenAt('solo', 10, 20, null), true);
-  const menu = w.document.body.menu;
-  assert.strictEqual(menu.attrs.role, 'menu');
-  assert.match(menu.innerHTML, /role="menuitem" class="agent-menu-item" data-act="settings">Settings<\/button><button type="button" role="menuitem" class="agent-menu-item" data-act="build">Build team</);
-  const esc = w.document.docListeners.find((x) => x[0] === 'keydown');
-  assert.ok(esc, 'Escape is listened for');
-  esc[1]({ key: 'Escape' });
-  assert.ok(menu.removed, 'Escape closes it');
-  assert.strictEqual(w.document.docListeners.length, 0, 'its listeners go with it');
-  assert.strictEqual(w.api.agentMenuOpenAt('solo', 1, 1, null), true);
-  const down = w.document.docListeners.find((x) => x[0] === 'mousedown');
-  down[1]({ target: {} });
-  assert.ok(w.document.body.menu.removed, 'an outside click closes it');
-  const m = world({ member: true });
-  m.ctx.AGENTS = [MAIN('solo')]; m.ctx.window = w.ctx.window;
-  assert.strictEqual(m.api.agentMenuOpenAt('solo', 1, 1, null), false);
-  assert.strictEqual(m.document.body.menu, undefined);
-  // Settings entry: click handler calls openAgentSettings
-  assert.strictEqual(w.api.agentMenuOpenAt('solo', 1, 1, null), true);
-  const live = w.document.body.menu;
-  live.listeners.click({ target: { closest: () => ({ dataset: { act: 'settings' }, disabled: false }) }, stopPropagation() {} });
-  assert.deepStrictEqual(w.opened, ['solo']);
-  assert.ok(live.removed);
-});
-test('app.js wiring: right-click on a row, keyboard, status copy points carry buildingTeamFor, Simple and CSS pins', () => {
-  assert.match(app, /document\.addEventListener\('contextmenu'[\s\S]{0,300}#agent-list \.agent-btn\[data-agent\], #teams-list \.teams-row\[data-agent\]/);
+// removed (P4-2): 'the shared menu: right-click path opens it, Escape closes it, ...' pinned the ⋯ menu; its Settings item is now Enter on the row's name (tested above), Build team / Optimize team are card rows (ui-agent-card-basics tests).
+test('app.js wiring: status copy points carry buildingTeamFor, Simple and CSS pins', () => {
   // changed (Set up teams): the same key list also carries offerPending and settingUpTeams
   assert.match(app, /for \(const k of \['worker', 'parent', 'label', 'model', 'consultedBy', 'buildingTeamFor', 'reviewingTeamFor', 'offerPending', 'settingUpTeams'\]\)/, 'applyStatusSnapshot copies it');
   assert.match(app, /pendingQuestion: a\.pendingQuestion, buildingTeamFor: a\.buildingTeamFor \|\| null/, 'loadAgents copies it');
   assert.match(app, /next\.consultedBy = null; next\.buildingTeamFor = null; next\.reviewingTeamFor = null;/, 'idle clears it');
-  assert.match(html, /\.agent-btn:has\(\.agent-menu-btn\) \.agent-info \{ padding-right: 18px; \}/);
   assert.match(html, /\.agent-btn \.name-text \{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; \}/, 'long names truncate (160px and 240px sidebars)');
-  assert.match(html, /html\.mm-simple \.agent-menu-btn, html\.mm-simple \.agent-build-line, html\.mm-simple \.build-team-btn \{ display: none !important; \}/);
+  assert.match(html, /html\.mm-simple \.agent-build-line, html\.mm-simple \.build-team-btn \{ display: none !important; \}/);
   assert.doesNotMatch(html, /\.gear-btn/, 'the hover gear CSS is gone');
-  const css = html.slice(html.indexOf('.agent-menu-btn {'), html.indexOf('.agent-btn .add-btn'));
-  assert.doesNotMatch(css.replace(/\/\*[\s\S]*?\*\//g, ''), /#[0-9a-fA-F]{3,8}\b|rgba?\(/, 'existing variables only');
-  assert.match(css, /width: 24px; height: 24px/);
+  const focusRule = html.slice(html.indexOf('.build-team-link:focus-visible'), html.indexOf('.agent-build-line {'));
+  assert.match(focusRule, /\.agent-btn \.name-text\[data-card-agent\]:focus-visible/, 'the name that opens the card shows a focus ring');
+  assert.doesNotMatch(focusRule.replace(/\/\*[\s\S]*?\*\//g, ''), /#[0-9a-fA-F]{3,8}\b|rgba?\(/, 'existing variables only');
 });
 test('plan card: checklist rows (all ticked, label bold, detail small), checked ids in the body, no Skip or typed answer', () => {
   const w = world();
@@ -782,10 +778,10 @@ test('works alone: Simple Teams has the same section, and a member never sees th
   assert.doesNotMatch(m.list.innerHTML, /Working alone|No team yet/);
   assert.match(m.list.innerHTML, /Solo agents · 1/);
 });
-test('works alone: the row menu still offers Build team, so it can be asked again', () => {
-  const w = aloneWorld(['sam']);
-  const entries = w.api.agentMenuEntries(A('sam', { category: 'primary' }));
-  assert.ok(entries.some((e) => e.key === 'build' && e.label === 'Build team'));
+// changed (P4-2): the ⋯ menu is gone; "asked again" now means the card's Build team row, which shows for any main agent with no team (ui-agent-card-basics: BUILD.visible), alone or not.
+test('works alone: the page still offers Build team through the card (the row has no menu), so it can be asked again', () => {
+  assert.match(app, /window\.buildTeamStart = buildTeamStart;/);
+  assert.match(app, /window\.optimizeTeamStart = optimizeTeamStart;/);
 });
 test('works alone: once somebody reports to the agent the entry no longer counts', () => {
   const w = aloneWorld(['sam']);
@@ -952,7 +948,7 @@ test('item 2 (desktop All Agents): "Solo · Build team" REPLACES the model line 
   const solo = w.api.agentButton(w.ctx.AGENTS[0]), boss = w.api.agentButton(w.ctx.AGENTS[1]);
   assert.doesNotMatch(solo, /class="model"/, 'no model line: the link took its place');
   assert.match(solo, /<span class="agent-build-line"><span class="tbs-prefix">Solo · <\/span><span role="button"[^>]*data-build-team="solo"/);
-  assert.match(solo, /<\/span><\/span>\s*<\/span>\s*<span role="button"[^>]*class="agent-menu-btn"/, 'two lines in the info block: the name, then the link');
+  assert.match(solo, /<\/span><\/span>\s*<span class="agent-build-line"[\s\S]*<\/span>\s*<\/span>\s*<span class="actions">/, 'two lines in the info block: the name, then the link; no ⋯ after it');
   assert.match(boss, /class="model"/);
   assert.doesNotMatch(boss, /agent-build-line/);
   vm.runInContext("teamSetup = { offer: null, lead: null, setups: [], alone: { solo: { at: 'x' } } }", w.ctx);
@@ -965,7 +961,7 @@ test('item 2 (desktop All Agents): "Solo · Build team" REPLACES the model line 
   assert.match(html, /\.agent-btn \.agent-build-line \.build-team-link \{ white-space: nowrap; \}/);
   assert.match(html, /#agent-list \{ container-type: inline-size; \}/);
   assert.match(html, /@container \(min-width: 200px\) \{ #agent-list \.agent-build-line \.tbs-prefix \{ display: inline; \} \}/);
-  assert.match(html, /html\.mm-simple \.agent-menu-btn, html\.mm-simple \.agent-build-line,/, 'Simple still shows no build line');
+  assert.match(html, /html\.mm-simple \.agent-build-line,/, 'Simple still shows no build line');
 });
 test('item 3 (desktop Simple): member names sit on ONE line with the whole remaining width and an ellipsis (no wrapping, no two-line clamp)', () => {
   const simple = html.split('\n').filter((l) => /^\s*html\.mm-simple #teams-list/.test(l)).join('\n');
@@ -1160,7 +1156,7 @@ test('narrow list: the pill stays ONE control (in .name), and its tap area stays
   const h = renderRows();
   assert.strictEqual((h.match(/data-fold="atlas"/g) || []).length, 1, 'one pill per main row');
   assert.strictEqual((h.match(/<button[^>]*teams-pill-btn/g) || []).length, (h.match(/data-fold="(?!@sec)/g) || []).length, 'no second focusable pill');
-  assert.match(h, /<span class="name"><span class="name-text">[^<]*<\/span>(?:<span class="lead-badge"[^>]*>[^<]*<\/span>)?<button type="button" class="teams-pill-btn/, 'the pill is still inside .name in the markup');
+  assert.match(h, /<span class="name"><span class="name-text"[^>]*>[^<]*<\/span>(?:<span class="lead-badge"[^>]*>[^<]*<\/span>)?<button type="button" class="teams-pill-btn/, 'the pill is still inside .name in the markup');
   for (const b of [cqBlock('main'), cqBlock('leader')]) {
     assert.match(b, /\.teams-pill-btn::before \{ left: -3px; right: -3px; top: -1px; bottom: calc\(var\(--tms-below\) \* -1\); width: auto; height: auto; transform: none; \}/);
   }

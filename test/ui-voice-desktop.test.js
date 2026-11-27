@@ -8,7 +8,6 @@ const path = require('path');
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 const app = read('app.js');
 const html = read('index.html');
-const as = read('agent-settings.html');
 const L = require('../lib/ui-voice');
 
 // The shared device helpers of the library (the real ones) and the page's own voiceMarkDeviceChanged, taken from app.js.
@@ -106,20 +105,12 @@ test('css: mic button states, meter, speaker button (dark theme variables)', () 
   assert.match(html, /\.message > \.msg-speak \{[^}]*var\(--bg-card\)/);
 });
 
-test('agent settings: Voice row, saved through the agent PATCH, with its SAVES row', () => {
-  assert.match(as, /<select id="voice-select" onchange="saveAgentVoice\(\)"/);
-  assert.match(as, /<option value="">Hub default<\/option>/);
-  assert.match(as, /onclick="playAgentVoiceSample\(\)"/);
-  assert.match(as, /\['saveAgentVoice', 'voice-status', byId\('voice-select', 'voice-stt', 'voice-tts', 'voice-cloud-select', 'voice-cloud-id'\)\],/);   // phase 3: the SAVES row watches the engine fields too
-  assert.match(as, /SAVES_ON_CHANGE = new Set\(\[[^\]]*'saveAgentVoice'\]\)/);
-  assert.match(as, /method: 'PATCH'[^\n]*JSON\.stringify\(\{ voice: body \}\)/);   // phase 3: the body carries the chosen engines (see test/ui-voice-cloud.test.js)
-  assert.match(as, /apiFetch\('\/api\/voice\/status'\)/);
-  assert.match(as, /fetch\('\/api\/voice\/tts'/);
-});
+// The old 'agent settings: Voice row' test pinned the old page's markup; the card's Voice rows are tested in
+// test/ui-agent-card-basics.test.js (the 'Voice: ...' tests: PATCH {voice}, the voice list from /api/voice/status).
 
 test('no variation selector U+FE0F in the new voice code', () => {
   assert.ok(!voiceBlock().includes('\uFE0F'));
-  assert.ok(!as.slice(as.indexOf('id="voice-section"'), as.indexOf('id="compaction-section"')).includes('\uFE0F'));
+  assert.ok(!read('lib/ui-agent-card-basics.js').includes('\uFE0F'));
   const css = html.slice(html.indexOf('/* Voice: mic button'), html.indexOf('.input-area button.secondary'));
   assert.ok(!css.includes('\uFE0F'));
 });
@@ -421,8 +412,6 @@ test('default voice picker: starts at the hub default, saves only defaultVoice, 
   await api.voiceSettingDefaultVoice();
   const post = calls.fetch.find(c => c.url === '/api/settings');
   assert.deepStrictEqual(JSON.parse(post.o.body), { voice: { defaultVoice: 'a' } });
-  // the phone has no voice list of its own; agent settings shows the label as it is
-  assert.doesNotMatch(as, /escapeHtml\(v\.label \|\| v\.id\)\}\$\{v\.accent/);
 });
 
 test('Voices settings: both checkboxes sit in the value column (text may wrap there, inside the dialog), ids kept', () => {

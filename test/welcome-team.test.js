@@ -170,7 +170,8 @@ test('welcome.html: the box is built from text nodes only; the Change link is en
   assert.ok(!/innerHTML/.test(boxCode), 'no innerHTML in the team box');
   assert.ok(!/insertAdjacentHTML|outerHTML|document\.write/.test(boxCode));
   assert.match(boxCode, /e\.textContent = text/);
-  assert.match(boxCode, /a\.href = '\/agent-settings\.html\?agent=' \+ encodeURIComponent\(e\.name\)/);
+  assert.match(boxCode, /a\.href = '\/#agent-card=' \+ encodeURIComponent\(e\.name\); a\.target = '_blank'/, 'the Change link opens the card, in a new tab so the welcome flow stays');
+  assert.doesNotMatch(boxCode, /agent-settings\.html/);
   assert.match(boxCode, /if \(!\$\('team-create'\)\.checked\) \{\n\s+const r = await api\('POST', '\/api\/welcome\/team\/skip'\)/);
   assert.match(boxCode, /api\('POST', '\/api\/welcome\/team', body\)/);
   // Review r1: the create sends what was shown (expect) and the offered models.

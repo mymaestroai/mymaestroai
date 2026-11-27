@@ -348,17 +348,8 @@ test('phone voice sheet: the same, and the call screen gets it through createCal
   assert.ok(/CallDisplay\.createCallDisplay\(\{[^]*?fetch: \(\.\.\.a\) => fetch\(\.\.\.a\)/.test(src), 'the call screen display has a fetch for the download');
   assert.ok(/\.cd-download-retry/.test(read('lib/ui-call-display.css')) && /\.cd-download \{/.test(read('lib/ui-call-display.css')));
 });
-test('agent settings: the default call display lists downloadable characters with their size and saves pack:<id>', () => {
-  const html = read('agent-settings.html');
-  assert.ok(/callDisplayOptions\(current, packs, available\)/.test(html) && /r\.available/.test(html));
-  assert.ok(/' · downloads ' \+ mb \+ ' MB'/.test(html));
-  const m = html.match(/function callDisplayOptions\(current, packs, available\) \{[\s\S]*?\n  \}\n/);
-  assert.ok(m, 'function found');
-  const fn = new Function("const CALL_DISPLAY_FIXED = [{ value: 'none', label: 'None' }, { value: 'orb', label: 'Orb' }];" + m[0] + '; return callDisplayOptions;')();
-  const opts = fn('none', [{ id: 'owl', name: 'Owl' }], [{ id: 'fox', name: 'Fox', size: 20 * MB }, { id: 'owl', name: 'Owl', size: 3 * MB }]);
-  assert.deepStrictEqual(opts.map(o => [o.value, o.label]), [['none', 'None'], ['orb', 'Orb'], ['pack:owl', 'Owl'], ['pack:fox', 'Fox · downloads 20 MB']]);
-  assert.strictEqual(fn('none', [], undefined).length, 2, 'an old hub without the list: as before');
-});
+// removed (P4-2): 'agent settings: the default call display lists downloadable characters with their size and saves pack:<id>' ran the old page's callDisplayOptions;
+// the card's Call display row lists the installed and downloadable characters ('Owl · downloads 4 MB') and saves PATCH {callDisplay} - test/ui-agent-card-basics.test.js.
 test('the phone service worker cache is bumped for the new mobile.js', () => {
   assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v103'/);
 });

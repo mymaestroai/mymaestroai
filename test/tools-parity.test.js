@@ -88,15 +88,14 @@ test('gateway path: one hands instance per turn, withheld tools dropped, images 
   assert.ok(batchEnd > 0 && at > batchEnd, 'the flush comes after the batch, never between tool results');
 });
 
-test('the agent field, the hub default and both settings pages exist', () => {
+test('the agent field, the hub default, the agent card row and the Settings control exist', () => {
   const agents = read('lib/agents.js');
   assert.match(agents, /tools: a\.tools \|\| 'inherit',/);
   assert.match(agents, /if \(!\['inherit', 'client', 'hub'\]\.includes\(v\)\) return \{ ok: false, error: 'tools must be inherit, client or hub' \};/);
-  const page = read('agent-settings.html');
-  assert.match(page, /<select id="tools-mode" onchange="saveToolsMode\(\)"/);
-  assert.match(page, /body: JSON\.stringify\(\{ tools: v \}\)/);
-  assert.match(page, /toolsSel\.value = agent\?\.tools \|\| 'inherit';/);
-  assert.match(page, /const clientModel = \/\^\(claude-sdk\|codex-cli\)\\\/\/\.test\(/, 'the row shows only for client models');
+  const page = read('lib/ui-agent-card-more.js');   // P4-2: the agent card's Tools row (OPT-0064) replaces the old page's select
+  assert.match(page, /save: \(agent, value, ctx\) => ctx\.patch\(\{ tools: String\(value \|\| 'inherit'\) \}\)/);
+  assert.match(page, /const v = agent\.tools \|\| 'inherit'/);
+  assert.match(page, /const clientModel = \(a\) => \/\^\(claude-sdk\|codex-cli\)\\\/\/\.test\(/, 'the row shows only for client models');
   const app = read('app.js');
   assert.match(app, /selSb\('st-tools-default', \[\['client'/);
   assert.match(app, /toolsDefault: \(document\.getElementById\('st-tools-default'\) \|\| \{\}\)\.value === 'hub' \? 'hub' : 'client'/);

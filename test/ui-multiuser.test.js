@@ -85,9 +85,9 @@ test('members: admin surfaces are hidden and approvals / Resume buttons are not 
   // changed: members keep the tab strip for All Agents and Teams (Teams view); only the Tiger Team and Guide tabs stay hidden
   assert.doesNotMatch(app, /document\.querySelector\('\.sidebar \.tabs'\);\s*if \(tabs\) tabs\.style\.display = 'none'/);
   assert.match(app, /const groupActions = !isHubAdmin\(\) \? ''/);
-  // changed: the hover gear is replaced by the always-visible ⋯ row menu; its entries (Settings, Build team) are admin-only and an empty menu draws no button
-  assert.match(app, /function agentMenuEntries\(a\) \{\s*if \(!a \|\| !isHubAdmin\(\) \|\| simpleOn\(\)\) return \[\];/);
-  assert.match(app, /if \(!agentMenuEntries\(a\)\.length\) return '';/);
+  // changed (P4-2): the agent row's ⋯ menu is gone; Build team (admin-only, never in Simple) is the card's row and the "Solo · Build team" link needs agentCanBuildTeam
+  assert.doesNotMatch(app, /function agentMenuEntries|agentMenuBtnHtml/);
+  assert.match(app, /return !!a && isHubAdmin\(\) && \(!!inSimple \|\| !simpleOn\(\)\) && hubTeams\.isMain\(a\) && !hubTeams\.hasTeam\(a\.name, AGENTS\);/);
   assert.match(app, /function upsertApproval\(ev\) \{\s*if \(!ev \|\| !ev\.id\) return;\s*if \(!isHubAdmin\(\)\) return;/);
   assert.match(app, /if \(!isHubAdmin\(\)\) return;\s*\/\/ approvals are an admin surface/);
   assert.match(app, /if \(!isHubAdmin\(\)\) btn\.style\.display = 'none'/);

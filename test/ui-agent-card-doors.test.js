@@ -52,7 +52,8 @@ function desktop(extra = {}) {
   const fetches = [];
   const chats = extra.chats || { 'chat-1': { id: 'chat-1', agent: 'sam', display: 'Sam' } };
   const sandbox = {
-    window: { hubAgentCard: card, hubAgentCardBasics: require('../lib/ui-agent-card-basics.js'), open: (...a) => { popups.push(a); return null; }, hubMe: extra.me || { isAdmin: true } },
+    // `popups` records every address the page navigated to (the old popup window is gone: with no card the page itself opens on /#agent-card=<name>)
+    window: { hubAgentCard: card, hubAgentCardBasics: require('../lib/ui-agent-card-basics.js'), open: () => { throw new Error('window.open is not used'); }, location: { set href(v) { popups.push([v]); } }, hubMe: extra.me || { isAdmin: true } },
     document: {
       addEventListener: (t, fn) => { (listeners[t] = listeners[t] || []).push(fn); },
       getElementById: (id) => (extra.els || {})[id] || null,
@@ -109,7 +110,7 @@ test('desktop: the page feeds the card from its own event stream (agent_updated,
   assert.match(app, /addEventListener\('agent_updated', e => \{ const ev = parse\(e\); if \(ev\) onAgentUpdated\(ev\); \}\)/);
 });
 
-test('desktop: the row menu\'s Settings, a new agent and a clone open the card, not the popup; the popup only when the card is missing', async () => {
+test('desktop: a new agent and a clone open the card, not another page; with no card the page itself opens on the card\'s hash door', async () => {
   const d = desktop();
   const stopped = [];
   d.api.openAgentSettings('sam', { stopPropagation: () => stopped.push(1) });
@@ -123,24 +124,25 @@ test('desktop: the row menu\'s Settings, a new agent and a clone open the card, 
   none.sandbox.window.hubAgentCard = undefined;
   none.api.openAgentSettings('sam', { stopPropagation() {} });
   assert.strictEqual(none.popups.length, 1);
-  assert.match(none.popups[0][0], /^\/agent-settings\.html\?agent=sam$/);
+  assert.strictEqual(none.popups[0][0], '/#agent-card=sam');
+  assert.doesNotMatch(fnText(app, 'function openAgentSettingsPopup('), /window\.open|agent-settings\.html/, 'the old page is never opened');
 });
 
-test('desktop: the card says no (no such agent, not yours): the old page opens as before', async () => {
+test('desktop: the card says no (no such agent, not yours): an admin is taken to the card address', async () => {
   const d = desktop({ card: fakeCard(false) });
   d.api.openAgentCard('sam');
   await new Promise((r) => setImmediate(r));
-  assert.strictEqual(d.popups.length, 1);
+  assert.deepStrictEqual(d.popups, [['/#agent-card=sam']]);
   assert.deepStrictEqual(d.toasts, []);
 });
 
-test('desktop: when the card says no, a member gets a toast (like the phone), only an admin gets the old popup', async () => {
+test('desktop: when the card says no, a member gets a toast (like the phone), only an admin is sent to the card address', async () => {
   for (const refuse of [false, 'reject']) {
     const card = refuse === false ? fakeCard(false) : Object.assign(fakeCard(), { open: () => Promise.reject(new Error('x')) });
     const member = desktop({ card, me: { isAdmin: false } });
     member.api.openAgentCard('sam');
     await new Promise((r) => setImmediate(r));
-    assert.strictEqual(member.popups.length, 0, 'no popup for a member');
+    assert.strictEqual(member.popups.length, 0, 'no navigation for a member');
     assert.deepStrictEqual(Array.from(member.toasts), ['This agent\'s settings are not open to you.']);
     const admin = desktop({ card: refuse === false ? fakeCard(false) : card });
     admin.api.openAgentCard('sam');
@@ -301,7 +303,7 @@ test('desktop: an agent_updated event repaints the chip only for that agent, onc
 });
 
 test('desktop: no stray invisible characters or new colours in the parts added here', () => {
-  for (const [name, text] of [['app.js', between(app, 'const agentCardSubs = {};', '    function openAgentSettingsPopup(')], ['mobile.js', between(mob, 'const agentCardSubs = {};', 'function modelText(')], ['agent-settings.html', between(read('agent-settings.html'), '<div id="card-door"', '<h2 id="agent-title">')]]) {
+  for (const [name, text] of [['app.js', between(app, 'const agentCardSubs = {};', '    function openAgentSettingsPopup(')], ['mobile.js', between(mob, 'const agentCardSubs = {};', 'function modelText(')], ['agent-settings.html', read('agent-settings.html')]]) {
     assert.ok(!new RegExp('[' + String.fromCharCode(0xfe0f, 0x200d) + ']').test(text), name);
     assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(text), name + ' uses a literal colour');
   }
@@ -406,11 +408,19 @@ test('phone: the usage badge chooser and the bell sheet get the last line; the b
   assert.ok(click.indexOf("d._agent !== current") < click.indexOf("nk === 'card'"));
 });
 
-test('phone: the ⋮ menu item "Agent settings" opens the card; the link to the old page stays as the fallback', () => {
-  assert.match(mob, /\$\('menu-agent-settings'\)\?\.addEventListener\('click', \(e\) => \{ if \(!current \|\| !window\.hubAgentCard\) return; if \(e && e\.preventDefault\) e\.preventDefault\(\); \$\('menu'\)\.classList\.remove\('open'\); openAgentCard\(current\); \}\)/);
-  assert.match(read('mobile.html'), /<a id="menu-agent-settings" class="chat-only" href="\/agent-settings\.html" hidden>/);
-  const sync = fnText(mob, 'function menuTeamSync(');
-  assert.match(sync, /st\.hidden = !\(a && \(admin \|\| \(window\.hubAgentCard && !\(typeof simpleOn === 'function' && simpleOn\(\)\)\)\)\)/);
+test('phone: the ⋮ menu has no "Agent settings" item any more; the card opens from the chat header name', () => {
+  assert.doesNotMatch(mob, /menu-agent-settings|menuTeamSync/);
+  assert.doesNotMatch(read('mobile.html'), /menu-agent-settings|agent-settings\.html/);
+  assert.match(mob, /openAgentCard\(current\)\) return;/, 'Simple: the name in the pill opens the card');
+  // the chat header's name opens the card (and keeps the title's own click, the status line, for the rest of the header)
+  assert.match(mob, /\$\('chat-name'\)\?\.addEventListener\('click', \(e\) => \{ if \(current && agentByName\(current\) && openAgentCard\(current\)\) e\.stopPropagation\(\); \}\);/);
+  assert.ok(mob.indexOf("$('chat-name')?.addEventListener('click'") < mob.indexOf("$('chat-title')?.addEventListener('click', showChatStatus)"));
+  const p = phone();
+  let stopped = 0;
+  const click = new Function('current', 'agentByName', 'openAgentCard', 'e', 'return ' + /\(e\) => \{ if \(current && agentByName\(current\) && openAgentCard\(current\)\) e\.stopPropagation\(\); \}/.exec(mob)[0])(p.sandbox.current, p.sandbox.agentByName, p.api.openAgentCard, null);
+  click({ stopPropagation: () => { stopped++; } });
+  assert.deepStrictEqual(p.card.calls.open, [{ name: 'sam', where: {} }]);
+  assert.strictEqual(stopped, 1, 'the title\'s status click does not also run');
 });
 
 test('phone, Simple: pressing the agent\'s name in "Talking to" opens the card; the rest of the pill still opens the list', () => {
@@ -455,37 +465,8 @@ test('both pages load the card, then its two row files, before the page script; 
   assert.strictEqual(sf.resolve('/lib/ui-agent-card-basics.js'), null, 'only the web name is served, not the path under lib/');
 });
 
-test('agent-settings.html: the line at the top and its button open the card on the main page; the page keeps working', () => {
-  const html = read('agent-settings.html');
-  assert.match(html, /<body>\s*<div id="card-door"[^>]*>\s*<span id="card-door-line">These settings now live on the agent card\.<\/span>/);
-  assert.ok(html.indexOf('id="card-door"') < html.indexOf('<h2 id="agent-title">'), 'at the top');
-  assert.ok(html.includes('id="agent-slug"') && html.includes('onclick="renameSlug()"'), 'the page itself is still there');
-  const script = html.slice(html.indexOf('<script>', html.indexOf('id="card-door"')) + 8, html.indexOf('</script>', html.indexOf('id="card-door"')));
-  const run = (opener, search) => {
-    const attrs = {}; let click = null; const prevented = [];
-    const btn = { setAttribute: (k, v) => { attrs[k] = v; }, addEventListener: (t, fn) => { click = fn; } };
-    const win = { opener, location: { search, origin: 'http://hub', href: '' } };
-    vm.runInNewContext(script, { window: win, document: { getElementById: (id) => (id === 'card-door-btn' ? btn : null) }, URLSearchParams });
-    click({ preventDefault: () => prevented.push(1) });
-    return { attrs, prevented, win };
-  };
-  // opened from the main page: the card opens there
-  const opener = { closed: false, location: { origin: 'http://hub', hash: '' }, focus() { this.focused = true; } };
-  const a = run(opener, '?agent=sam');
-  assert.strictEqual(a.attrs.href, '/#agent-card=sam');
-  assert.strictEqual(opener.location.hash, '#agent-card=sam');
-  assert.strictEqual(opener.focused, true);
-  assert.strictEqual(a.prevented.length, 1);
-  // no main page behind it: the link does the work (no preventDefault)
-  const b = run(null, '?agent=sam');
-  assert.strictEqual(b.prevented.length, 0);
-  assert.strictEqual(b.attrs.href, '/#agent-card=sam');
-  // a closed or other-origin opener is not used
-  assert.strictEqual(run({ closed: true, location: { origin: 'http://hub' } }, '?agent=sam').prevented.length, 0);
-  assert.strictEqual(run({ closed: false, location: { origin: 'http://elsewhere' } }, '?agent=sam').prevented.length, 0);
-  // an odd name is encoded
-  assert.strictEqual(run(null, '?agent=a%20b').attrs.href, '/#agent-card=a%20b');
-});
+// removed (P4-2): 'agent-settings.html: the line at the top and its button open the card on the main page' pinned the old page's door line.
+// The page is now a redirect to the card (test/agent-settings-redirect.test.js pins every hash it understands).
 
 test('the card\'s own door accepts the link the door line makes', () => {
   const C = require('../lib/ui-agent-card.js');

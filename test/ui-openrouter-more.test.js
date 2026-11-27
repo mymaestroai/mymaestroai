@@ -151,7 +151,7 @@ test('the list for effort is fetched by admins only, at most once a minute, then
   assert.match(dk, /if \(!isHubAdmin\(\) \|\| Date\.now\(\) - orCatalogueTriedAt < 60000\) return;/);
   assert.match(dk, /fetch\('\/api\/openrouter', \{ credentials: 'include' \}\)/);
   assert.match(dk, /if \(orPickView\) for \(const c of Object\.values\(chats\)\) if \(c && c\.id\) refreshEffortPick\(c\);/);
-  assert.match(read('agent-settings.html'), /OpenRouter models that take a reasoning level, marked 🧠 in the OpenRouter list, at high/);
+  // removed (P4-2): the old agent page's note "OpenRouter models that take a reasoning level, marked 🧠 ..., at high" has no counterpart on the card's Thinking effort row
 });
 
 test('the catalogue and the list are admin-only routes', () => {

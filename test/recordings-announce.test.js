@@ -219,20 +219,11 @@ test('9. heardConsent: bad input, and lookup_inconclusive when a session cannot 
   t2.cleanup(); t.cleanup();
 });
 
-test('10. agent-settings.html: the Announce recording select exists, is saved and is loaded', () => {
-  const as = fs.readFileSync(path.join(__dirname, '..', 'agent-settings.html'), 'utf8');
-  assert.match(as, /<label for="rec-announce" style="margin:0;">Announce recording<\/label>/);
-  assert.match(as, /<select id="rec-announce" onchange="saveRecordings\(\)" style="width:auto;max-width:100%;">/);
-  for (const o of ['<option value="first">First call with each person</option>', '<option value="every">Every call</option>', '<option value="never">Never</option>']) assert.ok(as.includes(o), o);
-  assert.ok(as.indexOf('id="rec-consent"') < as.indexOf('id="rec-announce"'), 'after the consent line');
-  assert.ok(as.includes('The line is spoken when a recorded call starts. The Recording badge shows on every call.'));
-  assert.ok(as.includes('The agent can say a short line when a call starts (see Announce recording), and the call screen shows Recording.'));
-  assert.ok(!as.includes('The agent says a short line at the start'));
-  assert.match(as, /id="rec-consent" maxlength="300" placeholder="This conversation is being recorded\."/);
-  const form = as.slice(as.indexOf('  function recordingsFormValues()'), as.indexOf('  // One warning while keep is on'));
-  assert.match(form, /announce: document\.getElementById\('rec-announce'\)\.value/);
-  const load = as.slice(as.indexOf('  async function loadRecordings(agent)'), as.indexOf('  async function saveRecordings()'));
-  assert.match(load, /announce\.value = \['first', 'every', 'never'\]\.includes\(r\.announce\) \? r\.announce : 'first'/);
-  assert.match(load, /pageGuard\.markLoaded\(\[[^\]]*announce[^\]]*\]\)/);
-  assert.match(as, /\['saveRecordings', 'recordings-status', byId\([^)]*'rec-announce'\)\]/);
+test('10. the card\'s Announce recording row (OPT-0036) offers first / every / never and saves it in the recordings object', () => {
+  // ported (P4-2) from the old agent-settings.html select: the card's Call recordings rows carry the same three choices and save through PATCH {recordings}
+  const basics = fs.readFileSync(path.join(__dirname, '..', 'lib', 'ui-agent-card-basics.js'), 'utf8');
+  assert.match(basics, /'OPT-0036'/);
+  for (const o of ['first', 'every', 'never']) assert.ok(basics.includes(`'${o}'`), o);
+  assert.match(basics, /announce/);
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', 'agent-settings.html'), 'utf8'), /rec-announce/, 'the old page\'s select is gone');
 });

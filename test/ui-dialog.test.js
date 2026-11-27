@@ -441,9 +441,7 @@ test('wiring: phone sheets, the Back gesture, agent settings and tiger team', ()
   assert.match(m, /dialogGuard\.open\(sh, \{ close: closeToolsSheet \}\)/);
   assert.ok(m.indexOf('const dialogGuard = createDialogGuard') < m.indexOf("window.addEventListener('popstate'"), 'the guard sees Back before the router');
   assert.match(read('mobile.html'), /<dialog id="recall-sheet" data-no-dirty>/);
-  const as = read('agent-settings.html');
-  assert.match(as, /<script src="\/ui-dialog\.js"><\/script>/);
-  assert.match(as, /const pageGuard = createDialogGuard\(\{ pageDirty: true \}\);/);
+  assert.doesNotMatch(read('agent-settings.html'), /ui-dialog|createDialogGuard/, 'the redirect page has no dialog guard (P4-2); the card is guarded through hubAgentCard.configure({ guard })');
   const tt = read('tiger-team.html');
   assert.match(tt, /dialogGuard\.open\(panel, \{ close: closeSavedPanel \}\)/);
   assert.match(tt, /function closeSavedPanel\(\) \{[\s\S]*?dialogGuard\.closed\(panel\);/);
@@ -455,7 +453,7 @@ test('wiring: phone sheets, the Back gesture, agent settings and tiger team', ()
 });
 
 test('review fixes wired in the pages', () => {
-  const app = read('app.js'), m = read('mobile.js'), as = read('agent-settings.html');
+  const app = read('app.js'), m = read('mobile.js');
   assert.match(app, /const gsClose = `<button class="gs-btn secondary" onclick="dialogRequestClose\(this\)">Close<\/button>`;/, 'footer Close = header ✕');
   assert.match(app, /dialogGuard\.markLoaded\(\['sec-pw-current', 'sec-pw-new', 'sec-pw-new2'\]\.map\(id => document\.getElementById\(id\)\)\);/, 'desktop: password changed');
   assert.match(m, /dialogGuard\.markLoaded\(\['sec-pw-current', 'sec-pw-new', 'sec-pw-new2'\]\.map\(\$\)\);/, 'phone: password changed');
@@ -471,9 +469,6 @@ test('review fixes wired in the pages', () => {
     assert.match(body, /const saved = dialogGuard\.savePoint\(/, fn);
     assert.match(body, /saved\(\);/, fn);
   }
-  assert.match(as, /const SAVES = \[/);
-  assert.match(as, /\['saveCurrentFile', 'file-status', \(\) => \[document\.getElementById\(`editor-\$\{currentFile\}`\)\]\],/, 'Save File settles only its own file');
-  assert.match(as, /function showStatus\(id, type, msg\) \{\n\s*settleSave\(id, type\);/);
   const lib = read('lib/ui-dialog.js');
   assert.ok(!/function rebase\(|res\.ok\) rebase/.test(lib), 'no automatic settling from a response');
 });
@@ -605,107 +600,9 @@ test('review 2: a panel beside the page (a <dialog> opened with show(), the phon
   assert.strictEqual(ui.dialogIsModal({ matches() { throw new SyntaxError(':modal'); } }), true, 'no :modal support: covering');
 });
 
-test('review 2: agent settings: one save per section at a time; a change during a save goes next, a Save button press is refused', async () => {
-  const as = read('agent-settings.html');
-  const a = as.indexOf('  const SAVES_ON_CHANGE = new Set(['), b = as.indexOf('\n  }\n', as.indexOf('  function settleSave(')) + 4;
-  assert.ok(a > 0 && b > a);
-  const src = as.slice(a, b);
-  const onChange = [...new Set([...as.matchAll(/onchange="(save[A-Za-z]+)\(\)"/g)].map(m => m[1]))].sort();
-  assert.deepStrictEqual([...new Function('window', 'SAVES', 'pageGuard', 'showStatus', src + '\nreturn SAVES_ON_CHANGE;')({}, [], null, null)].sort(), onChange, 'the list matches the page\'s onchange saves');
-  const make = (fn) => {
-    const log = [], waiting = [], sent = [], shown = [];
-    let running = 0, most = 0, settle = null;
-    const field = { value: 'v0' };
-    const pageGuard = { savePoint: () => { const snap = field.value; return () => log.push('commit ' + snap); }, markLoaded: () => log.push('loaded') };
-    const win = { [fn]: () => { sent.push(field.value); most = Math.max(most, ++running); return new Promise((ok, no) => waiting.push((fail) => { running--; if (fail) no(new Error('network')); else ok(); })); } };
-    const showStatus = (id, type, msg) => { shown.push(type + ': ' + msg); if (settle) settle(id, type); };
-    const api = new Function('window', 'SAVES', 'pageGuard', 'showStatus', src + '\nreturn { settleSave };')(win, [[fn, 's-status', () => [field]]], pageGuard, showStatus);
-    settle = api.settleSave;
-    return { log, field, sent, shown, most: () => most, press: () => win[fn](), status: (t) => showStatus('s-status', t, t), answer: async (fail) => { waiting.shift()(fail); await flush(); } };
-  };
-  let t = make('saveSandbox');                       // alone: its first verdict settles it, once
-  t.field.value = 'one'; t.press();
-  t.status('success'); t.status('error');
-  await t.answer();
-  assert.deepStrictEqual(t.log, ['commit one'], 'the first verdict is the save\'s');
-  t = make('saveSandbox');                           // a failure, then a later success message: still a failure
-  t.field.value = 'one'; t.press();
-  t.status('error'); t.status('success');
-  await t.answer();
-  assert.deepStrictEqual(t.log, []);
-  t = make('saveSandbox');                           // changed again while it runs: saved after it, with the newest value
-  t.field.value = 'one'; t.press();
-  t.field.value = 'two'; t.press();
-  t.field.value = 'three'; t.press();
-  assert.deepStrictEqual(t.sent, ['one'], 'nothing overlaps');
-  t.status('success'); await t.answer();
-  assert.deepStrictEqual(t.sent, ['one', 'three'], 'one more save, with the newest value');
-  t.status('success'); await t.answer();
-  assert.deepStrictEqual(t.log, ['commit one', 'commit three']);
-  assert.strictEqual(t.most(), 1);
-  t = make('saveSandbox');                           // the first saved, the one after it failed: only "one" counts as saved
-  t.field.value = 'one'; t.press();
-  t.field.value = 'two'; t.press();
-  t.status('success'); await t.answer();
-  t.status('error'); await t.answer();
-  assert.deepStrictEqual(t.log, ['commit one']);
-  t = make('saveSandbox');                           // a save that fails without a message settles nothing; the next one works
-  t.field.value = 'one'; t.press();
-  await t.answer(true);
-  t.field.value = 'two'; t.press();
-  t.status('success'); await t.answer();
-  assert.deepStrictEqual(t.log, ['commit two']);
-  t = make('saveBlurb');                             // a Save button pressed during its save: refused, later edits stay unsaved
-  t.field.value = 'A'; t.press();
-  t.field.value = 'B'; t.press();
-  assert.deepStrictEqual(t.sent, ['A']);
-  assert.ok(t.shown.includes('info: Still saving. Press Save again when it is done.'), t.shown.join('|'));
-  t.field.value = 'C';                               // typed, Save not pressed
-  t.status('success'); await t.answer();
-  assert.deepStrictEqual(t.sent, ['A'], 'nothing else was sent');
-  assert.deepStrictEqual(t.log, ['commit A'], 'C was never saved, so it stays a change');
-  t.press(); t.status('success'); await t.answer();
-  assert.deepStrictEqual(t.sent, ['A', 'C']); assert.deepStrictEqual(t.log, ['commit A', 'commit C']);
-  assert.strictEqual(t.most(), 1);
-  t = make('saveBlurb');                             // the hub answered, the page still finishing its own work: a press starts at once
-  t.field.value = 'A'; t.press();
-  t.status('success');
-  t.field.value = 'B'; t.press();
-  assert.deepStrictEqual(t.sent, ['A', 'B']);
-  assert.ok(!t.shown.some(m => m.startsWith('info:')), 'no "Still saving" over a save that already answered');
-  await t.answer();                                  // A's own work ends: it must not end B's slot
-  t.field.value = 'B2'; t.press();
-  assert.deepStrictEqual(t.sent, ['A', 'B'], 'B is still running: refused');
-  t.status('success'); await t.answer();
-  assert.deepStrictEqual(t.log, ['commit A', 'commit B']);
-});
-
-test('review 2: agent settings: a wrapped save never writes its status after it reported success (a press may start the next save then)', () => {
-  const as = read('agent-settings.html');
-  const fnBody = (name) => { const m = as.match(new RegExp(`\\n  (?:async )?function ${name}\\(`)); if (!m) return null; const a = m.index; return as.slice(a, as.indexOf('\n  }\n', a)); };
-  const HELPERS = ['showStatus', 'recordsStatus', 'compactionStatus'];
-  const statusCall = /\b(?:showStatus|recordsStatus|compactionStatus)\(/;
-  const saves = [...as.matchAll(/\['(save[A-Za-z]+)', '[\w-]+-status',/g)].map(m => m[1]);
-  assert.strictEqual(saves.length, 30);   // reports-to added saveReportsTo (30); hand-offs added saveBuildPartner (29); the 25th is saveTier (speed and price); the 20th is saveCallDisplay, the 21st saveVoiceDefaults, the 22nd saveRecordings (call recordings), the 23rd and 24th saveLockbox and saveLockboxEnv; team guidance added saveTeamGuidance and saveTeamRole (27); model suggestions added saveModelPinned (28)
-  for (const fn of saves) {
-    let body = fnBody(fn);
-    const own = fn === 'savePolicy' ? ['patchPolicy'] : [];   // savePolicy reports through patchPolicy
-    for (const h of own) body += fnBody(h);
-    // 1. Status lines are written only by the save itself: no page function it calls (awaited or not) writes one.
-    for (const m of body.matchAll(/\b([a-zA-Z]\w*)\(/g)) {
-      if (HELPERS.includes(m[1]) || own.includes(m[1]) || m[1] === fn) continue;
-      const callee = fnBody(m[1]);
-      if (callee) assert.ok(!statusCall.test(callee), `${fn} calls ${m[1]}, which writes a status line`);
-    }
-    // 2. In the save itself, nothing awaited after the success message is followed by another status.
-    const i = body.search(/\b(?:showStatus\('[\w-]+', 'success'|recordsStatus\('success'|compactionStatus\('success')/);
-    assert.ok(i > 0, fn + ': reports success');
-    //    That includes else and catch branches: a rejected await after success would report through its catch.
-    const rest = body.slice(i).replace(/^[^;]*;/, '');
-    assert.ok(!/\bawait\b[\s\S]*\b(?:showStatus|recordsStatus|compactionStatus)\(/.test(rest), fn + ': a status after an await that follows success');
-    assert.ok(!/\.then\(/.test(body.slice(i)), fn + ': no callbacks after success');
-  }
-});
+// removed (P4-2): the two 'review 2: agent settings: ...' tests ran the old agent-settings.html's own save queue (SAVES_ON_CHANGE / settleSave, one save per section at a time,
+// a wrapped save never writing its status after success). The page is a redirect now; the card has its own save handling: one save per row at a time and the value put back on a
+// refusal (test/ui-agent-card.test.js, section 4 "saving"). The page-dirty guard itself (createDialogGuard) keeps its own tests in this file.
 
 // ── guard.changed(scope) and the main Save of the Settings dialog ──
 

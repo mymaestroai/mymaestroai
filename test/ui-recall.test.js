@@ -13,7 +13,6 @@ const html = read('index.html');
 const app = read('app.js');
 const mhtml = read('mobile.html');
 const mjs = read('mobile.js');
-const settings = read('agent-settings.html');
 const sw = read('sw.js');
 
 test('desktop: a Recall button in every chat toolbar opens a docked Recall panel for that chat\'s agent', () => {
@@ -76,27 +75,8 @@ test('mobile: a chat-only Recall menu item opens a Recall sheet; tap a hit for i
   assert.ok(mjs.includes('`Archive: ${s.entries} entries from ${recallFmtDate(s.first)} to ${recallFmtDate(s.last)}`'), 'archive line');
 });
 
-test('agent settings: a Records section after Tool policy lists, edits, creates and deletes records over /api/agents/<name>/records', () => {
-  assert.ok(settings.includes('<div class="section" id="records-section">'), 'section present');
-  assert.ok(settings.indexOf('id="records-section"') > settings.indexOf('id="policy-section"'), 'after the Tool policy section');
-  assert.ok(settings.includes('Records are loaded in full into this agent\'s context on every turn'), 'one-line explanation');
-  assert.ok(settings.includes('id="records-cap"') && settings.includes("document.getElementById('records-cap').textContent = recordsState.maxBytes ? humanBytes(recordsState.maxBytes) : 'not set';"), 'cap shown from maxBytes');
-  for (const id of ['records-total', 'records-list', 'records-editor', 'records-content', 'records-status']) assert.ok(settings.includes(`id="${id}"`), `part ${id}`);
-  assert.ok(settings.includes('const recordsBase = () => `/api/agents/${encodeURIComponent(agentName)}/records`;'), 'list route');
-  assert.ok(settings.includes('const recordUrl = (name) => `${recordsBase()}/${encodeURIComponent(name)}`;'), 'file route');
-  assert.ok(settings.includes('data = await apiFetch(recordsBase());'), 'GET list');
-  assert.ok(settings.includes('data = await apiFetch(recordUrl(r.name));'), 'GET one file on click');
-  assert.ok(settings.includes("data = await apiFetch(recordUrl(name), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) });"), 'PUT { content } on Save');
-  assert.ok(settings.includes("data = await apiFetch(recordUrl(name), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: '' }) });"), 'New record: PUT with empty content');
-  assert.ok(settings.includes("prompt('Name for the new record (a file name, e.g. clients.md):', '')"), 'New record asks for a name');
-  assert.match(settings, /if \(!confirm\(`Delete the record "\$\{name\}"\?[^`]*`\)\) return;[\s\S]*?method: 'DELETE'/, 'Delete confirms first');
-  assert.ok(settings.includes('onclick="newRecord()"') && settings.includes('onclick="saveRecord()"') && settings.includes('onclick="deleteRecord()"'), 'buttons');
-  assert.ok(settings.includes("const link = r.symlink ? `<div style=\"font-size:11px;color:var(--as-dim-777);\">link → ${escapeHtml(r.target || '?')}</div>` : '';"), 'symlinks show link → target');
-  assert.ok(settings.includes('${humanBytes(r.bytes)}') && settings.includes("when && !isNaN(when) ? escapeHtml(when.toLocaleString()) : ''"), 'size and updated time');
-  assert.ok(settings.includes('const over = recordsState.maxBytes && total > recordsState.maxBytes;') && settings.includes("totalEl.style.color = over ? 'var(--as-error)' : 'var(--as-dim-888)';"), 'total vs cap, red when over');
-  assert.ok(settings.includes("if (!data || !data.ok)"), 'checks { ok } (not success)');
-  assert.match(settings, /loadPolicy\(\);\s*\n\s*loadRecords\(\);/, 'loaded at init');
-});
+// removed (P4-2): 'agent settings: a Records section after Tool policy lists, edits, creates and deletes records' pinned the old page's source; the card's Records rows
+// (OPT-0019 / 0020 read-only, OPT-0021 the editor) list, edit, create and delete over /api/agents/<name>/records - test/ui-agent-card-more.test.js.
 
 test('service worker cache bumped to v18', () => {
   assert.ok(sw.includes("const VERSION = 'hub-mobile-v103';"));

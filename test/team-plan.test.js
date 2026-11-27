@@ -214,6 +214,7 @@ test('Do it: an unticked line is not applied; ticked lines and model changes are
   assert.deepEqual(m.calls.pub, [['builder', ['reportsTo']], ['coder', ['model']]]);
   assert.equal(m.calls.push.length, 1);
   assert.equal(m.calls.push[0].p.body, 'Model changed for coder: m-cheap -> m-strong. To undo it, choose m-cheap again on its settings page.');
+  assert.equal(m.calls.push[0].p.url, '/#agent-card=coder', 'the notice opens the agent card, not the old page');
   assert.deepEqual(m.calls.push[0].op, { adminsOnly: true, kind: 'security' });
   // what the lead is told
   assert.match(out, /Applied now:\n- builder now reports to studio\n- coder model m-cheap -> m-strong/);

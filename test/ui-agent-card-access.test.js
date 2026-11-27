@@ -111,7 +111,7 @@ function setup(over = {}) {
     }
     if (/^\/api\/folders\?agent=hazel$/.test(url)) { const a = state.agents.find((x) => x.name === 'hazel'); return resp(200, { ok: true, folders: FOLDERS, granted: ((a.policy && a.policy.roots) || []).map(resolve) }); }
     if (url === '/api/sandbox/status') return resp(200, { ok: true, docker: true, imageReady: true, error: null, defaults: state.sandboxDefaults, containers: [] });
-    if (url === '/api/lockbox/status') return resp(200, { ok: true, host: { ok: true }, default: state.lockDefault, agents: state.agents.map((a) => ({ name: a.name, setting: a.lockbox || 'inherit', mode: a.lockbox || state.lockDefault, coverage: 'covered' })) });
+    if (url === '/api/lockbox/status') return resp(200, { ok: true, host: state.lockHost || { ok: true }, default: state.lockDefault, agents: state.agents.map((a) => ({ name: a.name, setting: a.lockbox || 'inherit', mode: a.lockbox || state.lockDefault, coverage: state.lockCoverage || 'covered' })) });
     if (/^\/api\/lockbox\/watch\?agent=hazel&limit=10$/.test(url)) return resp(200, state.blocked);
     return resp(404, { error: 'no route ' + url });
   };
@@ -455,6 +455,61 @@ test('recently blocked: the last lines from the watch route, or "Nothing blocked
   assert.strictEqual(t.writes().length, 0);
   const t2 = setup();
   assert.match((await openAt(t2, 'OPT-0056')).textContent, /Nothing blocked recently/);
+});
+
+// Ported from the old agent page's lockbox tests (lockbox-settings.test.js): the line under the select, the rules in words, the failures.
+test('lockbox: the line under the select for each mode, the lead, and the coverage that replaces it', async () => {
+  const enforce = 'Commands can write only in this agent\'s folders, can\'t read secret files, and can\'t use docker, systemd or other local services. Git over SSH and signed commits fail inside it.';
+  const lineFor = async (setup0, agentName = 'hazel') => {
+    const t = setup(setup0);
+    const row = await openAt(t, 'OPT-0054');
+    return row.textContent;
+  };
+  const withMode = (mode, extra = {}) => ({ state: { lockHost: extra.host, lockCoverage: extra.coverage, agents: (() => { const a = agentsFix(); a[1].lockbox = mode; return a; })() } });
+  assert.ok((await lineFor(withMode('off'))).includes('Commands run as they do today.'));
+  assert.ok((await lineFor(withMode('watch'))).includes('Commands run as today; anything the lockbox would have blocked is listed below.'));
+  const e1 = await lineFor(withMode('enforce'));
+  assert.ok(e1.includes(enforce) && !e1.includes('The lead needs sudo'));
+  const lead = setup({ state: { agents: (() => { const a = agentsFix(); a[1].lead = true; a[1].lockbox = 'enforce'; return a; })() } });
+  assert.ok((await openAt(lead, 'OPT-0054')).textContent.includes(enforce + ' The lead needs sudo for crontab, systemctl --user and docker.'));
+  const leadWatch = setup({ state: { agents: (() => { const a = agentsFix(); a[1].lead = true; a[1].lockbox = 'watch'; return a; })() } });
+  assert.ok(!(await openAt(leadWatch, 'OPT-0054')).textContent.includes('The lead needs sudo'));
+  assert.ok((await lineFor(withMode('enforce', { coverage: 'container' }))).includes('This agent\'s commands already run in its own container.'));
+  assert.ok((await lineFor(withMode('enforce', { coverage: 'codex-client' }))).includes('This agent uses Codex\'s own tools, which the lockbox can\'t box; switch it to the hub\'s hands.'));
+  assert.ok((await lineFor(withMode('enforce', { coverage: 'unavailable', host: { ok: false, reason: 'Landlock not available' } }))).includes('Not available on this computer: Landlock not available.'));
+});
+
+test('recently blocked: each rule in words, an unknown rule as it is', async () => {
+  const rules = ['write-outside', 'secret-read', 'unix-socket', 'io_uring', 'sudo-unconfined', 'watch-unavailable', 'toString'];
+  const t = setup({ state: { blocked: { entries: rules.map((rule, i) => ({ ts: '2026-11-25T1' + i + ':00:00.000Z', rule, path: '/p' + i })) } } });
+  const text = (await openAt(t, 'OPT-0056')).textContent;
+  for (const w of ['write outside its folders', 'read a secret file', 'local socket', 'io_uring', 'ran with sudo, outside the box', 'watch not possible', 'toString']) assert.ok(text.includes(w), w);
+});
+
+test('lockbox: a failed or unreadable status check leaves the rows read-only and says why, never a guessed value', async () => {
+  const cases = [
+    [{ status: 500, json: { error: 'boom' } }, /boom|Not available/],
+    [{ status: 404, json: { error: 'not found' } }, /not found|Not available/],
+    [{ status: 401, json: { error: 'unauthorized' } }, /unauthorized|Not available/],
+  ];
+  for (const [fail, why] of cases) {
+    const t = setup({ state: { failRoutes: { '/api/lockbox/status': fail } } });
+    const row = await openAt(t, 'OPT-0054');
+    assert.strictEqual(all(row, 'select').length, 0, JSON.stringify(fail) + ': nothing to change');
+    assert.match(row.textContent, why);
+    assert.doesNotMatch(row.textContent, /Checking…/);
+    const env = await openAt(t, 'OPT-0055');
+    assert.strictEqual(all(env, 'input').length, 0, 'kept variables are read-only too');
+    assert.strictEqual(t.writes().length, 0);
+  }
+});
+
+test('lockbox: a later good check brings the controls back', async () => {
+  const t = setup({ state: { failRoutes: { '/api/lockbox/status': { status: 500, json: { error: 'boom' } } } } });
+  assert.strictEqual(all(await openAt(t, 'OPT-0054'), 'select').length, 0);
+  t.state.failRoutes = {};
+  A.resetCache();
+  assert.strictEqual(all(await openAt(t, 'OPT-0054'), 'select').length, 1);
 });
 
 // ---- 6. members -----------------------------------------------------------------------------------------------------------------------

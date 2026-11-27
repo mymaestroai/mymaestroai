@@ -130,7 +130,7 @@ test('the model test route: one route for the Test button and the pickers; admin
   assert.match(srv, /health: require\('\.\/lib\/model-health'\)\.getModelHealth\(\)\.view\(\),/);
   const { classifyRoute } = L('access');
   assert.strictEqual(classifyRoute('/api/models/test', 'POST').kind, 'admin');
-  assert.match(read('agent-settings.html'), /if \(result\.success && result\.toolCall === false\) \{/, 'the Test button says when a model answered without using the tool');
+  assert.match(read('lib/ui-agent-card-basics.js'), /if \(r\.ok && j\.success && j\.toolCall === false\) \{/, 'the card\'s Test button says when a model answered without using the tool (P4-2: the old page is gone)');
 });
 
 // The pages: the same warnings for an OpenRouter row on the phone and the desktop, the mark in the pickers, and the

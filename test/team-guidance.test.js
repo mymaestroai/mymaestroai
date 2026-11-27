@@ -287,22 +287,17 @@ test('first-run seeding writes the marker, so a fresh install is never migrated'
 });
 
 // ── pages ──
-test('the pages carry the controls: the Settings tuning select, and the two agent-settings rows', () => {
-  const idx = read('index.html'), app = read('app.js'), as = read('agent-settings.html');
+test('the pages carry the controls: the Settings tuning select (the two per-agent rows are the card\'s Role and team rows, P4-2)', () => {
+  const idx = read('index.html'), app = read('app.js');
   // menu split (gear = what you set, ⋯ = what you do): the select moved from the ⋯ menu into #st-tuning-body, right after SDK workers
   assert.match(idx, /<div id="st-tuning-body" data-no-dirty hidden>[\s\S]*?id="sdk-workers-select"[\s\S]*?<\/div>\s*<div class="st-hint">[^<]*<\/div>\s*<div class="st-row"><label for="team-guidance-select">Team guidance<\/label><select id="team-guidance-select">[\s\S]*?value="full">Full<[\s\S]*?value="light">Light<[\s\S]*?value="off">Off</);
   assert.doesNotMatch(idx.slice(idx.indexOf('id="more-menu"'), idx.indexOf('id="st-tuning-body"')), /team-guidance-select/);
   // Review r1: the save moved into bindTeamGuidanceSelect (one save at a time, the stored value put back on failure); its behaviour is tested below.
   assert.match(app, /doFetch\('\/api\/team_guidance', \{ method: 'POST'[^}]*\}[^)]*body: JSON\.stringify\(\{ level: want \}\)/);
   assert.match(app, /if \(teamGuidanceSelect\) bindTeamGuidanceSelect\(teamGuidanceSelect, /);
-  assert.match(as, /<select id="team-guidance-mode" onchange="saveTeamGuidance\(\)"[\s\S]*?value="inherit">Use the hub setting<[\s\S]*?value="on">On<[\s\S]*?value="off">Off</);
-  assert.match(as, /<select id="team-role" onchange="saveTeamRole\(\)"[\s\S]*?value="">None<[\s\S]*?value="worker">Worker<[\s\S]*?value="challenger">Challenger</);
-  assert.match(as, /id="team-guidance-status"/);
-  assert.match(as, /JSON\.stringify\(\{ teamGuidance: v \}\)/);
-  assert.match(as, /JSON\.stringify\(\{ teamRole: v \|\| null \}\)/);
-  assert.match(as, /agent\?\.teamGuidance \|\| 'inherit'/);
-  assert.match(as, /agent\?\.teamRole \|\| ''/);
-  assert.ok(as.indexOf('id="effort-row"') < as.indexOf('id="team-guidance-row"'), 'after the effort row');
+  const basics = read('lib/ui-agent-card-basics.js');
+  assert.match(basics, /ctx\.patch\(\{ teamGuidance: /);
+  assert.match(basics, /ctx\.patch\(\{ teamRole: /);
 });
 
 // Review r1 (Sonnet): teamRole 'worker' must list the agent like a worker; the light text names the spawn_workers fallback.

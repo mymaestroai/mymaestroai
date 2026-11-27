@@ -635,7 +635,7 @@ test('the shared script is served under /ui-settings-help.js and every page that
   const idx = read('index.html'), mob = read('mobile.html'), as = read('agent-settings.html'), us = read('users.html');
   assert.ok(idx.includes(tag) && idx.indexOf(tag) < idx.indexOf('<script src="app.js">'), 'index.html');
   assert.ok(mob.includes(tag) && mob.indexOf(tag) < mob.indexOf('<script src="mobile.js">'), 'mobile.html');
-  assert.ok(as.includes(tag) && as.indexOf(tag) < as.indexOf("hubSettingsHelp.mount(document, 'agent-settings')"), 'agent-settings.html');
+  assert.ok(!as.includes('ui-settings-help'), 'agent-settings.html is a redirect page now (P4-2): it shows no ⓘ and loads no helper');
   assert.ok(us.includes(tag) && us.indexOf(tag) < us.indexOf("hubSettingsHelp.mount(document, 'users')"), 'users.html');
 });
 
@@ -649,7 +649,7 @@ test('the screens call the helper after they draw: Settings (desktop and so the 
   assert.match(mob, /H\.mount\(el, 'phone'\)/);
   assert.match(mob, /notify-prefs-sheet', 'notify-agent-sheet', 'research-sheet', 'profile-sheet', 'security-sheet'/);
   assert.match(mob, /helpMountPhone\(\);/);
-  assert.match(read('agent-settings.html'), /hubSettingsHelp\.mount\(document, 'agent-settings'\)/);
+  assert.doesNotMatch(read('agent-settings.html'), /hubSettingsHelp/, 'the agent card draws its own ⓘ (P4-2: the old page is a redirect)');
   assert.match(read('users.html'), /hubSettingsHelp\.mount\(document, 'users'\)/);
 });
 
@@ -677,7 +677,7 @@ test('both pages handle #ask-lead on load and on hashchange, and set mmAskLead o
 test('colours of the ⓘ, the panel and the sheet go through CSS variables only (no literal colour in the new rules or the script)', () => {
   const lit = /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|\b(white|black|red|blue|green|gray|grey|orange|yellow)\b\s*[;}]/;
   const rules = (html) => html.split('\n').filter((l) => /\.st-info|\.st-help-|\.st-word-hit/.test(l));
-  for (const f of ['index.html', 'mobile.html', 'agent-settings.html', 'users.html']) {
+  for (const f of ['index.html', 'mobile.html', 'users.html']) {
     const rs = rules(read(f));
     assert.ok(rs.length >= 8, f + ': the rules are there');
     for (const l of rs) assert.ok(!lit.test(l), f + ': ' + l.trim().slice(0, 80));
@@ -685,8 +685,7 @@ test('colours of the ⓘ, the panel and the sheet go through CSS variables only 
   const lib = read('lib/ui-settings-help.js');
   assert.ok(!lit.test(lib.replace(/\/\*[\s\S]*?\*\//g, '')), 'the script sets no colour');
   assert.ok(!/style\.(color|background)/.test(lib));
-  // agent-settings.html keeps to its own --as-* variables (and the page-wide ones it never defines are not used)
-  for (const l of rules(read('agent-settings.html'))) for (const m of l.matchAll(/var\(--([\w-]+)/g)) assert.match(m[1], /^as-/, l.trim().slice(0, 60));
+  assert.strictEqual(rules(read('agent-settings.html')).length, 0, 'the redirect page carries no ⓘ rules');
 });
 
 test('the ⓘ is at least 32x32 on the phone page and in the phone frame', () => {
@@ -976,7 +975,7 @@ test('a LABEL gets its ⓘ right after it and the class st-has-info; a label hol
   assert.strictEqual(infos(lab).length, 0, 'never inside a label');
   assert.strictEqual(infos(wrap).length, 0, 'never inside a label holding a control');
   assert.strictEqual(wrap.nextSibling.getAttribute('data-rec'), 'OPT-2');
-  for (const f of ['mobile.html', 'index.html', 'users.html', 'agent-settings.html']) assert.match(read(f), /label\.st-has-info/, f + ' styles the class');
+  for (const f of ['mobile.html', 'index.html', 'users.html']) assert.match(read(f), /label\.st-has-info/, f + ' styles the class');
   loaded();
 });
 
@@ -1054,8 +1053,8 @@ test('U2.1: st-has-info only goes on a label whose computed display is exactly b
     assert.strictEqual(lab.nextSibling.getAttribute('data-rec'), 'OPT-9', 'the ⓘ is still right after the label: ' + display);
     assert.strictEqual(/\bst-has-info\b/.test(lab.getAttribute('class')), want, 'display ' + display);
   }
-  for (const f of ['mobile.html', 'index.html', 'users.html', 'agent-settings.html']) assert.match(read(f), /label\.st-has-info/, f + ' keeps the class rule');
-  assert.ok(!/label:has\(\+ \.st-info\)/.test(read('agent-settings.html')), 'no rule that restyles every label followed by an ⓘ');
+  for (const f of ['mobile.html', 'index.html', 'users.html']) assert.match(read(f), /label\.st-has-info/, f + ' keeps the class rule');
+  assert.ok(!/label:has\(\+ \.st-info\)/.test(read('users.html')), 'no rule that restyles every label followed by an ⓘ');
   loaded();
 });
 
@@ -1240,8 +1239,8 @@ test('W1: on the phone the .st-info rule for the sheets outranks the sheet butto
   assert.ok(outranks(specificity('html.mm-simple .simple-modal button.st-info'), specificity('html.mm-simple .simple-modal button')) > 0);
 });
 
-test('W2: an ⓘ after a hidden control is hidden by CSS, in all four pages', () => {
-  for (const f of ['index.html', 'mobile.html', 'agent-settings.html', 'users.html']) {
+test('W2: an ⓘ after a hidden control is hidden by CSS, in the three pages that draw it', () => {
+  for (const f of ['index.html', 'mobile.html', 'users.html']) {
     const t = read(f);
     assert.ok(t.includes('[hidden] + .st-info, [style*="display:none"] + .st-info, [style*="display: none"] + .st-info { display: none; }'), f);
   }

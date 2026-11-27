@@ -359,19 +359,19 @@ test('a row using the default shows "Using the default for all agents"; when it 
   assert.strictEqual(all(r2, '.ac-reset').length, 0);
 });
 
-test('a record with no registered rowDef is read-only with a link to the agent page for admins, and nothing for members', async () => {
+test('a record with no registered rowDef is read-only text for admins (no link to another page), and nothing for members', async () => {
   const a = setup();
   await a.card.open('harbor');
   const row = rowOf(a.card.el(), 'OPT-0047');
-  assert.match(row.textContent, /Change it on the agent page/);
-  const link = all(row, 'a')[0];
-  assert.strictEqual(link.getAttribute('href'), '/agent-settings.html?agent=harbor#rec=OPT-0047');
+  assert.match(row.textContent, /Shown for reading only\./);
+  assert.ok(!/agent page|Change it on/.test(row.textContent), 'the old page is not offered');
+  assert.strictEqual(all(row, 'a').length, 0, 'no link at all');
   assert.strictEqual(all(row, 'select').length + all(row, 'input').length, 0);
   assert.strictEqual(all(row, '.st-info').length, 1, 'the ⓘ is still there');
   const m = setup({ me: MEMBER });
   await m.card.open('harbor');
   const mrow = rowOf(m.card.el(), 'OPT-0047');
-  assert.ok(!/Change it on/.test(mrow.textContent));
+  assert.ok(!/Shown for reading only|Change it on/.test(mrow.textContent));
   assert.strictEqual(all(mrow, 'a').length, 0);
 });
 

@@ -14,59 +14,12 @@ const html = read('index.html');
 const app = read('app.js');
 const mhtml = read('mobile.html');
 const mjs = read('mobile.js');
-const settings = read('agent-settings.html');
 const sw = read('sw.js');
 
-test('agent settings: a Context compression section after Records with mode, threshold, status lines and the buttons', () => {
-  assert.ok(settings.includes('<div class="section" id="compaction-section">'), 'section present');
-  assert.ok(settings.indexOf('id="compaction-section"') > settings.indexOf('id="records-section"'), 'after the Records section');
-  assert.ok(settings.includes('the agent writes its own carry-forward') && settings.includes('the provider never summarises'), 'plain-language intro');
-  assert.ok(settings.includes('Dry run = the brief only') && settings.includes('fresh session seeded from Records + recent turns + recall'), 'dry run vs on explained');
-  for (const id of ['compaction-mode', 'compaction-at', 'compaction-now', 'compaction-last', 'compaction-running', 'compaction-run-btn', 'compaction-brief-btn', 'compaction-status']) {
-    assert.ok(settings.includes(`id="${id}"`), `part ${id}`);
-  }
-  assert.ok(settings.includes('<option value="off">Off</option>') && settings.includes('<option value="dry">Dry run (brief only)</option>') && settings.includes('<option value="on">On (brief, then fresh session)</option>'), 'off, dry, on');
-  assert.ok(settings.includes('<option value="assisted">Assisted (small / local models: the hub feeds the transcript in slices sized to the window; the agent extracts into its Records from each slice, then writes the brief on a fixed template; then a fresh start)</option>'), 'the 4th mode, assisted');
-  assert.ok(settings.includes("const COMPACTION_MODES = { off: 'off', dry: 'dry run', on: 'on', assisted: 'assisted' };"), 'assisted is a known mode (select keeps it, labels name it)');
-  assert.ok(settings.includes('id="compaction-local-hint"') && settings.includes('Local model: assisted mode at 60% is the default.'), 'local hint');
-  assert.ok(settings.includes("document.getElementById('compaction-local-hint').style.display = d.local ? '' : 'none';"), 'shown when GET says local: true');
-  assert.ok(settings.includes("`${agentName} gets its transcript in slices sized to its window"), 'the Compress now confirm explains assisted');
-  for (const v of ['0.5', '0.55', '0.6', '0.65', '0.7', '0.75', '0.8', '0.85', '0.9']) {
-    assert.ok(settings.includes(`<option value="${v}">${Math.round(Number(v) * 100)}% of context window</option>`), `threshold ${v}`);
-  }
-  assert.ok(settings.includes('onclick="saveCompaction()"') && settings.includes('onclick="compressNow()"') && settings.includes('onclick="openBrief()"'), 'Save, Compress now, Done-read-the-brief');
-  assert.ok(settings.includes('`Context now: ${pct}% (${tokens.toLocaleString()} of ${limit.toLocaleString()} tokens)${d.model ? ` · ${d.model}` : \'\'}`'), 'Context now line, with the model when GET reports it');
-  assert.match(settings, /document\.getElementById\('compaction-now'\)\.textContent = limit\s*\n\s*\? `Context now:/, 'rendered whenever limit > 0');
-  assert.ok(settings.includes("let last = 'Last compression: never';") && settings.includes("${d.lastReset ? ', session reset' : ''}"), 'Last compression line, never / session reset');
-  assert.ok(settings.includes("document.getElementById('compaction-running').style.display = running ? '' : 'none';") && settings.includes("document.getElementById('compaction-run-btn').disabled = running;"), 'running indicator, button disabled while running');
-  assert.match(settings, /loadRecords\(\);\s*\n\s*loadCompaction\(\);/, 'loaded at init');
-});
-
-test('agent settings: GET, PUT { mode, at } and POST run on /api/agents/<name>/compaction; polls every 5 s; the brief opens in the Records editor', () => {
-  assert.ok(settings.includes('const compactionUrl = () => `/api/agents/${encodeURIComponent(agentName)}/compaction`;'), 'route');
-  assert.ok(settings.includes('data = await apiFetch(compactionUrl());'), 'GET');
-  assert.ok(settings.includes("data = await apiFetch(compactionUrl(), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode, at }) });"), 'PUT { mode, at }');
-  assert.ok(settings.includes("if (!data || !data.success)"), 'PUT answers { success }');
-  // contextWindow: a number input, read from the agent record, saved by PATCH /api/agents/<name> { contextWindow } with the same Save.
-  assert.ok(settings.includes('<input type="number" id="compaction-window"'), 'Context window (tokens) input');
-  assert.ok(settings.includes('<label for="compaction-window" style="font-size:12px;">Context window (tokens)</label>'), 'labelled');
-  assert.ok(settings.includes("Leave blank to detect (LM Studio reports the loaded model's window; cloud models use a table)"), 'hint');
-  assert.ok(settings.includes("const agentData = await apiFetch('/api/agents');") && settings.includes('const cw = agent && agent.contextWindow;'), 'loaded from GET /api/agents');
-  assert.ok(settings.includes("const contextWindow = raw ? Math.round(Number(raw)) : null;"), 'blank -> null (detect)');
-  assert.ok(settings.includes("r = await apiFetch(`/api/agents/${encodeURIComponent(agentName)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contextWindow }) });"), 'PATCH { contextWindow }');
-  assert.ok(settings.indexOf("body: JSON.stringify({ mode, at })") < settings.indexOf("body: JSON.stringify({ contextWindow })"), 'Save = PUT compaction, then PATCH agent');
-  assert.ok(settings.includes('if (contextWindow !== (compactionState.contextWindow || null)) {'), 'PATCH only when the window changed');
-  assert.match(settings, /loadCompaction\(\);\s*\n\s*loadContextWindow\(\);/, 'both loaded at init');
-  assert.ok(settings.includes("data = await apiFetch(`${compactionUrl()}/run`, { method: 'POST'"), 'POST run');
-  assert.match(settings, /if \(!confirm\(`Compress now\?[\s\S]*?\/run`, \{ method: 'POST'/, 'confirm before the POST');
-  assert.ok(settings.includes("`${agentName} will write its working brief (working-brief.md), then its session is reset") && settings.includes('the session goes on unchanged (dry run)'), 'the confirm says what the current mode does');
-  // Polls until the run is over; a postponed run (compression-busy) is said at once, a kept request otherwise keeps it polling.
-  assert.ok(settings.includes('}, 5000);') && settings.includes('if (d.running) return;') && settings.includes('if (d.requested) return;'), 'polls GET every 5 s until running is false');
-  assert.ok(settings.indexOf('if (d.lastBusy && lastRun') < settings.indexOf('if (d.requested) return;'), 'a postponed run is reported before a kept request keeps the poll going');
-  assert.ok(settings.includes("compactionStatus('success', d.lastReset ? '✅ Done: brief written, fresh session started' : '✅ Done, read the brief');"), 'Done, read the brief');
-  assert.ok(settings.includes("document.getElementById('compaction-brief-btn').style.display = '';"), 'the brief button appears when done');
-  assert.ok(settings.includes("const name = compactionState.briefFile || 'working-brief.md';") && settings.includes('const i = recordsState.records.findIndex(r => r.name === name);') && settings.includes('await openRecord(i);'), 'openBrief opens working-brief.md in the Records editor');
-});
+// removed (P4-2): the two 'agent settings: ... Context compression' tests pinned the old page's compaction section (mode and threshold selects, status lines, Save /
+// Compress now / Done-read-the-brief, the context-window input, GET / PUT / POST run on /api/agents/<name>/compaction, the 5 s poll). The card's Memory rows
+// (OPT-0040 mode, 0041 threshold, 0042 window, 0043 / 0044 status lines, 0833 Compress now) are tested in test/ui-agent-card.test.js and ui-agent-card-more.test.js.
+// Not on the card (no test to port): the "assisted" mode's long label, the local-model hint, the 5 s poll with its "Done, read the brief" button.
 
 test('desktop: a context line under each solo chat toolbar from the first reading on, fetched on open and after turn_end', () => {
   assert.ok(app.includes('<div class="compaction-line" id="compaction-line-${chatId}" style="display:none"'), 'line element per chat');

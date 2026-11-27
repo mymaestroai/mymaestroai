@@ -127,7 +127,7 @@ test('wiring: provider local/ in settings, discovery, gateway, billing, context,
   assert.ok(read('lib/ledger.js').includes('ninfer|local)') && read('lib/compaction.js').includes('ninfer|local)'));
   const cb = read('lib/context-budget.js'); assert.ok(cb.includes("source: 'local-models'") && cb.includes('ninfer|local)'));
   assert.ok(read('lib/billing.js').includes("'ninfer', 'local'") && read('lib/model-quirks.js').includes('/^local\\//i'));
-  for (const f of ['app.js', 'mobile.js', 'agent-settings.html']) assert.ok(read(f).includes("local: 'Local'") && read(f).includes("'ninfer', 'local'"), f);
+  for (const f of ['app.js', 'mobile.js']) assert.ok(read(f).includes("local: 'Local'") && read(f).includes("'ninfer', 'local'"), f);
   assert.ok(require('../lib/provider-pacing').DEFAULT_CAPS.default === 2 && read('lib/worker-policy.js').includes("startsWith('local/')"));
   const server = read('server.js');
   for (const p of ["pathname === '/api/local-models' && req.method === 'GET'", "'/api/local-models/install/llama-cpp'", "'/api/local-models/discover'", "filePath = path.join(__dirname, 'local-models.html')", "lm.state().enabled) lm.start()"]) assert.ok(server.includes(p), p);

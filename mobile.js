@@ -2132,7 +2132,6 @@ function onBackgroundEvent(ev) {
 
 function paintStatus() {
   if (screen === 'agents') renderAgents();
-  if (typeof menuTeamSync === 'function') menuTeamSync();
   paintChatStatus();
   if (typeof simpleAgentsDots === 'function') simpleAgentsDots();   // Simple: the open agent sheet's busy dots
 }
@@ -2985,34 +2984,12 @@ function buildTeamActivate(bt) { if (!bt.disabled && bt.getAttribute('aria-disab
 function buildSubHtml(name) {
   return `<div class="agent-model agent-build-sub">Solo · ${buildTeamBtnHtml(name, 'build-team-link', 'Build team', true)}</div>`;
 }
-// ── Optimize team (admins): a main agent WITH a team; the chat ⋮ menu entry, sublabel from the estimate ──
+// ── Optimize team (admins): a main agent WITH a team; the agent card's Role and team section starts it ──
 function reviewingTeam(name) { return Object.values(live).some((s) => s && s.reviewingTeamFor === name); }
 const optimizeTeamPending = new Set();   // requests on their way from this page
-const optimizeEstimates = {};            // name -> { days, turns, handOffs }, read once per menu opening
-function optimizeHasTeam() {
-  const s = new Set();
-  if (!isAdmin() || !window.hubTeams) return s;
-  for (const m of window.hubTeams.tree(agents, live).mains) if (m.size) s.add(m.agent.name);
-  return s;
-}
-function optimizeSubText(name) {
-  const e = optimizeEstimates[name];
-  if (!e) return 'reads the last 30 days';
-  return 'reads ' + (Number(e.days) || 30) + ' days: ' + (Number(e.turns) || 0) + ' turns, ' + (Number(e.handOffs) || 0) + ' hand-offs';
-}
-async function optimizeEstimateLoad(name) {
-  delete optimizeEstimates[name];
-  menuTeamSync();
-  try {
-    const r = await api('/api/agents/' + encodeURIComponent(name) + '/optimize-team/estimate');
-    const d = r && r.ok ? await r.json() : null;
-    if (d && typeof d === 'object') { optimizeEstimates[name] = { days: d.days, turns: d.turns, handOffs: d.handOffs }; menuTeamSync(); }
-  } catch { /* the sublabel stays "reads the last 30 days" */ }
-}
 async function optimizeTeamStart(name) {
   if (!name || reviewingTeam(name) || optimizeTeamPending.has(name)) return;
   optimizeTeamPending.add(name);
-  menuTeamSync();
   try {
     const r = await api('/api/agents/' + encodeURIComponent(name) + '/optimize-team', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     let d = null;
@@ -3023,7 +3000,6 @@ async function optimizeTeamStart(name) {
     toast(`Could not start the review: ${err.message}`, 5000);
   } finally {
     optimizeTeamPending.delete(name);
-    menuTeamSync();
   }
 }
 async function buildTeamStart(name) {
@@ -14600,6 +14576,7 @@ function connectEvents() {
   on('settings_changed', (ev) => { agentCardEmit('settings_changed', ev); });
   $('chat-model-pick')?.addEventListener('change', modelPickCardLine);
   $('chat-model-pick')?.addEventListener('change', changeModelFromPick);
+  $('chat-name')?.addEventListener('click', (e) => { if (current && agentByName(current) && openAgentCard(current)) e.stopPropagation(); });   // the name opens the agent's card (the ⋮ menu's "Agent settings" item is gone); the status line under it still shows what the agent is doing
   $('chat-title')?.addEventListener('click', showChatStatus);   // the name or the status under it: what the agent is doing, in full
   $('chat-effort-pick')?.addEventListener('change', changeEffortFromPick);
   on('model_fallback', (ev) => toast(`${displayName(ev.agent)}: ${String(ev.from || '').split('/').pop()} at its weekly limit; running on ${String(ev.to || '').split('/').pop()} until ${ev.resetsAt ? new Date(ev.resetsAt).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'it resets'}`));
@@ -15561,10 +15538,6 @@ function wire() {
   $('menu-profile')?.addEventListener('click', openProfileSheet);   // ?.: a page cached before Profile existed has no such item
   $('menu-settings')?.addEventListener('click', settingsSheetOpen);
   try { if (window.FeatureCard) FeatureCard.openSettings = () => settingsSheetOpen(); } catch { /* cosmetic */ }   // the new-features card's "Settings" link
-  // ⋮ > Agent settings opens the agent's card (the link to the old page stays for a page without the card).
-  $('menu-agent-settings')?.addEventListener('click', (e) => { if (!current || !window.hubAgentCard) return; if (e && e.preventDefault) e.preventDefault(); $('menu').classList.remove('open'); openAgentCard(current); });
-  $('menu-build-team')?.addEventListener('click', (e) => { e.stopPropagation(); $('menu').classList.remove('open'); if (current && !$('menu-build-team').disabled) buildTeamStart(current); });   // ?.: a page cached before Settings existed has no such item
-  $('menu-optimize-team')?.addEventListener('click', (e) => { e.stopPropagation(); $('menu').classList.remove('open'); if (current && !$('menu-optimize-team').disabled) optimizeTeamStart(current); });
   $('menu-security').addEventListener('click', openSecuritySheet);
   $('menu-files').addEventListener('click', openFilesSheet);
   $('menu-recall').addEventListener('click', openRecallSheet);
@@ -15976,36 +15949,7 @@ function menuLookName() {
   try { const cur = L.applied(document); const m = (L.LOOKS || []).find(l => l.id === cur); label = m ? m.label : ''; } catch { /* no label */ }
   el.textContent = label ? label + ' ›' : '›';
 }
-// The chat's ⋮ menu: "Agent settings" (admins; the settings page of the open agent) and "Build team" (admins; a main
-// agent with no team). Simple mode shows neither. Run on open and on every status change.
-function menuTeamSync() {
-  const st = $('menu-agent-settings'), bt = $('menu-build-team'), ot = $('menu-optimize-team');
-  if (!st && !bt && !ot) return;
-  const admin = isAdmin() && !(typeof simpleOn === 'function' && simpleOn());
-  const a = current ? agentByName(current) : null;
-  if (st) {
-    st.hidden = !(a && (admin || (window.hubAgentCard && !(typeof simpleOn === 'function' && simpleOn()))));   // the card is open to the people who own or share the agent (it checks); the old page to admins only
-    if (a) st.href = '/agent-settings.html?agent=' + encodeURIComponent(a.name);
-  }
-  if (bt) {
-    bt.hidden = !(admin && a && buildNoTeam().has(a.name));
-    const on = !!a && (buildingTeam(a.name) || buildTeamPending.has(a.name));
-    bt.disabled = on;
-    bt.textContent = on ? 'Building…' : '🏗 Build team';
-  }
-  if (ot) {   // a main agent WITH a team, never together with Build team
-    ot.hidden = !(admin && a && optimizeHasTeam().has(a.name));
-    const on = !!a && (reviewingTeam(a.name) || optimizeTeamPending.has(a.name));
-    ot.disabled = on;
-    const label = on ? 'Reviewing…' : '🔍 Optimize team';
-    const lab = $('menu-optimize-label'), sub = $('menu-optimize-sub');
-    if (lab) lab.textContent = label; else ot.textContent = label;
-    if (sub) { sub.textContent = !on && a ? optimizeSubText(a.name) : ''; sub.hidden = on; }
-  }
-}
 function menuOnOpen() {
-  menuTeamSync();
-  if (current && typeof optimizeHasTeam === 'function' && optimizeHasTeam().has(current) && isAdmin() && !(typeof simpleOn === 'function' && simpleOn())) optimizeEstimateLoad(current);   // the size of the review, once per opening
   menuGroupsSync();
   menuAdvDotSync();
   menuLookName();

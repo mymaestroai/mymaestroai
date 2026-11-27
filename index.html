@@ -558,7 +558,6 @@
     .teams-row.rank-worker .name { height: 14px; font-size: 11px; line-height: 14px; font-weight: 500; color: var(--text-dim); }
     .teams-kids .teams-row.rank-worker { padding-left: 3px; }   /* a leader's workers: icon 84, name 106 */
     #teams-list .teams-row.rank-worker .teams-dot.bg-work:not(.live-busy):not(.live-question) { border-width: 1.5px; }
-    .teams-row .agent-menu-btn { width: 16px; margin-left: auto; margin-right: 0; }
     /* A narrow sidebar (dragged down towards its 160px minimum): names get the room, icons go, the nesting stays readable. The container is the list's content box (sidebar - 25px). */
     #teams-list { container-type: inline-size; }
     @container (max-width: 186px) {   /* the default 240px sidebar gives the list about 215px: full rows; only a sidebar dragged narrower gets this */
@@ -667,7 +666,7 @@
     .security-modal .sec-secret { word-break: break-all; padding: 6px 8px; background: var(--bg-input); border-radius: 5px; font-size: 0.78rem; user-select: all; }
     .security-modal .sec-codes { margin: 0; padding: 8px 10px; background: var(--bg-input); border-radius: 5px; font-size: 0.85rem; columns: 2; user-select: all; }
     /* Members never see admin surfaces (the server refuses them too) */
-    body.member-view .more-menu .more-advanced, body.member-view #more-badge, body.member-view .agent-btn .actions, body.member-view .agent-menu-btn, body.member-view .agent-build-line, body.member-view .build-team-btn { display: none !important; }
+    body.member-view .more-menu .more-advanced, body.member-view #more-badge, body.member-view .agent-btn .actions, body.member-view .agent-build-line, body.member-view .build-team-btn { display: none !important; }
 
     /* (Hardware toggle CSS removed) */
 
@@ -799,15 +798,7 @@
     .agent-btn .name { display: flex; align-items: center; min-width: 0; }
     .agent-btn .name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
     .agent-btn .name .lead-badge { flex: none; }
-    .agent-btn:has(.agent-menu-btn) .agent-info { padding-right: 18px; }
-    .agent-menu-btn {
-      flex: none; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
-      width: 24px; height: 24px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: none;
-      color: var(--text-dim); font: inherit; font-size: 1rem; line-height: 1; cursor: pointer;
-    }
-    .agent-menu-btn:hover, .agent-menu-btn[aria-expanded="true"] { color: var(--text); background: var(--border-strong); }
-    .agent-menu-btn:focus-visible, .build-team-link:focus-visible, .build-team-btn:focus-visible, .agent-menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-    .agent-btn .agent-menu-btn { position: absolute; bottom: 6px; right: 6px; }
+    .build-team-link:focus-visible, .build-team-btn:focus-visible, .agent-btn .name-text[data-card-agent]:focus-visible, .teams-row .name-text[data-card-agent]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
     .agent-build-line { display: block; font-size: 0.65rem; line-height: 1.3; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .agent-btn .model { line-height: 1.3; }   /* the build line takes the model line's place on a no-team main: the same line height keeps every All Agents row one height */
     .agent-btn .agent-build-line .build-team-link { white-space: nowrap; }
@@ -819,16 +810,8 @@
     .build-team-btn { align-self: flex-start; margin-top: 4px; padding: 3px 10px; border: 1px solid var(--accent); border-radius: 6px; background: transparent; color: var(--accent); font: inherit; font-size: 0.7rem; font-weight: 600; cursor: pointer; }
     .build-team-btn:hover:not(:disabled) { background: var(--accent); color: var(--on-color-text); }
     .build-team-btn:disabled { border-color: var(--border-strong); opacity: 0.7; cursor: default; }
-    .agent-row-menu {
-      position: fixed; z-index: 10000; min-width: 150px; max-width: calc(100vw - 8px); display: flex; flex-direction: column; gap: 2px; padding: 4px;
-      background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 30px var(--shadow-color-pop); color: var(--text);
-    }
-    .agent-menu-item { padding: 7px 12px; border: 0; border-radius: 6px; background: none; color: var(--text); font: inherit; font-size: 0.8rem; text-align: left; cursor: pointer; white-space: nowrap; }
-    .agent-menu-item:hover:not(:disabled), .agent-menu-item:focus-visible { background: var(--agent-btn-hover-bg); }
-    .agent-menu-item:disabled { color: var(--text-dim); cursor: default; }
-    .agent-menu-sub { display: block; font-size: 0.68rem; color: var(--text-dim); }
     #agent-active-group .agent-build-line { display: none; }
-    html.mm-simple .agent-menu-btn, html.mm-simple .agent-build-line, html.mm-simple .build-team-btn { display: none !important; }   /* Simple shows no controls */
+    html.mm-simple .agent-build-line, html.mm-simple .build-team-btn { display: none !important; }   /* Simple shows no controls */
     .agent-btn .add-btn { background: var(--purple); }
     .agent-btn .sum-btn { background: var(--blue); }
     .agent-btn .agent-status {

@@ -749,7 +749,6 @@
     #menu.open { display: block; }
     #menu a, #menu button { display: flex; align-items: center; width: 100%; min-height: 48px; padding: 0 16px; text-align: left; color: var(--text); text-decoration: none; font-size: 15px; }
     #menu a:active, #menu button:active { background: var(--border); }
-    #menu #menu-optimize-team { flex-direction: column; align-items: flex-start; justify-content: center; }
     #menu .menu-sub { font-size: 12px; color: var(--text-tertiary); }
     #menu .danger { color: var(--error); }
     #toast { position: fixed; left: 50%; bottom: calc(80px + var(--sab)); transform: translateX(-50%); background: var(--border-strong); color: var(--text); padding: 10px 16px; border-radius: 20px; font-size: 14px; z-index: 30; display: none; max-width: 90%; text-align: center; }
@@ -1772,9 +1771,6 @@ html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, htm
     <button id="menu-reload">&#x21BB; Reload app</button>
     <button id="menu-profile">&#x1F464; Profile</button>
     <button id="menu-settings">&#x2699; Settings</button>
-    <a id="menu-agent-settings" class="chat-only" href="/agent-settings.html" hidden>&#x2699; Agent settings</a>
-    <button id="menu-build-team" class="chat-only" hidden>&#x1F3D7; Build team</button>
-    <button id="menu-optimize-team" class="chat-only" hidden><span id="menu-optimize-label">&#x1F50D; Optimize team</span><small id="menu-optimize-sub" class="menu-sub">reads the last 30 days</small></button>
     <!-- This device: how this phone shows things and what it does; what you set for the hub is in Settings (admins) -->
     <div class="menu-group" data-group="device" role="group" aria-labelledby="menu-gt-device">
       <div class="menu-group-title" id="menu-gt-device">This device</div>

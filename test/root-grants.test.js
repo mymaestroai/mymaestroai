@@ -106,13 +106,13 @@ test('gate: with a grant the root command runs (card only when sudo is listed) a
 
 test('wiring: sdk-chat passes the grant lookup to the gate; server routes are admin-only and refuse the service identity; pages carry the controls', () => {
   const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-  const sdk = read('lib/sdk-chat.js'), server = read('server.js'), page = read('agent-settings.html'), app = read('app.js');
+  const sdk = read('lib/sdk-chat.js'), server = read('server.js'), page = read('lib/ui-agent-card-more.js'), app = read('app.js');   // P4-2: the grant / revoke controls are the card's Root row (OPT-0016), not the old page
   assert.ok(sdk.includes("rootGranted: (name) => { try { return require('./root-grants').getRootGrants().active(name); } catch { return null; } },"));
   assert.ok(server.includes("if (pathname === '/api/root-grants' || /^\\/api\\/root-grants\\/[^/]+$/.test(pathname)) {"));
   assert.ok(server.includes("if (req.hubService) return jsonResponse(res, 403, { error: 'admin_only', detail: 'root grants are given by a signed-in admin, never by the hub itself' });"));
   assert.ok(server.includes("if (!access.isAdmin(req.hubUser) || req.hubPendingTotp) return jsonResponse(res, 403, { error: 'admin_only' });"));
   assert.ok(server.includes("hubAuth.audit(req.hubUser.id, 'root.grant'") && server.includes("hubAuth.audit(req.hubUser.id, 'root.revoke'"));
   assert.ok(server.includes("if (d.sandboxed) return jsonResponse(res, 400,") && server.includes("if (d.memberOwned) return jsonResponse(res, 400,") && server.includes("if (d.lead) return jsonResponse(res, 400,"));
-  assert.ok(page.includes('id="root-grant-box"') && page.includes('async function grantRoot()') && page.includes('async function revokeRoot()') && page.includes('loadRootGrant();'));
+  assert.ok(page.includes("'OPT-0016'") && page.includes("'POST', '/api/root-grants', { agent: ctx.name, minutes: m }") && page.includes("'DELETE', '/api/root-grants/' + enc(ctx.name)"));
   assert.ok(app.includes('id="st-root-grants"') && app.includes('async function loadRootGrants()') && app.includes('async function revokeRootGrant('));
 });

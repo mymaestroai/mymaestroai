@@ -531,6 +531,31 @@ test('Call display: None, Orb, the installed and the downloadable characters; a 
   assert.deepStrictEqual(writes(t).map((c) => [c.method, c.url, c.body]), [['PATCH', '/api/agents/harbor', { callDisplay: 'pack:fox' }]]);
 });
 
+// ported (P4-2) from test/agent-call-display.test.js, which pinned the same behaviour on the old agent page
+test('Call display: a saved character that is not installed stays selected, called unavailable; a list that cannot be read still shows the saved value; opening writes nothing', async () => {
+  const t = await opened({ tweak: (l) => { l[1].callDisplay = 'pack:gone-away'; } });
+  const row = rowOf(t.card.el(), 'OPT-0063');
+  const opts = all(row, 'option');
+  assert.ok(opts.some((o) => o.value === 'pack:gone-away' && /gone-away.*(unavailable|not installed)/.test(o.textContent)), 'the saved one is listed, as unavailable: ' + opts.map((o) => o.value + '=' + o.textContent).join(' | '));
+  assert.strictEqual(all(row, 'select')[0].value, 'pack:gone-away');
+  assert.strictEqual(writes(t).length, 0, 'opening never writes');
+  B.reset();
+  const f = setup({ tweak: (l) => { l[1].callDisplay = 'pack:fox'; } });
+  f.state.fail['GET /api/faces'] = { status: 500, error: 'no' };
+  await f.card.open('harbor'); await flush();
+  const row2 = rowOf(f.card.el(), 'OPT-0063');
+  assert.strictEqual(all(row2, 'select')[0].value, 'pack:fox', 'the saved value is shown though the list failed');
+  assert.deepStrictEqual(all(row2, 'option').map((o) => o.value).slice(0, 2), ['none', 'orb']);
+});
+
+test('Call display: a refusal from the hub is shown on the row and the saved value stays', async () => {
+  const t = await opened();
+  t.state.fail['PATCH /api/agents/harbor'] = { status: 400, error: 'callDisplay: the character "owl" is not installed' };
+  const row = rowOf(t.card.el(), 'OPT-0063');
+  await pick(all(row, 'select')[0], 'pack:owl');
+  assert.match(rowOf(t.card.el(), 'OPT-0063').textContent, /is not installed/);
+});
+
 test('Call timing: Patient saves the preset, Custom the four numbers (and drops the preset); one number sends only itself', async () => {
   const t = await opened();
   all(t.card.el(), '.ac-more-head')[0].click();
@@ -589,6 +614,32 @@ test('Model extras and limits: keep model, Auto per message, speed and price, lo
   await pick(all(rowOf(t.card.el(), 'OPT-0076'), 'select')[0], 'none');
   assert.deepStrictEqual(writes(t).map((c) => c.body), [{ modelPinned: true }, { tier: 'fast' }, { maxOutputTokens: 4000 }, { minModel: 'claude-sdk/claude-haiku-4-5' }, { fallbackModel: 'none' }]);
   assert.ok(!rowIds(t.card.el()).includes('OPT-0052'), 'the models Auto may use show only while Auto is on');
+});
+
+// ported (P4-2) from test/service-tier.test.js, which pinned these two cases on the old agent page
+test('Speed and price: the row is hidden when only Standard is offered; a saved tier the model does not offer reads as Standard', async () => {
+  const one = await opened({ tweak: (l) => { l[1].tierOptions = ['standard']; } });
+  all(one.card.el(), '.ac-more-head')[0].click();
+  assert.ok(!rowIds(one.card.el()).includes('OPT-0058'), 'hidden when only Standard is offered');
+  const odd = await opened({ tweak: (l) => { l[1].tierOptions = ['standard', 'fast']; l[1].tierLabels = { standard: 'Standard', fast: 'Fast (costs more)' }; l[1].tier = 'economy'; } });
+  all(odd.card.el(), '.ac-more-head')[0].click();
+  const sel = all(rowOf(odd.card.el(), 'OPT-0058'), 'select')[0];
+  assert.strictEqual(sel.value, 'standard', 'an unsupported saved tier shows as Standard');
+  assert.strictEqual(writes(odd).length, 0, 'showing it writes nothing');
+});
+
+test('Speed and price: the help line differs per provider (Economy offered or not; Gemini\'s busy-time note only for Google models)', async () => {
+  const three = ['standard', 'fast', 'economy'];
+  const help = async (model, tierOptions) => {
+    const t = await opened({ tweak: (l) => { l[1].model = model; l[1].tierOptions = tierOptions; } });
+    all(t.card.el(), '.ac-more-head')[0].click();
+    return rowOf(t.card.el(), 'OPT-0058').textContent;
+  };
+  assert.match(await help('google/gemini-3-pro', three), /Gemini may often run Economy requests at Standard when it is busy\./);
+  assert.ok(!/Gemini/.test(await help('openai/gpt-6-astra', three)), 'not for OpenAI');
+  assert.ok(!/Gemini/.test(await help('openrouter/some-model', three)), 'not for OpenRouter');
+  assert.match(await help('codex-cli/gpt-6', ['standard', 'fast']), /ChatGPT plan/);
+  assert.match(await help('openai/gpt-6-astra', three), /Economy costs half/);
 });
 
 test('Longest reply stays live for a member (the route lets a member set it); the other model extras do not', async () => {
@@ -748,6 +799,28 @@ test('Voice: going back to this computer for speech sends tts and removes the st
   all(t.card.el(), '.ac-more-head')[0].click();
   await pick(all(rowOf(t.card.el(), 'OPT-0024'), 'select')[0], 'local');
   assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voice: { tts: 'local', cloudVoice: null } }]);
+});
+
+// Ported from the old agent page's cloud voice tests (ui-voice-cloud.test.js): the lists, no confirm for a normal agent, ask once for a kept one.
+test('Voice: the cloud voice lists; OpenAI and Google never send the other provider\'s voice; a normal agent asks nothing; a kept agent asks once for a new engine', async () => {
+  const t = await opened({ tweak: (l) => { l[1].voice = { voice: 'amber', stt: 'local', tts: 'local' }; } });
+  all(t.card.el(), '.ac-more-head')[0].click();
+  const opts = all(all(rowOf(t.card.el(), 'OPT-0024'), 'select')[0], 'option').map((o) => o.getAttribute('value'));
+  for (const v of ['local', 'openai:coral', 'openai:nova', 'google:Kore', 'google:Puck']) assert.ok(opts.includes(v), v + ' offered: ' + opts.join(','));
+  await pick(all(rowOf(t.card.el(), 'OPT-0024'), 'select')[0], 'openai:coral');
+  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voice: { tts: 'openai', cloudVoice: 'coral' } }]);
+  assert.strictEqual(t.confirms.length, 0, 'a normal agent asks nothing');
+  t.calls.length = 0;
+  await pick(all(rowOf(t.card.el(), 'OPT-0024'), 'select')[0], 'google:Kore');
+  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voice: { tts: 'google', cloudVoice: 'Kore' } }]);
+  // a kept agent: one question for the new engine, none for going back to local
+  const k = await opened({ tweak: (l) => { l[1].voice = { voice: 'amber', stt: 'local', tts: 'local' }; l[1].keptOnBox = true; } });
+  all(k.card.el(), '.ac-more-head')[0].click();
+  await pick(all(rowOf(k.card.el(), 'OPT-0024'), 'select')[0], 'openai:coral');
+  assert.strictEqual(k.confirms.length, 1);
+  assert.deepStrictEqual(writes(k).map((c) => c.body), [{ voice: { tts: 'openai', cloudVoice: 'coral', cloudConfirm: true } }]);
+  await pick(all(rowOf(k.card.el(), 'OPT-0024'), 'select')[0], 'local');
+  assert.strictEqual(k.confirms.length, 1, 'back to local asks nothing');
 });
 
 test('Voice: "Its own voice" with nothing saved yet reads "(choose below)"; once a detail is stored it reads "Its own voice"', async () => {
@@ -956,6 +1029,15 @@ test('Model offer: shown only when the hub has one (short words, Switch and Not 
   assert.ok(!rowOf(pinned.card.el(), 'OPT-0048'), 'a kept model gets no suggestion');
   const member = await openRow({ me: MEMBER }, 'OPT-0048', 'harbor', (x) => { x.state.offer = OFFER_FIX; });
   assert.ok(!rowOf(member.card.el(), 'OPT-0048'), 'a member sees no suggestion');
+});
+
+// Ported from the old page's 'pin saves modelPinned ... a suggestion that arrives after the pin never shows the box again'.
+test('Model offer: keeping the model (the pin) takes the suggestion away', async () => {
+  const t = await openRow({}, 'OPT-0048', 'harbor', (x) => { x.state.offer = OFFER_FIX; });
+  assert.ok(rowOf(t.card.el(), 'OPT-0048'), 'the suggestion shows before the pin');
+  const pin = all(rowOf(t.card.el(), 'OPT-0049'), 'input')[0]; pin.checked = true; pin.dispatch('change'); await flush();
+  assert.deepStrictEqual(writes(t).map((c) => c.body), [{ modelPinned: true }]);
+  assert.ok(!rowOf(t.card.el(), 'OPT-0048'), 'gone after the pin');
 });
 
 test('Model offer: a refusal from the hub is shown and the suggestion stays', async () => {

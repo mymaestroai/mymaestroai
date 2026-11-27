@@ -336,12 +336,13 @@ test('screen, none, dangerous, secret and device records are refused with the do
   }
   // a record whose screen is an agent's own page (delete an agent): that page's link, with the agent; without one, a question
   const del = await call(fakeRes(), { action: 'set', setting: 'OPT-0074', agent: 'harbor', value: true, reason: 'r' });
-  assert.match(del, /\(\/agent-settings\.html\?agent=harbor#rec=OPT-0074\)/, del);
+  assert.match(del, /\[Open Harbor's settings\]\(\/#agent-card=harbor&row=OPT-0074\)/, del);
+  assert.doesNotMatch(del, /agent-settings\.html/, 'the old page is never linked');
   assert.match(await call(fakeRes(), { action: 'set', setting: 'OPT-0074', value: true, reason: 'r' }), /Which agent|Ask which agent/);
   assert.equal(entries().length, n);
   assert.equal(fs.readFileSync(SETTINGS_FILE, 'utf8'), disk);
   const g = JSON.parse(await call(fakeRes(), { action: 'get', setting: 'OPT-0007', agent: 'harbor' }));
-  assert.match(g.open, /\(\/agent-settings\.html\?agent=harbor#rec=OPT-0007\)$/);
+  assert.match(g.open, /\[Open Harbor's settings\]\(\/#agent-card=harbor&row=OPT-0007\)$/);
   // a bad value is plain words, no door
   const bad = await call(fakeRes(), { action: 'set', setting: 'OPT-0381', value: 'lots', reason: 'r' });
   assert.match(bad, /^Not changed: /);

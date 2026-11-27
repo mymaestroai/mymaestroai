@@ -25,14 +25,11 @@ test('listModels: a probed-only list (no discovery cache yet) is returned but ne
   assert.match(tail, /if \(!haveDiscovery\) \{[\s\S]*?return sorted;[\s\S]*?\}\s*\n\s*_modelsCache = sorted;/);
 });
 
-test('/api/models reports discovering, stale and discoveredAt; the editor shows a rebuilding note and refetches', () => {
+test('/api/models reports discovering, stale and discoveredAt', () => {
   const server = read('server.js');
   assert.match(server, /discovering: md\.isDiscovering\(\)/);
   assert.match(server, /stale: !!dcache\.stale/);
-  const page = read('agent-settings.html');
-  assert.match(page, /function watchModelRebuild\(modelsData\)/);
-  assert.match(page, /Model list is rebuilding/);
-  assert.match(page, /watchModelRebuild\(modelsData\);/);
+  // removed (P4-2): the old agent page's "Model list is rebuilding" note and refetch (watchModelRebuild); the card's Model row has no such note yet.
 });
 
 test('the updater no longer deletes the model cache', () => {

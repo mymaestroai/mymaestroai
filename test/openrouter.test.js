@@ -179,5 +179,4 @@ test('wiring: settings, discovery, requests, effort, ledger, context window, wor
   assert.ok(app.includes("openrouter: 'OpenRouter'") && app.includes("const VENDOR_ORDER = ['Anthropic', 'OpenAI', 'Google', 'Perplexity', 'OpenRouter', 'Local'];"));
   assert.ok(app.includes('<div class="st-section" id="st-or-section"><h4>OpenRouter</h4>') && app.includes('function renderOpenRouterBox(opts = {})') && app.includes("postOpenRouter({ models: null }"));
   assert.ok(read('mobile.js').includes("const MP_VENDOR_ORDER = ['Anthropic', 'OpenAI', 'Google', 'Perplexity', 'OpenRouter', 'Local'];"));
-  assert.ok(read('agent-settings.html').includes("'Perplexity · API $', 'OpenRouter · API $', 'Local'];"));
 });

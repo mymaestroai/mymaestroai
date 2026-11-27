@@ -54,7 +54,7 @@ test('switch: asks, logs before, changes, publishes and sends the notice', async
   assert.deepEqual(m.lines().map((l) => l.state), ['requested', 'done']);
   assert.deepEqual(m.pub, ['helper-b']);
   assert.equal(m.pushed[0].p.title, 'Model switched');
-  assert.equal(m.pushed[0].p.url, '/agent-settings.html?agent=helper-b');
+  assert.equal(m.pushed[0].p.url, '/#agent-card=helper-b&row=OPT-0048');
   assert.deepEqual(m.pushed[0].op, { adminsOnly: true, kind: 'security' });
   assert.match(m.pushed[0].p.body, /choose claude-sdk\/claude-opus-5-5 again on its settings page\.$/);
 });

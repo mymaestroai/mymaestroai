@@ -224,10 +224,5 @@ test('the gate hook and the allow-list live in one place (policy-gate imports th
   assert.ok(pg.includes('This tool is not available to an agent in a box.'));
 });
 
-test('agent-settings.html: the tools choice is fixed for a boxed agent on a Claude model, with the note', () => {
-  const html = read('agent-settings.html');
-  assert.ok(html.includes('Hub tools (always while this agent is in a box)'));
-  assert.ok(html.includes('fixToolsWhileBoxed(agent);'));
-  assert.match(html, /sel\.value = 'hub'; sel\.disabled = true;/);
-  assert.match(html, /\/\^claude-sdk\\\/\/\.test\(agent\?\.model \|\| currentModel/);
-});
+// removed (P4-2): 'agent-settings.html: the tools choice is fixed for a boxed agent on a Claude model, with the note' pinned the old page's source;
+// the card's Tools row (OPT-0064) is locked while boxed, with "Kept in its box, so it uses Maestro's tools." (test/ui-agent-card-more.test.js).

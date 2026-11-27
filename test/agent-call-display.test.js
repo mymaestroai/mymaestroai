@@ -189,121 +189,14 @@ test('a member cannot PATCH callDisplay: the server guard, run on the real sourc
 });
 
 // ── the settings page ──
-const page = fs.readFileSync(path.join(REAL, 'agent-settings.html'), 'utf8');
-const fnSrc = (name) => {
-  const m = new RegExp(`(?:async )?function ${name}\\(`).exec(page);
-  assert.ok(m, `${name} is in the page`);
-  const open = page.indexOf('{', page.indexOf(')', m.index));
-  let depth = 0;
-  for (let i = open; i < page.length; i++) { if (page[i] === '{') depth++; else if (page[i] === '}') { depth--; if (!depth) return page.slice(m.index, i + 1); } }
-  throw new Error('unbalanced');
-};
+// removed (P4-2): the page tests below ran the old agent-settings.html's callDisplayOptions / loadCallDisplay / saveCallDisplay. The agent card's Call display
+// row (OPT-0063) does the same and is tested in test/ui-agent-card-basics.test.js ('Call display: ...'; the two cases that had no card test were ported there).
 
-function harness({ facesReply, patchReply } = {}) {
-  const els = {};
-  const mk = (tag) => ({ tag, children: [], value: '', textContent: '', appendChild(c) { this.children.push(c); if (this.children.length === 1 && !this.value) this.value = c.value; } });
-  els['call-display'] = mk('select');
-  Object.defineProperty(els['call-display'], 'textContent', { get() { return ''; }, set() { this.children = []; this.value = ''; } });
-  const calls = [], statuses = [];
-  const ctx = {
-    document: { getElementById: (id) => els[id] || null, createElement: mk },
-    agentName: 'tester',
-    apiFetch: async (url, opts) => {
-      calls.push({ url, opts });
-      if (url === '/api/faces') { if (facesReply instanceof Error) throw facesReply; return facesReply; }
-      return patchReply;
-    },
-    showStatus: (id, type, msg) => statuses.push({ id, type, msg }),
-    encodeURIComponent,
-  };
-  vm.createContext(ctx);
-  vm.runInContext(`const CALL_DISPLAY_FIXED = [{ value: 'none', label: 'None' }, { value: 'orb', label: 'Orb' }];\n${fnSrc('callDisplayOptions')}\n${fnSrc('loadCallDisplay')}\n${fnSrc('saveCallDisplay')}`, ctx);
-  return { ctx, els, calls, statuses, sel: els['call-display'] };
-}
-const labels = (h) => h.sel.children.map(c => [c.value, c.textContent]);
-
-test('page: a "Default call display" dropdown that starts with None and Orb, with the user-wins hint', () => {
-  assert.match(page, /<label for="call-display"[^>]*>Default call display<\/label>/);
-  const sel = /<select id="call-display"[^>]*>([\s\S]*?)<\/select>/.exec(page);
-  assert.ok(sel);
-  assert.match(sel[1], /<option value="none">None<\/option>\s*<option value="orb">Orb<\/option>/);
-  assert.match(sel[0], /onchange="saveCallDisplay\(\)"/);
-  const help = /<small id="call-display-help"[^>]*>([^<]*)<\/small>/.exec(page);
-  assert.ok(help);
-  assert.match(help[1], /own choice[^.]*wins/);
-  assert.ok(!/pack:[a-z]/.test(page.replace(/'pack:' \+|pack:<id>|startsWith\('pack:'\)|'pack:'/g, '')), 'no pack id is hardcoded in the page');
-});
-
-test('page: the save is wired like the other on-change saves, and loaded with the agent', () => {
-  assert.match(page, /\['saveCallDisplay', 'call-display-status', byId\('call-display'\)\]/);
-  assert.match(page, /SAVES_ON_CHANGE = new Set\([^)]*'saveCallDisplay'/);
-  assert.match(page, /<div id="call-display-status" class="status"><\/div>/);
-  assert.match(page, /loadCallDisplay\(agent\);/);
-});
-
-test('page: installed packs from GET /api/faces are listed after None and Orb by name', async () => {
-  const h = harness({ facesReply: { packs: [{ id: 'bird', name: 'Test Bird' }, { id: 'fox', name: '' }, { id: 'bird', name: 'Dup' }, { name: 'no id' }] } });
-  await h.ctx.loadCallDisplay({ callDisplay: 'none' });
-  assert.deepStrictEqual(h.calls.map(c => c.url), ['/api/faces']);
-  assert.deepStrictEqual(labels(h), [['none', 'None'], ['orb', 'Orb'], ['pack:bird', 'Test Bird'], ['pack:fox', 'fox']]);
-  assert.strictEqual(h.sel.value, 'none');
-});
-
-test('page: the saved value is selected, including a pack and a missing field', async () => {
-  const faces = { packs: [{ id: 'bird', name: 'Test Bird' }] };
-  for (const [agent, want] of [[{ callDisplay: 'pack:bird' }, 'pack:bird'], [{ callDisplay: 'orb' }, 'orb'], [{}, 'none'], [undefined, 'none']]) {
-    const h = harness({ facesReply: faces });
-    await h.ctx.loadCallDisplay(agent);
-    assert.strictEqual(h.sel.value, want);
-  }
-});
-
-test('page: a saved pack that is not installed stays selected, labelled unavailable', async () => {
-  const h = harness({ facesReply: { packs: [{ id: 'bird', name: 'Test Bird' }] } });
-  await h.ctx.loadCallDisplay({ callDisplay: 'pack:gone-away' });
-  assert.deepStrictEqual(labels(h).pop(), ['pack:gone-away', 'gone-away (unavailable: not installed)']);
-  assert.strictEqual(h.sel.value, 'pack:gone-away');
-  assert.strictEqual(h.calls.filter(c => c.opts && c.opts.method === 'PATCH').length, 0, 'loading never writes');
-});
-
-test('page: when the list cannot be fetched the page still shows the saved value', async () => {
-  for (const facesReply of [new Error('offline'), { error: 'nope' }, null]) {
-    const h = harness({ facesReply });
-    await h.ctx.loadCallDisplay({ callDisplay: 'pack:bird' });
-    assert.deepStrictEqual(labels(h).map(l => l[0]), ['none', 'orb', 'pack:bird']);
-    assert.strictEqual(h.sel.value, 'pack:bird');
-  }
-});
-
-test('page: choosing a value PATCHes { callDisplay } on the normal agent path', async () => {
-  const h = harness({ facesReply: { packs: [] }, patchReply: { success: true } });
-  h.sel.value = 'pack:bird';
-  await h.ctx.saveCallDisplay();
-  const c = h.calls[0];
-  assert.strictEqual(c.url, '/api/agents/tester');
-  assert.strictEqual(c.opts.method, 'PATCH');
-  assert.deepStrictEqual(JSON.parse(c.opts.body), { callDisplay: 'pack:bird' });
-  assert.strictEqual(h.statuses.pop().type, 'success');
-});
-
-test('page: a refusal from the hub is shown, a thrown error too', async () => {
-  let h = harness({ patchReply: { success: false, error: 'callDisplay: the character "x" is not installed' } });
-  h.sel.value = 'pack:x';
-  await h.ctx.saveCallDisplay();
-  assert.deepStrictEqual(h.statuses.pop(), { id: 'call-display-status', type: 'error', msg: 'callDisplay: the character "x" is not installed' });
-  h = harness({}); h.ctx.apiFetch = async () => { throw new Error('boom'); };
-  h.sel.value = 'orb';
-  await h.ctx.saveCallDisplay();
-  assert.strictEqual(h.statuses.pop().msg, 'boom');
-});
-
-test('page: the agent record the page reads carries callDisplay (GET /api/agents returns getAgents)', async () => {
+test('the agent record the card reads carries callDisplay (GET /api/agents returns getAgents)', async () => {
   seed([base({ callDisplay: 'pack:bird' })]);
   const rec = await listed('tester');
-  const h = harness({ facesReply: { packs: packs.listPacks({ home: HOME }).map(p => ({ id: p.id, name: p.manifest.name })) } });
-  await h.ctx.loadCallDisplay(rec);
-  assert.deepStrictEqual(labels(h).pop(), ['pack:bird', 'Test Bird']);
-  assert.strictEqual(h.sel.value, 'pack:bird');
+  assert.strictEqual(rec.callDisplay, 'pack:bird');
+  assert.ok(packs.listPacks({ home: HOME }).some((p) => p.id === 'bird'), 'and the pack it names is the installed one');
 });
 
 test('the allowlist change is only in lib/agents (no member change in the server)', () => {

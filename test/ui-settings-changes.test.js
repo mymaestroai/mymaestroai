@@ -331,12 +331,12 @@ test('#rec=OPT-xxxx on the agent settings page finds the row by the same anchors
   assert.ok(sec.classList.contains('st-door-hit'));
 });
 
-test('page wiring: desktop, phone and agent-settings follow their doors', () => {
+test('page wiring: desktop and phone follow their doors; agent-settings.html redirects to them', () => {
   const app = read('app.js'), mob = read('mobile.js'), as = read('agent-settings.html');
   assert.ok(app.includes("parseDoorHash(h, 'settings-for')") && app.includes('settingsDoorStart();') && /settingsDoorStart\(\);\s*\/\/ the phone's/.test(app), 'the full page and the Settings frame');
   assert.ok(app.includes("stSetOpen(s, true)") && app.includes('hubToast(H.hereIs(rec)'), 'opens the group; a toast when the row is elsewhere');
   assert.ok(mob.includes('function settingsDoorPhone()') && mob.includes("'#settings-for=' + s.door") && mob.includes('settingsDoorPhone();   //'), 'the phone passes the door on to the frame');
-  assert.ok(as.includes("H.parseDoorHash(location.hash, 'rec')") && as.includes("'agent-settings'"), 'agent-settings #rec=');
+  assert.ok(as.includes('agent-card=') && as.includes('settings-for=') && as.includes('/api/settings-records'), 'agent-settings #rec= goes to the card or to Settings (test/agent-settings-redirect.test.js)');
 });
 
 // ---- 4. Recent changes -------------------------------------------------------------------------------------------------
