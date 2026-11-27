@@ -174,3 +174,32 @@ test('a quoted > in a read is text, not a redirection', () => {
   for (const c of [`grep '>' ${L}`, `grep -n ">=" ${L}`, `grep -c "a > b" ${L}`]) assert.strictEqual(wp(c), false, c);
   assert.strictEqual(wp(`echo '>' > ${L}`), true, 'a real redirection after a quoted > still counts');
 });
+
+test('a symlink whose target does not exist yet, and `..` after a symlink, are followed as the kernel follows them', () => {
+  const b = tmp();
+  mk(b, 'lib/sub', 'workspaces/sam', 'hub-home/share/sam');
+  const ws = path.join(b, 'workspaces', 'sam');
+  fs.symlinkSync(path.join(b, 'lib', 'new.js'), path.join(ws, 'dangling'));   // its target does not exist yet
+  fs.symlinkSync(path.join(b, 'lib', 'sub'), path.join(ws, 'l'));
+  const cp = make(b, path.join(b, 'hub-home'));
+  assert.strictEqual(cp.isProtectedPath(path.join(ws, 'dangling')), true, 'a write through it makes lib/new.js');
+  assert.strictEqual(cp.commandWritesProtected(`echo x > ${ws}/dangling`, ws), true);
+  // l/../x.js is lib/x.js (the .. leaves lib/sub), not workspaces/sam/x.js
+  assert.strictEqual(cp.commandWritesProtected(`echo x > ${ws}/l/../x.js`, ws), true);
+  assert.strictEqual(cp.commandWritesProtected('echo x > l/../x.js', ws), true, 'relative too');
+  assert.strictEqual(cp.commandWritesProtected('cd l && echo x > ../x.js', ws), true, 'after a cd into the link');
+  assert.strictEqual(cp.commandWritesProtected(`echo x > ${ws}/plain/../notes.md`, ws), false, 'an ordinary .. stays free');
+});
+
+test('>&FILE, >& FILE, {fd}>FILE and <>FILE write; >&2, 2>&1 and >&- do not', () => {
+  const L = path.join(app, 'lib/x.js');
+  for (const c of [`echo x >&${L}`, `echo x >& ${L}`, `exec {fd}>${L}`, `exec 3<>${L}`]) assert.strictEqual(wp(c), true, c);
+  for (const c of ['echo x >&2', 'ls 2>&1', 'ls >&-']) assert.strictEqual(wp(c), false, c);
+  assert.strictEqual(mightWrite(`echo x >&${L}`), true);
+  assert.strictEqual(mightWrite('ls 2>&1'), false);
+});
+
+test('onlyReads: a program named by a path, and programs that can write a file, are not read-only', () => {
+  const { onlyReads } = require('../lib/code-protect');
+  for (const c of ['./ls', '/tmp/x/cat a', 'uniq in out', 'xxd in out', 'file -C', 'rg --pre ./x pattern']) assert.strictEqual(onlyReads(c), false, c);
+});
