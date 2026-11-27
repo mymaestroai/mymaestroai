@@ -331,3 +331,66 @@ test('cd walk: redirections are not operands, a folder without search permission
   fs.accessSync = (p, ...r) => { if (String(p) === path.join(ws, 'a')) { const e = new Error('permission denied'); e.code = 'EACCES'; throw e; } return orig(p, ...r); };
   try { assert.strictEqual(W(`cd ../../lib; cd ${ws}/a; echo x > a.js`, ws), true); } finally { fs.accessSync = orig; }
 });
+
+test('a separate repo in the hub home: clone into it, cd after a clone, a subshell, and a literal variable are free; the install stays protected', () => {
+  const home = tmp();
+  const inst = path.join(home, 'agent-hub-5.1.0');
+  mk(home, 'agent-hub-5.1.0/.git', 'agent-hub-5.1.0/lib', 'share/maestro/site/.git', 'share/review/assets');
+  const cp = make(inst, home);
+  const S = path.join(home, 'share/maestro/site');
+  const R = path.join(home, 'share/review');
+  const W = (c) => cp.commandWritesProtected(c, inst);   // the agents' shells start in the install folder
+  for (const c of [
+    `git clone ${S} ${R}/film`,
+    `git clone ${S} ${R}/film && cd ${R}/film && git checkout -b v10d`,
+    `cd ${S} && git checkout -q -b film master && python3 ${R}/assets/apply.py ${S}`,
+    `(cd ${S} && git checkout -q -b film master)`,
+    `D=${R}/window && mkdir -p $D && cp a.png b.png $D/`,
+    `D=${R}/w; mkdir -p "$D"; cp a b "\${D}/"`,
+    `mkdir -p ${R}/new && cd ${R}/new && echo x > notes.md`,
+  ]) assert.strictEqual(W(c), false, c);
+  for (const c of [
+    `echo x > ${inst}/lib/x.js`,
+    `cd ${inst} && git checkout -- .`,
+    `git clone ${S} ${inst}/lib/site`,
+    `cd ${inst}/lib && git clone ${S}`,
+    `git clone --depth 1 -b main ${S} lib/site`,
+    `D=${inst}/lib && cp a.js $D/`,
+    'cp a.js $UNKNOWN/',
+    `(cd ${S}) && git checkout -- .`,
+    `D=${R}/w && read D && cp a.js $D/`,
+    `git clone ${S} ${R}/film; cd ${R}/film; git checkout -- .`,
+  ]) assert.strictEqual(W(c), true, c);
+});
+
+test('review r1: variables only where bash certainly sets them; clone options it does not know; --separate-git-dir', () => {
+  const home = tmp();
+  const inst = path.join(home, 'agent-hub-5.1.0');
+  mk(home, 'agent-hub-5.1.0/.git', 'agent-hub-5.1.0/lib', 'share/maestro/site/.git', 'share/review');
+  const cp = make(inst, home);
+  const S = path.join(home, 'share/maestro/site');
+  const R = path.join(home, 'share/review');
+  const L = path.join(inst, 'lib');
+  const W = (c) => cp.commandWritesProtected(c, inst);
+  for (const c of [
+    `D=${L}; false && D=${R}; cp a.js $D/`,
+    `D=${L}; D=${R} | cat; cp a.js $D/`,
+    `D=${L}; D=${R} & cp a.js $D/`,
+    `D=${R}; for D in ${L}; do cp a.js $D/; done`,
+    `D=${R}; D+=/../../agent-hub-5.1.0/lib; cp a.js $D/`,
+    `D=${R}; (D=${L}); IFS=/; cp a.js $D/x`,
+    `git clone --dep 1 ${S} ${L}/x`,
+    `git clone -qb main ${S} ${L}/x`,
+    `git clone --revision main ${S} ${L}/x`,
+    `git clone --separate-git-dir ${L}/x.git ${S} ${R}/safe`,
+    `git clone --separate-git-dir=${L}/x.git ${S} ${R}/safe`,
+    `git clone ${S} "$X"`,
+  ]) assert.strictEqual(W(c), true, c);
+  for (const c of [
+    `D=${R}/a; (printf x); cp a.js $D/`,
+    `D=${L}; (D=${R}/b); cp a.js ${R}/c/`,
+    `D=${R}/w && mkdir -p $D && cp a $D/ 2>&1 | tail -1`,
+    `git clone --depth 1 -b main ${S} ${R}/film`,
+    `git clone --branch=main --single-branch ${S} ${R}/film`,
+  ]) assert.strictEqual(W(c), false, c);
+});
