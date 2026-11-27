@@ -3978,6 +3978,7 @@
               const keep = STG.searchRows(q, units.map((u) => ({
                 text: `${u.textContent} ${words.filter((e) => { for (let n = e.row; n; n = n.parentNode) if (n === u) return true; return false; }).map((e) => e.text).join(' ')}`,
                 follows: u.classList.contains('st-hint') || u.tagName === 'BUTTON',   // a hint or an ⓘ button belongs to the row above it
+                group: (u.dataset && u.dataset.searchGroup) || '',   // rows that save together (the spend caps and Save caps) are found together
               })));
               units.forEach((u, i) => { if (!keep[i]) u.classList.add('st-row-off'); });
             }
@@ -4593,28 +4594,28 @@
           <label style="flex-basis:150px">Spent today</label>
           <div id="st-spend" style="flex:1;font-size:0.8rem;color:var(--text-dim)">Loading…</div>
         </div>
-        <div class="st-row">
+        <div class="st-row" data-search-group="caps">
           <label style="flex-basis:150px">Daily pay-per-use cap per agent ($)</label>
           <input type="text" id="st-cap-agent" placeholder="unlimited" inputmode="decimal" style="max-width:120px" disabled>
         </div>
-        <div class="st-row">
+        <div class="st-row" data-search-group="caps">
           <label style="flex-basis:150px">Daily pay-per-use cap, your whole Maestro ($)</label>
           <input type="text" id="st-cap-hub" placeholder="unlimited" inputmode="decimal" style="max-width:120px" disabled>
         </div>
-        <div class="st-hint" style="margin-left:158px">Caps count pay-per-use spend only (API keys and paid cloud voices), never plan use. Over a cap, an agent's decided actions (sending, writing outside its folders, admin, destructive) switch to ask for the rest of the day; nothing is silently stopped. Blank = unlimited.</div>
-        <div class="st-row">
+        <div class="st-hint" data-search-group="caps" style="margin-left:158px">Caps count pay-per-use spend only (API keys and paid cloud voices), never plan use. Over a cap, an agent's decided actions (sending, writing outside its folders, admin, destructive) switch to ask for the rest of the day; nothing is silently stopped. Blank = unlimited.</div>
+        <div class="st-row" data-search-group="caps">
           <label style="flex-basis:150px" title="A hard stop on pay-per-use spend for the month. Once it is used up, agents on pay-per-use models answer with a short notice until the month starts again or you raise the cap. Plan and local agents keep working.">Monthly cap ($)</label>
           <input type="text" id="st-cap-month" placeholder="no cap" inputmode="decimal" style="max-width:120px" disabled>
         </div>
-        <div class="st-row">
+        <div class="st-row" data-search-group="caps">
           <label style="flex-basis:150px" for="st-cap-month-day">Month starts on day</label>
           <input type="text" id="st-cap-month-day" placeholder="1" inputmode="numeric" style="max-width:44px" title="1 to 28; 1 is the calendar month" disabled>
         </div>
-        <div class="st-row">
+        <div class="st-row" data-search-group="caps">
           <label style="flex-basis:150px"></label>
           <button class="st-test-btn" id="st-caps-save" onclick="saveSpendCaps()">Save caps</button>
         </div>
-        <div class="st-row">
+        <div class="st-row" data-search-group="caps">
           <label style="flex-basis:150px"></label>
           <div id="st-month-spend" style="flex:1;font-size:0.8rem;color:var(--text-dim)"></div>
         </div>

@@ -126,6 +126,25 @@ test('7. search: a group whose title matches comes first; the rest show only mat
   assert.deepStrictEqual(G.searchRows('sound', units), [true, true, false, false, false, false], 'a matching hint keeps its row');
   assert.deepStrictEqual(G.searchRows('zzz', units), units.map(() => true), 'no row of its own: nothing is hidden for no reason');
   assert.deepStrictEqual(G.searchRows('', []), []);
+  // the spend caps save with one "Save caps" row: a search that finds one cap keeps the whole group, with the hints and ⓘ under its rows
+  const caps = [
+    { text: 'Daily pay-per-use cap per agent ($)', group: 'caps' }, { text: '', follows: true },
+    { text: 'Daily pay-per-use cap, your whole Maestro ($)', group: 'caps' },
+    { text: 'Caps count pay-per-use spend only', follows: true, group: 'caps' },
+    { text: 'Monthly cap ($)', group: 'caps' }, { text: 'Month starts on day', group: 'caps' }, { text: '', follows: true },
+    { text: 'Save caps', group: 'caps' },
+    { text: 'Monthly API credit ($)' },
+  ];
+  assert.deepStrictEqual(G.searchRows('whole maestro', caps), [true, true, true, true, true, true, true, true, false], 'a found cap keeps Save caps and every row it saves');
+  assert.deepStrictEqual(G.searchRows('month starts', caps), [true, true, true, true, true, true, true, true, false]);
+  assert.deepStrictEqual(G.searchRows('api credit', caps), [false, false, false, false, false, false, false, false, true], 'a group nothing found stays hidden');
+  const app = require('fs').readFileSync(require('path').join(__dirname, '..', 'app.js'), 'utf8');
+  for (const id of ['st-cap-agent', 'st-cap-hub', 'st-cap-month', 'st-cap-month-day', 'st-caps-save']) {
+    const at = app.indexOf(`id="${id}"`);
+    const row = app.lastIndexOf('<div class="st-row"', at);
+    assert.ok(app.slice(row, at).startsWith('<div class="st-row" data-search-group="caps">'), `${id} sits in a row of the caps search group`);
+  }
+  assert.match(app, /group: \(u\.dataset && u\.dataset\.searchGroup\) \|\| ''/, 'stSearch passes each part\'s group');
   // the page wiring
   const body = fnSrc(app, 'function stSearch(q)');
   assert.ok(body.includes('STG.searchRows(q,') && body.includes("u.classList.add('st-row-off')") && body.includes('ge.style.order = String(i)'));

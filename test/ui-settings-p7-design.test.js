@@ -114,9 +114,9 @@ test('spend caps: one "Save caps" button on its own line after the monthly cap a
   const sec = sectionSrc('st-spend-section');
   const at = (s) => sec.indexOf(s);
   assert.ok(at('id="st-cap-agent"') < at('id="st-cap-hub"') && at('id="st-cap-hub"') < at('id="st-cap-month"') && at('id="st-cap-month"') < at('id="st-cap-month-day"') && at('id="st-cap-month-day"') < at('id="st-caps-save"'), 'the button comes after the day box');
-  const hubRow = sec.slice(sec.lastIndexOf('<div class="st-row">', at('id="st-cap-hub"')), at('id="st-cap-hub"') + 200);
+  const hubRow = sec.slice(sec.lastIndexOf('<div class="st-row"', at('id="st-cap-hub"')), at('id="st-cap-hub"') + 200);
   assert.ok(!hubRow.includes('st-caps-save'), 'not beside the whole-Maestro cap any more');
-  const own = sec.slice(sec.lastIndexOf('<div class="st-row">', at('id="st-caps-save"')), sec.indexOf('</div>', at('id="st-caps-save"')));
+  const own = sec.slice(sec.lastIndexOf('<div class="st-row"', at('id="st-caps-save"')), sec.indexOf('</div>', at('id="st-caps-save"')));
   assert.strictEqual((own.match(/<(input|select)\b/g) || []).length, 0, 'a line of its own: no box in its row');
   assert.match(sec, /<button class="st-test-btn" id="st-caps-save" onclick="saveSpendCaps\(\)">Save caps<\/button>/);
   assert.ok(!/id="st-caps-save"[^>]*>Save</.test(sec));
@@ -135,7 +135,7 @@ test('spend caps: no "whole hub" on screen; the month start day is its own label
   assert.match(app, /\$\{usd\(caps\.hubDailyUsd\)\} for your whole Maestro/, 'the group summary says it too');
   assert.ok(!/whole hub/.test(app.slice(app.indexOf('stSum(\'money\', \'caps\''), app.indexOf('stSum(\'money\', \'caps\'') + 400)));
   assert.ok(!sec.includes('>month starts on day<'), 'no lower-case span with a lone box');
-  const d = sec.slice(sec.lastIndexOf('<div class="st-row">', sec.indexOf('id="st-cap-month-day"')), sec.indexOf('id="st-cap-month-day"') + 200);
+  const d = sec.slice(sec.lastIndexOf('<div class="st-row"', sec.indexOf('id="st-cap-month-day"')), sec.indexOf('id="st-cap-month-day"') + 200);
   assert.match(d, /<label style="flex-basis:150px" for="st-cap-month-day">Month starts on day<\/label>\s*<input type="text" id="st-cap-month-day"/, 'label, then its box: the ⓘ goes right after the label (record OPT-1086 anchors #st-cap-month-day)');
   assert.ok(!d.includes('id="st-cap-month"'), 'its own row, not the monthly cap row');
 });
