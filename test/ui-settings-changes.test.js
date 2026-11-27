@@ -409,7 +409,7 @@ test('page wiring: Recent changes is a Settings section for admins, in the For y
 
 // ---- 5. the rest ---------------------------------------------------------------------------------------------------------
 test('the phone service worker is bumped (v99) and the new CSS uses only variables the pages define', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v111'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v112'/);
   for (const f of ['index.html', 'mobile.html']) {
     const css = read(f);
     for (const sel of ['.change-strip', '.question-fixed']) assert.ok(css.includes(sel), f + ' has ' + sel);
