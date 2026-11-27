@@ -60,7 +60,7 @@ function dom() {
   return { node, MO, focused, stats: () => ({ deliveries, runaway }) };
 }
 
-function load() {
+function load({ deferGet = false } = {}) {
   const D = dom();
   const d = {
     activeElement: null, readyState: 'complete', visibilityState: 'visible', listeners: {},
@@ -70,11 +70,12 @@ function load() {
   d.body = D.node('body'); d.head = D.node('head'); d.documentElement = D.node('html');
   const card = { ok: true, show: true, lead: 'harbor', leadDisplay: 'Harbor', notices: [],
     entries: [{ id: 'quick-research', title: 'Quick research', summary: 'A run for its own work.', cost: 'plan allowance', leadMay: true, recommendation: null, rev: 'pending #0' }] };
-  const fetch = () => Promise.resolve({ status: 200, json: async () => card });
+  const gets = [];
+  const fetch = () => deferGet ? new Promise((r) => gets.push(() => r({ status: 200, json: async () => card }))) : Promise.resolve({ status: 200, json: async () => card });
   const mod = { exports: {} };
   const ctx = { module: mod, document: d, fetch, location: { search: '', assign(u) { ctx.assigned.push(u); } }, assigned: [], encodeURIComponent, JSON, Promise, console, MutationObserver: D.MO, Date: { now: () => CLOCK.t }, setTimeout, clearTimeout, queueMicrotask };
   vm.runInNewContext(SRC, ctx, { filename: FILE });
-  return { FC: mod.exports, D, d, ctx, card };
+  return { FC: mod.exports, D, d, ctx, card, gets };
 }
 // The phone's busy card as mobile.js paints it: appended last, and its own observer puts it back at the end after anything else is added.
 function busyCard(D, list) {
@@ -384,4 +385,31 @@ test('(g) messageArrived with focus inside the card moves focus to the toggle; f
     if (inside) assert.strictEqual(D.focused.el, t, 'focus moved to the toggle');
     else assert.strictEqual(D.focused.el, other, 'focus untouched');
   }
+});
+
+const isFolded = (list) => { const c = list.children.find((k) => String(k.className).includes('feature-card')); return !!c && c.children.some((k) => String(k.className).includes('fc-toggle')); };
+
+test('a live message before the card first answers: the card arrives folded in that chat visit', async () => {
+  const { FC, D, gets } = load({ deferGet: true });
+  const list = D.node('div');
+  FC.chatShown('harbor', list);
+  await settle();
+  const b = D.node('div'); b.className = 'msg'; list.appendChild(b);
+  FC.messageArrived(list);   // the reply starts while the card's GET is still out
+  gets.shift()();
+  await settle();
+  assert.ok(list.children.some((k) => String(k.className).includes('feature-card')), 'card attached');
+  assert.strictEqual(isFolded(list), true, 'arrives folded');
+});
+
+test('phone shared list: a live message in another agent\'s chat before the GET does not fold the lead\'s card', async () => {
+  const { FC, D, gets } = load({ deferGet: true });
+  const list = D.node('div');
+  FC.chatShown('someone', list);
+  FC.messageArrived(list);   // a live message in someone else's chat
+  FC.chatShown('harbor', list);   // then the lead's chat on the same list
+  gets.shift()();
+  await settle();
+  assert.ok(list.children.some((k) => String(k.className).includes('feature-card')), 'card attached');
+  assert.strictEqual(isFolded(list), false, 'not folded');
 });
