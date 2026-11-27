@@ -29,8 +29,9 @@ function voiceBlock() {
 
 test('settings: Voices section in the tools group, admin controls and per-device prefs', () => {
   // voice entry: Voice is a group of its own (after Appearance), no longer part of Tools and data
-  assert.match(app, /\{ id: 'voice', title: '🎙 Voice', sections: \['st-voice-section'\] \}/);
-  assert.doesNotMatch(app, /\{ id: 'tools', title: '[^']+', sections: \[[^\]]*'st-voice-section'[^\]]*\] \}/);
+  const G = require('../lib/ui-settings-groups.js');
+  assert.deepStrictEqual(G.GROUPS.find((x) => x.id === 'voice').sections, ['st-voice-section']);
+  assert.ok(!G.GROUPS.find((x) => x.id === 'tools').sections.includes('st-voice-section'));
   assert.ok(app.includes('html += voiceSettingsHtml(data);'));
   const b = voiceBlock();
   assert.match(b, /id="st-voice-section"><h4>Voice<\/h4>/);

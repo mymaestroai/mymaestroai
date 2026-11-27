@@ -2894,22 +2894,41 @@
     }
     .st-search input:focus { outline: none; border-color: var(--accent); }
     #st-search-none { font-size: 0.78rem; color: var(--text-dim); }
-    details.st-group { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
-    details.st-group > summary {
-      list-style: none; cursor: pointer; display: flex; align-items: baseline; gap: 10px;
-      padding: 10px 12px; user-select: none;
+    /* Settings in eight groups (lib/ui-settings-groups.js): a list of groups on the left, the open group on the right. The phone frame keeps one column. */
+    .st-modal:has(.st-panes) { max-width: 1040px; width: min(96vw, 1040px); }
+    .st-panes { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 16px; align-items: start; }
+    .st-glist { display: flex; flex-direction: column; gap: 4px; position: sticky; top: 0; }
+    .st-gbtn {
+      display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 8px 10px; text-align: left; cursor: pointer;
+      background: transparent; color: var(--text); border: 1px solid transparent; border-radius: 8px; font: inherit;
     }
-    details.st-group > summary::-webkit-details-marker { display: none; }
-    details.st-group > summary::before { content: '▸'; color: var(--text-dim); flex: 0 0 0.8em; transition: transform 0.15s; }
-    details.st-group[open] > summary::before { transform: rotate(90deg); }
-    details.st-group > summary:hover .st-group-title { color: var(--accent); }
-    .st-group-title { flex: 0 0 auto; font-weight: 600; font-size: 0.9rem; color: var(--text); }
+    .st-gbtn:hover { background: var(--hover-tint); }
+    .st-gbtn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+    .st-gbtn[aria-current="true"] { background: var(--hover-tint-strong); border-color: var(--border-strong); }
+    .st-gicon { flex: 0 0 1.4em; text-align: center; font-size: 1.05rem; line-height: 1.3; }
+    .st-gtext { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+    .st-group-title { font-weight: 600; font-size: 0.88rem; color: var(--text); }
+    .st-gbtn:hover .st-group-title { color: var(--accent); }
+    .st-gsub { font-size: 0.72rem; color: var(--text-dim); line-height: 1.3; }
     .st-group-sum {
-      flex: 1; min-width: 0; font-size: 0.75rem; color: var(--text-dim);
+      min-width: 0; font-size: 0.72rem; color: var(--text-dim);
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
+    .st-group-sum:empty { display: none; }
     .st-group-sum.st-sum-crit { color: var(--error); font-weight: 600; }
-    .st-group-body { padding: 12px 14px 0; border-top: 1px solid var(--border); }
+    .st-gpane { min-width: 0; }
+    .st-group { border: 1px solid var(--border); border-radius: 8px; padding: 4px 14px 12px; margin-bottom: 8px; }
+    .st-group[hidden] { display: none; }
+    .st-ghead { display: none; margin: 8px 0 4px; font-size: 0.95rem; color: var(--text); }
+    #st-groups.st-searching .st-ghead { display: block; }
+    .st-more { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px; }
+    .st-more[hidden], .st-more-body[hidden] { display: none; }
+    .st-more-btn { background: transparent; border: 0; padding: 4px 0; color: var(--accent); cursor: pointer; font: inherit; font-size: 0.85rem; text-align: left; }
+    .st-more-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+    #st-groups.st-searching .st-more-btn { display: none; }
+    #st-groups.st-searching .st-more-body[hidden] { display: block; }
+    .st-moved > h4 { font-size: 0.85rem; }
+    @media (max-width: 720px) { .st-panes { display: block; } .st-glist { position: static; margin-bottom: 12px; } }
     .st-section.st-match > h4 { color: var(--accent); border-bottom-color: var(--accent); }
     /* Data connectors box (Settings) */
     .cx-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.8rem; }
@@ -3375,7 +3394,9 @@
       /* fields take the row (their desktop widths are inline); a hint beside one moves under it */
       html.mm-settings-only .st-row > input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), html.mm-settings-only .st-row > select { flex: 1 1 200px !important; width: auto !important; max-width: 100% !important; }
       html.mm-settings-only .st-modal button { min-height: 40px; }
-      html.mm-settings-only details.st-group > summary { min-height: 48px; }
+      html.mm-settings-only .st-panes { display: block; }
+      html.mm-settings-only .st-glist { position: static; margin-bottom: 12px; }
+      html.mm-settings-only .st-gbtn { min-height: 48px; }
       html.mm-settings-only .st-modal table { display: block; max-width: 100%; overflow-x: auto; }
     }
 </style>
@@ -3990,6 +4011,7 @@
   <script src="/ui-feature-card.js"></script>
   <script src="/ui-simple.js"></script>
   <script src="/ui-settings-help.js"></script>
+  <script src="/ui-settings-groups.js"></script>
   <script src="/ui-agent-card.js"></script>
   <script src="/ui-agent-card-basics.js"></script>
   <script src="/ui-agent-card-more.js"></script>

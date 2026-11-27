@@ -233,7 +233,7 @@ test('pickers: app.js and mobile.js choose through HubLooks, build previews from
     for (const n of names) {
       const a = src.indexOf(`function ${n}(`);
       const body = src.slice(a, a + 3500);
-      const end = body.search(/\n(?:    )?(?:function |const ST_GROUPS|\/\/ Profile)/);
+      const end = body.search(/\n(?:    )?(?:function |const STG |\/\/ Profile)/);
       const fn = end > 0 ? body.slice(0, end + 1) : body;
       assert.doesNotMatch(fn, /innerHTML|insertAdjacentHTML/, `${n} builds no markup`);
     }

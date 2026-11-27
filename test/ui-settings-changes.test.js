@@ -334,7 +334,7 @@ test('#rec=OPT-xxxx on the agent settings page finds the row by the same anchors
 test('page wiring: desktop and phone follow their doors; agent-settings.html redirects to them', () => {
   const app = read('app.js'), mob = read('mobile.js'), as = read('agent-settings.html');
   assert.ok(app.includes("parseDoorHash(h, 'settings-for')") && app.includes('settingsDoorStart();') && /settingsDoorStart\(\);\s*\/\/ the phone's/.test(app), 'the full page and the Settings frame');
-  assert.ok(app.includes("stSetOpen(s, true)") && app.includes('hubToast(H.hereIs(rec)'), 'opens the group; a toast when the row is elsewhere');
+  assert.ok(app.includes("open: (f) => stReveal(f.row)") && app.includes('hubToast(H.hereIs(rec)'), 'opens the group; a toast when the row is elsewhere');
   assert.ok(mob.includes('function settingsDoorPhone()') && mob.includes("'#settings-for=' + s.door") && mob.includes('settingsDoorPhone();   //'), 'the phone passes the door on to the frame');
   assert.ok(as.includes('agent-card=') && as.includes('settings-for=') && as.includes('/api/settings-records'), 'agent-settings #rec= goes to the card or to Settings (test/agent-settings-redirect.test.js)');
 });
@@ -400,9 +400,10 @@ test('Recent changes: Restore puts it back or shows the 409 text inline; Load mo
   assert.strictEqual(host.querySelectorAll('.st-recent-more').length, 0, 'no more to load');
 });
 
-test('page wiring: Recent changes is a Settings section for admins, in the Status group', () => {
+test('page wiring: Recent changes is a Settings section for admins, in the For your review group', () => {
   const app = read('app.js');
-  assert.ok(app.includes('id="st-recent-section"') && app.includes("'st-sec-section', 'st-recent-section', 'st-memory-section'") && app.includes('function stRecentLoad()'));
+  assert.ok(app.includes('id="st-recent-section"') && app.includes('function stRecentLoad()'));
+  assert.deepStrictEqual(require('../lib/ui-settings-groups.js').groupOfSection('st-recent-section'), { group: 'review', more: false });
   assert.ok(/if \(isHubAdmin\(\)\) \{\s*html \+= `<div class="st-section" id="st-recent-section">/.test(app), 'admins only');
 });
 

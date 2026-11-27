@@ -111,11 +111,11 @@ test('openVoiceSettings: opens the voice section; an admin lands on the On switc
 
 // ── Settings ──
 test('Settings: a Voice group right after Appearance, not in Tools; heading "Voice"; search words; the switch words', () => {
-  const g = [...app.matchAll(/\{ id: '([a-z]+)', title: '([^']+)', sections: \[([^\]]*)\] \}/g)].map((m) => ({ id: m[1], title: m[2], sections: m[3] }));
+  const g = require('../lib/ui-settings-groups.js').GROUPS;   // eight groups now: Voice and calls is its own group, after Models and money
   const ids = g.map((x) => x.id);
-  assert.strictEqual(ids[ids.indexOf('looks') + 1], 'voice');
-  assert.strictEqual(g.find((x) => x.id === 'voice').title, '🎙 Voice');
-  assert.strictEqual(g.find((x) => x.id === 'voice').sections, "'st-voice-section'");
+  assert.strictEqual(ids[ids.indexOf('money') + 1], 'voice');
+  assert.strictEqual(g.find((x) => x.id === 'voice').title, 'Voice and calls');
+  assert.deepStrictEqual(g.find((x) => x.id === 'voice').sections, ['st-voice-section']);
   assert.ok(!g.find((x) => x.id === 'tools').sections.includes('st-voice-section'));
   const h = src('voiceSettingsHtml');
   assert.match(h, /<h4>Voice<\/h4>/);
@@ -123,7 +123,7 @@ test('Settings: a Voice group right after Appearance, not in Tools; heading "Voi
   assert.match(h, /<span class="st-search-words" hidden>voice microphone mic talk speak speech call dictation<\/span>/);
   assert.match(h, /if \(admin\) h \+= row\('Voice conversations', `<label[^\n]*id="st-voice-enabled" onchange="voiceSettingEnable\(this\)"> On for everyone on this Maestro<\/label>`\);/);
   // the search matches the section's textContent, and hidden words are part of it
-  assert.match(src('stSearch'), /s\.textContent\.toLowerCase\(\)\.includes\(q\)/);
+  assert.match(src('stSearch'), /text: `\$\{s\.textContent\} \$\{wordHits\(s\)/);   // lower-cased by STG.search
 });
 
 test('Settings: no user-facing "Settings, Voices" is left', () => {

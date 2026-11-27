@@ -584,15 +584,17 @@ function searchRig() {
   const a = src.indexOf('function stSearch(q) {'), b = src.indexOf('// Links into Settings (the plan badge', a);
   assert.ok(a > 0 && b > a, 'stSearch found');
   const body = src.slice(a, b);
-  const make = new Function('document', 'stSetOpen', `let stSearchSnap = null; let stWordsIdx = null; ${body}; return { stSearch, setIdx: (v) => { stWordsIdx = v; } };`);
+  const make = new Function('document', 'stShowGroup', 'STG', `let stCurGroup = null; let stPicked = false; let stSearching = false; let stWordsIdx = null; ${body}; return { stSearch, setIdx: (v) => { stWordsIdx = v; }, searching: () => stSearching };`);
   const p = page();
   const wrap = el(p.doc, 'div', { id: 'st-groups' }); p.doc.body.appendChild(wrap);
-  const mk = (id, title, secs) => { const g = el(p.doc, 'details', { class: 'st-group' }); g.dataset.group = id; g.open = false; const t = el(p.doc, 'span', { class: 'st-group-title' }, title); g.appendChild(t); for (const s of secs) g.appendChild(s); wrap.appendChild(g); return g; };
-  const g1 = mk('memory', 'Memory', [p.secA]), g2 = mk('safety', 'Safety', [p.secB]), g3 = mk('voice', 'Voice', [p.secC]);
+  // the eight-group page: each group is a .st-group (one shown at a time) holding its sections
+  const mk = (id, secs) => { const g = el(p.doc, 'section', { class: 'st-group' }); g.dataset.group = id; g.hidden = true; for (const s of secs) g.appendChild(s); wrap.appendChild(g); return g; };
+  const g1 = mk('upkeep', [p.secA]), g2 = mk('safety', [p.secB]), g3 = mk('voice', [p.secC]);
   const none = el(p.doc, 'span', { id: 'st-search-none' }); p.doc.body.appendChild(none); none.hidden = true;
-  const doc = { querySelectorAll: (s) => wrap.querySelectorAll(s.replace('#st-groups ', '')), getElementById: (id) => (id === 'st-search-none' ? none : null) };
-  const fns = make(doc, (g, open) => { g.open = !!open; });
-  return { ...fns, p, g1, g2, g3, none, wrap };
+  const doc = { querySelectorAll: (s) => wrap.querySelectorAll(s.replace('#st-groups ', '')), getElementById: (id) => (id === 'st-search-none' ? none : id === 'st-groups' ? wrap : null) };
+  const shown = [];
+  const fns = make(doc, (id) => { shown.push(id); for (const g of [g1, g2, g3]) g.hidden = g.dataset.group !== id; }, require('../lib/ui-settings-groups.js'));
+  return { ...fns, p, g1, g2, g3, none, wrap, shown };
 }
 test('search: "compress" finds the compression row by the record\'s words although the screen never says it; the row gets the highlight class', () => {
   loaded(); const r = searchRig();
@@ -603,7 +605,7 @@ test('search: "compress" finds the compression row by the record\'s words althou
   r.stSearch('compress');
   assert.strictEqual(r.p.secA.style.display, '', 'the section is shown');
   assert.strictEqual(r.p.secB.style.display, 'none'); assert.strictEqual(r.p.secC.style.display, 'none');
-  assert.strictEqual(r.g1.open, true); assert.strictEqual(r.g2.style.display, 'none');
+  assert.strictEqual(r.g1.hidden, false, 'its group is shown'); assert.strictEqual(r.g2.hidden, true); assert.strictEqual(r.searching(), true);
   assert.ok(r.p.rowA.classList.contains('st-word-hit'), 'the matching row is highlighted');
   assert.ok(!r.p.rowB.classList.contains('st-word-hit'));
   assert.strictEqual(r.p.secA.classList.contains('st-match'), true);
@@ -618,7 +620,7 @@ test('search: without the words index it behaves as before (the section\'s own t
   assert.strictEqual(r.p.secB.style.display, '');
   assert.ok(r.p.rowC.classList.contains('st-word-hit'));
   r.stSearch('');
-  assert.strictEqual(r.p.secA.style.display, ''); assert.strictEqual(r.g2.style.display, '');
+  assert.strictEqual(r.p.secA.style.display, ''); assert.deepStrictEqual(r.shown, ['you'], 'the open group is back alone'); assert.strictEqual(r.searching(), false);
   assert.ok(![...r.wrap.walk()].some((e) => e.classList.contains('st-word-hit')), 'highlights are gone');
   r.stSearch('sandbox');   // the section's own text still matches (the existing behaviour)
   assert.strictEqual(r.p.secB.style.display, '');
@@ -851,11 +853,11 @@ test('search: a record anchored by label text is found by its search words and i
   // the real stSearch from app.js
   const src = read('app.js');
   const a = src.indexOf('function stSearch(q) {'), b = src.indexOf('// Links into Settings (the plan badge', a);
-  const make = new Function('document', 'stSetOpen', `let stSearchSnap = null; let stWordsIdx = null; ${src.slice(a, b)}; return { stSearch, setIdx: (v) => { stWordsIdx = v; } };`);
-  const grp = el(s.doc, 'details', { class: 'st-group' }); grp.dataset.group = 'keys'; grp.appendChild(el(s.doc, 'span', { class: 'st-group-title' }, 'Keys'));
+  const make = new Function('document', 'stShowGroup', 'STG', `let stCurGroup = null; let stPicked = false; let stSearching = false; let stWordsIdx = null; ${src.slice(a, b)}; return { stSearch, setIdx: (v) => { stWordsIdx = v; } };`);
+  const grp = el(s.doc, 'section', { class: 'st-group' }); grp.dataset.group = 'money';
   s.ov.removeChild(sec); grp.appendChild(sec); s.ov.appendChild(grp);
   const none = el(s.doc, 'span', { id: 'st-search-none' });
-  const rig = make({ querySelectorAll: (x) => s.ov.querySelectorAll(x.replace('#st-groups ', '')), getElementById: (id) => (id === 'st-search-none' ? none : null) }, (g, open) => { g.open = !!open; });
+  const rig = make({ querySelectorAll: (x) => s.ov.querySelectorAll(x.replace('#st-groups ', '')), getElementById: (id) => (id === 'st-search-none' ? none : null) }, () => {}, require('../lib/ui-settings-groups.js'));
   rig.setIdx(H.sectionWords(s.ov, 'desktop', 'st-section'));
   rig.stSearch('pay per use');
   assert.strictEqual(sec.style.display, '', 'the section is shown');

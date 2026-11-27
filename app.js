@@ -3226,9 +3226,9 @@
         <p style="margin:6px 0 0;font-size:12px"><a href="/help" target="_blank" rel="noopener">Open help in its own tab</a></p>`, { dock: true, title: '❓ Help' });
     }
 
-    // Settings groups: openSettings() draws its sections in one column, then groupSettings() folds them into these
-    // groups, closed until opened. Sections are matched by id; one this list doesn't know lands in the last group,
-    // so a new section can't disappear. Which groups are open is kept per browser (localStorage hub-settings-open).
+    // Settings groups: openSettings() draws its sections in one column, then groupSettings() sorts them into the eight groups of
+    // lib/ui-settings-groups.js (a list on the left, the open group on the right). Sections are matched by id; one the list doesn't
+    // know lands in Upkeep > More, so a new section can't disappear. The open group is kept per browser (localStorage hub-settings-group).
     // Workers at once (settings.workersAtOnce): one number per AI service, admins only. Rows come from /api/hub/status pacing.caps.
     const WAO_LABELS = { 'claude-sdk': 'Claude subscription', 'codex-cli': 'ChatGPT subscription', anthropic: 'Anthropic API', openai: 'OpenAI API', codex: 'OpenAI Codex API', google: 'Google Gemini', perplexity: 'Perplexity', lmstudio: 'LM Studio', ollama: 'Ollama' };
     let waoStored = {};   // the saved map as the page opened; rows for services not listed keep their value
@@ -3387,25 +3387,21 @@
       row.appendChild(lab); row.appendChild(sel); row.appendChild(state);
       host.appendChild(row);
     }
-    const ST_GROUPS = [
-      { id: 'status', title: '🩺 Status', sections: ['st-ready-section', 'st-health-section', 'st-sec-section', 'st-recent-section', 'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section'] },
-      { id: 'looks', title: '🎨 Appearance', sections: ['st-looks-section'] },
-      { id: 'voice', title: '🎙 Voice', sections: ['st-voice-section'] },
-      { id: 'security', title: '🔐 Security', sections: ['st-security-section'] },
-      { id: 'backups', title: '💾 Backups', sections: ['st-backups-section'] },
-      { id: 'models', title: '🧠 AI models', sections: ['st-prov-section', 'st-or-section', 'st-subs-section', 'st-plan-section', 'st-local-models-section', 'st-classifier-section'] },
-      { id: 'agents', title: '🤖 Agents', sections: ['st-defaults-section', 'st-workers-section', 'st-sb-section', 'st-lb-section', 'st-mp-section', 'st-approvals-section', 'st-chat-section', 'st-tuning-section'] },
-      { id: 'notify', title: '🔔 Notifications', sections: ['st-notify-section'] },
-      { id: 'tools', title: '🧰 Tools and data', sections: ['st-ws-section', 'st-comms-section', 'st-cx-section', 'st-modules-section'] },
-      { id: 'money', title: '💰 Money and safety', sections: ['st-spend-section', 'st-emergency-section'] },
-    ];
-    const stSumParts = {};   // group -> { key: { text, crit } }: the one-line summary on each group's header
+    // The eight groups, which section sits in which and which rows move are in lib/ui-settings-groups.js (window.hubSettingsGroups).
+    const STG = window.hubSettingsGroups;
+    // The section loaders still name their summary by the old group ids; this says which of the eight groups each one belongs to now.
+    const ST_SUM_HOME = { status: { setup: 'review', security: 'review', health: 'review', memory: 'upkeep', selfcheck: 'upkeep', updates: 'upkeep' }, security: 'safety', backups: 'upkeep', models: 'money', notify: 'you', agents: 'agents', tools: 'tools', money: 'money', voice: 'voice' };
+    const stSumHome = (group, key) => { const h = ST_SUM_HOME[group]; return (h && typeof h === 'object' ? h[key] : h) || group; };
+    const stSumParts = {};   // group -> { key: { text, crit } }: the one-line summary on each group's list row
     const stSandboxText = (sbd) => `Sandboxes: members' agents ${sbd.member || 'container'}, admin-side ${sbd.admin || 'off'}`;
     const stQuestionsText = (qa) => qa === null ? 'Question reminders off' : `Questions: ${qa === 0 ? 'right away' : `after ${qa === undefined ? 3 : qa} min`}`;
-    let stSearchSnap = null;   // which groups were open before a search, put back when the search is cleared
+    let stCurGroup = null;     // the group open in the right pane
+    let stPicked = false;      // they (or a link) chose a group: a red finding arriving later does not switch it
+    let stSearching = false;   // a search is showing matches from every group
 
     // Set one part of a group's summary line; the section loaders call this as their data arrives.
     function stSum(group, key, text, crit = false) {
+      group = stSumHome(group, key);
       (stSumParts[group] ||= {})[key] = { text: text || '', crit: !!crit };
       const el = document.getElementById(`st-sum-${group}`);
       if (!el) return;
@@ -3414,26 +3410,47 @@
       el.classList.toggle('st-sum-crit', parts.some(p => p.crit && p.text));
     }
 
-    // Open or close a group without counting it as the person's choice (searches, deep links, a critical finding).
-    function stSetOpen(g, open) {
-      if (!g || g.open === open) return;
-      g.dataset.auto = '1';
-      if (open) g.dataset.autoOpen = '1';   // opened for them: not remembered unless they click it themselves
-      g.open = open;
-    }
-    function stOpenGroup(groupId) {
+    // Show one group in the right pane (the others are hidden). remember = the person chose it: kept in localStorage 'hub-settings-group'
+    // and a red finding arriving later no longer switches the pane. A link or a door passes remember false: it opens the group
+    // for now without changing which one is remembered.
+    function stShowGroup(groupId, remember) {
       const g = document.getElementById(`st-group-${groupId}`);
-      if (stSearchSnap) {   // a search is in progress: show the group now, and keep it open when the search is cleared
-        stSearchSnap[groupId] = true;
-        if (g) { g.style.display = ''; for (const s of g.querySelectorAll('.st-section')) s.style.display = ''; }
+      if (!g) return null;
+      stCurGroup = groupId;
+      stPicked = true;
+      for (const el of document.querySelectorAll('#st-groups .st-group')) el.hidden = stSearching ? el.hidden : el.dataset.group !== groupId;
+      if (stSearching) g.hidden = false;
+      for (const b of document.querySelectorAll('#st-groups .st-gbtn')) {
+        if (b.dataset.group === groupId) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current');
       }
-      stSetOpen(g, true);
+      if (remember) { try { localStorage.setItem(STG.STORE_KEY, groupId); } catch {} }
+      return g;
     }
-
-    function stSaveOpen() {
-      const open = {};
-      for (const g of document.querySelectorAll('#st-groups details.st-group')) if (g.open && !g.dataset.autoOpen) open[g.dataset.group] = true;
-      try { localStorage.setItem('hub-settings-open', JSON.stringify(open)); } catch {}
+    // Open or close a group's closed More (a button "▸ More: names" that opens in place).
+    function stSetMore(g, open) {
+      const btn = g && g.querySelector('.st-more-btn'), body = g && g.querySelector('.st-more-body');
+      if (!btn || !body) return;
+      body.hidden = !open;
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      btn.textContent = `${open ? '▾' : '▸'} ${btn.dataset.label || 'More'}`;
+    }
+    // Show whatever holds this element: its group in the pane and, when it sits under More, that More.
+    function stReveal(el) {
+      const g = el && el.closest ? el.closest('#st-groups .st-group') : null;
+      if (!g) return;
+      if (stSearching) { const inp = document.getElementById('st-search'); if (inp) { inp.value = ''; stSearch(''); } }
+      stShowGroup(g.dataset.group, false);
+      if (el.closest('.st-more-body')) stSetMore(g, true);
+    }
+    // A critical finding in some group (the loaders call this with an old or a new id): show that group unless they already chose one.
+    function stOpenGroup(groupId) {
+      const id = stSumHome(groupId, 'setup') || groupId;
+      if (stPicked || stSearching || !document.getElementById(`st-group-${id}`)) return;
+      const crit = {};
+      for (const [gid, parts] of Object.entries(stSumParts)) crit[gid] = Object.values(parts).some((p) => p.crit && p.text);
+      crit[id] = true;
+      stShowGroup(STG.defaultGroup({ crit, last: null }), false);
+      stPicked = false;
     }
 
     // Settings, Security: the "Require two-factor sign-in for admins" switch. Checking it posts at once; unchecking opens
@@ -3532,28 +3549,41 @@
       if (!modal) return;
       const sections = [...modal.children].filter(el => el.classList.contains('st-section'));
       if (!sections.length) return;
-      let saved = {};
-      try { saved = JSON.parse(localStorage.getItem('hub-settings-open') || '{}') || {}; } catch {}
+      let last = null;
+      try { last = localStorage.getItem(STG.STORE_KEY); } catch {}
       for (const k of Object.keys(stSumParts)) delete stSumParts[k];
-      stSearchSnap = null;
+      stSearching = false; stPicked = false; stCurGroup = null;
       const wrap = document.createElement('div');
       wrap.id = 'st-groups';
       wrap.innerHTML = `<div class="st-search"><input type="search" id="st-search" placeholder="Search settings: privacy, sandbox, push, spend…" autocomplete="off" aria-label="Search settings"><span id="st-search-none" hidden>Nothing matches.</span></div>`
         + (window.hubMe && window.hubMe.isAdmin ? `<div id="st-quick-links" style="margin:6px 0 10px;font-size:0.85rem">Go to: <a href="/modules" id="st-connectors-link" style="color:var(--accent)">🔌 Data connectors</a><a href="/modules#remote-computers" id="st-remote-link" style="color:var(--accent);margin-left:14px;display:${remoteComputersOk === true ? '' : 'none'}">💻 Remote computers</a><a href="/changes" id="st-changes-link" style="color:var(--accent);margin-left:14px">Changes to how agents behave</a></div>` : '')
-        + ST_GROUPS.map(g => `<details class="st-group" id="st-group-${g.id}" data-group="${g.id}"${saved[g.id] ? ' open' : ''}><summary><span class="st-group-title">${esc(g.title)}</span><span class="st-group-sum" id="st-sum-${g.id}"></span></summary><div class="st-group-body"></div></details>`).join('');
+        + `<div class="st-panes"><nav class="st-glist" aria-label="Settings groups">`
+        + STG.GROUPS.map(g => `<button type="button" class="st-gbtn" id="st-gbtn-${g.id}" data-group="${g.id}"><span class="st-gicon" aria-hidden="true">${esc(g.icon)}</span><span class="st-gtext"><span class="st-group-title">${esc(g.title)}</span><span class="st-gsub">${esc(g.sub)}</span><span class="st-group-sum" id="st-sum-${g.id}"></span></span></button>`).join('')
+        + `</nav><div class="st-gpane">`
+        + STG.GROUPS.map(g => `<section class="st-group" id="st-group-${g.id}" data-group="${g.id}" aria-label="${esc(g.title)}" hidden><h5 class="st-ghead">${esc(g.title)}</h5><div class="st-group-body"></div><div class="st-more" hidden><button type="button" class="st-more-btn" aria-expanded="false">▸ More</button><div class="st-more-body" hidden></div></div></section>`).join('')
+        + `</div></div>`;
       modal.insertBefore(wrap, sections[0]);
       const body = (id) => wrap.querySelector(`#st-group-${id} .st-group-body`);
-      const placed = new Set();
-      for (const g of ST_GROUPS) for (const id of g.sections) {
-        const s = sections.find(el => el.id === id);
-        if (s) { body(g.id).appendChild(s); placed.add(s); }
+      for (const s of sections) {   // each section goes where lib/ui-settings-groups says; one it does not know lands in Upkeep > More
+        const at = STG.groupOfSection(s.id);
+        (at.more ? wrap.querySelector(`#st-group-${at.group} .st-more-body`) : body(at.group)).appendChild(s);
       }
-      for (const s of sections) if (!placed.has(s)) body(ST_GROUPS[ST_GROUPS.length - 1].id).appendChild(s);
-      for (const d of wrap.querySelectorAll('details.st-group')) d.addEventListener('toggle', () => {
-        if (d.dataset.auto) { delete d.dataset.auto; return; }
-        delete d.dataset.autoOpen;   // they clicked it: from now on it is their choice
-        if (!stSearchSnap) stSaveOpen();   // during a search nothing is remembered
-      });
+      stPlaceRows();
+      setTimeout(stPlaceRows, 0);   // the Appearance section paints its "new members" row a tick later
+      for (const b of wrap.querySelectorAll('.st-gbtn')) {
+        b.addEventListener('click', () => {
+          if (stSearching) { const inp = document.getElementById('st-search'); if (inp) { inp.value = ''; stSearch(''); } }
+          stShowGroup(b.dataset.group, true);
+        });
+        b.addEventListener('keydown', (e) => {   // arrow keys walk the list; Enter or Space opens (the button's own click)
+          const all = [...wrap.querySelectorAll('.st-gbtn')], i = all.indexOf(b);
+          const to = e.key === 'ArrowDown' ? all[i + 1] : e.key === 'ArrowUp' ? all[i - 1] : e.key === 'Home' ? all[0] : e.key === 'End' ? all[all.length - 1] : null;
+          if (to) { e.preventDefault(); to.focus(); }
+        });
+      }
+      for (const m of wrap.querySelectorAll('.st-more-btn')) m.addEventListener('click', () => stSetMore(m.closest('.st-group'), m.getAttribute('aria-expanded') !== 'true'));
+      stShowGroup(STG.defaultGroup({ crit: {}, last }), false);
+      stPicked = false;   // only their click (or a link) counts as a choice; a red finding may still bring another group forward
       const input = wrap.querySelector('#st-search');
       input.addEventListener('input', () => stSearch(input.value));
       input.addEventListener('keydown', (e) => { if (e.key === 'Escape' && input.value) { e.stopPropagation(); input.value = ''; stSearch(''); } });
@@ -3598,39 +3628,74 @@
     // or what it does); those rows get a light highlight. Clearing the box puts every group back the way it was.
     function stSearch(q) {
       q = String(q || '').trim().toLowerCase();
-      const groups = [...document.querySelectorAll('#st-groups details.st-group')];
+      const groups = [...document.querySelectorAll('#st-groups .st-group')];
+      const wrap = document.getElementById('st-groups');
       const none = document.getElementById('st-search-none');
-      const wordHits = (s) => ((stWordsIdx && stWordsIdx.get(s)) || []).filter((e) => e.text.includes(q));
       for (const r of document.querySelectorAll('#st-groups .st-word-hit')) r.classList.remove('st-word-hit');
-      if (!q) {
-        for (const g of groups) {
-          g.style.display = '';
-          for (const s of g.querySelectorAll('.st-section')) { s.style.display = ''; s.classList.remove('st-match'); }
-          if (stSearchSnap) stSetOpen(g, !!stSearchSnap[g.dataset.group]);
-        }
-        stSearchSnap = null;
+      if (!q) {   // cleared: every section is back, the open group is shown alone again
+        stSearching = false;
+        if (wrap) wrap.classList.remove('st-searching');
+        for (const g of groups) for (const s of g.querySelectorAll('.st-section')) { s.style.display = ''; s.classList.remove('st-match'); }
         if (none) none.hidden = true;
+        const picked = stPicked;
+        stShowGroup(stCurGroup || STG.DEFAULT_GROUP, false);
+        stPicked = picked;
         return;
       }
-      if (!stSearchSnap) { stSearchSnap = {}; for (const g of groups) stSearchSnap[g.dataset.group] = g.open; }
-      let any = false;
+      stSearching = true;
+      if (wrap) wrap.classList.add('st-searching');
+      const wordHits = (s) => ((stWordsIdx && stWordsIdx.get(s)) || []).filter((e) => e.text.includes(q));
+      // every group is searched; a section matches by its own text or by another word a setting inside it is known by
+      const entries = [];
+      for (const g of groups) for (const s of g.querySelectorAll('.st-section')) entries.push({ id: s.id, group: g.dataset.group, el: s, text: `${s.textContent} ${wordHits(s).map((e) => e.text).join(' ')}` });
+      const found = STG.search(q, entries);
+      const hitEls = new Set(found.flatMap((f) => f.els)), wholeGroups = new Set(found.filter((f) => f.whole).map((f) => f.group));
       for (const g of groups) {
-        // a group whose summary is red (something critical) stays in view whatever is typed
-        const titleHit = g.querySelector('.st-group-title').textContent.toLowerCase().includes(q) || !!g.querySelector('.st-group-sum.st-sum-crit');
         let n = 0;
         for (const s of g.querySelectorAll('.st-section')) {
-          const words = wordHits(s);
-          const hit = titleHit || s.textContent.toLowerCase().includes(q) || words.length > 0;
-          if (hit) for (const e of words) if (e.row && e.row.classList) e.row.classList.add('st-word-hit');
+          const hit = hitEls.has(s), whole = wholeGroups.has(g.dataset.group);
           s.style.display = hit ? '' : 'none';
-          s.classList.toggle('st-match', hit && !titleHit);
+          s.classList.toggle('st-match', hit && !whole);
+          if (hit && !whole) for (const e of wordHits(s)) if (e.row && e.row.classList) e.row.classList.add('st-word-hit');
           if (hit) n++;
         }
-        g.style.display = n ? '' : 'none';
-        if (n) stSetOpen(g, true);
-        any = any || n > 0;
+        g.hidden = !n;
       }
-      if (none) none.hidden = any;
+      if (none) none.hidden = found.length > 0;
+    }
+    // Rows that move between groups (lib/ui-settings-groups ROWS: Agent Defaults dissolves). Each row, with the hints under it, goes into a
+    // small section "st-moved-<part>" in its target group (under its More when marked so); ids, names and loaders are untouched.
+    // Safe to run again: a row already moved is left alone, one that has not been drawn yet is picked up next time.
+    function stPlaceRows() {
+      const wrap = document.getElementById('st-groups');
+      if (!wrap) return;
+      for (const r of STG.ROWS) {
+        const el = wrap.querySelector(r.selector);
+        if (!el || el.closest('.st-moved')) continue;
+        const unit = el.closest('.st-row') || el;
+        const nodes = [unit];
+        for (let n = unit.nextElementSibling; n && n.classList.contains('st-hint'); n = n.nextElementSibling) nodes.push(n);
+        const sid = STG.movedId(r);
+        let sec = document.getElementById(sid);
+        if (!sec) {
+          sec = document.createElement('div');
+          sec.className = 'st-section st-moved'; sec.id = sid;
+          const h = document.createElement('h4'); h.textContent = r.partTitle; sec.appendChild(h);
+          const host = wrap.querySelector(`#st-group-${r.to} ${r.more ? '.st-more-body' : '.st-group-body'}`);
+          if (!host) continue;
+          host.appendChild(sec);
+        }
+        for (const n of nodes) sec.appendChild(n);
+      }
+      const dflt = document.getElementById('st-defaults-section');   // nothing left of Agent Defaults: drop the empty heading
+      if (dflt && !dflt.querySelector('.st-row, .st-hint, input, select, button')) dflt.remove();
+      for (const g of wrap.querySelectorAll('.st-group')) {   // the closed More names what is inside it
+        const more = g.querySelector('.st-more'), btn = g.querySelector('.st-more-btn'), mb = g.querySelector('.st-more-body');
+        const names = [...mb.querySelectorAll(':scope > .st-section')].map((s) => (s.querySelector('h4') ? s.querySelector('h4').textContent.trim() : s.id));
+        const label = STG.moreLabel({ more: names }, (x) => x);
+        more.hidden = !label;
+        if (label) { btn.dataset.label = label; btn.textContent = `${mb.hidden ? '▸' : '▾'} ${label}`; }
+      }
     }
 
     // Settings → Status → Recent changes (lib/ui-settings-help.js recentLoad): the newest 30 journal entries, Load more, Restore.
@@ -3658,7 +3723,7 @@
         const overlay = document.getElementById('st-overlay');
         if (!overlay) return;
         await H.doorFollow(h, overlay, 'desktop', {
-          open: (f) => { const s = f.row.closest ? f.row.closest('details.st-group') : null; if (s) stSetOpen(s, true); },
+          open: (f) => stReveal(f.row),   // the row's group in the right pane, and its More when it sits under one
           notHere: (rec) => hubToast(H.hereIs(rec), 6000),
         }, 'settings-for');
       } catch { /* Settings stays as it is */ } finally { stDoorBusy = false; }
@@ -3674,7 +3739,7 @@
       await openSettings();
       const s = document.getElementById(sectionId);
       if (!s) return;
-      stSetOpen(s.closest('details.st-group'), true);
+      stReveal(s);   // its group, and its More when it is kept there
       setTimeout(() => s.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
     }
 

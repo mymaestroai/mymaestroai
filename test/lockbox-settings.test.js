@@ -280,7 +280,7 @@ test('settings page: the section, the select, the one line, the host state and t
   assert.match(app, /Available: Landlock ABI \$\{/);
   assert.match(app, /Not available on this computer: \$\{/);
   assert.match(app, /fetch\('\/api\/lockbox\/status'/);
-  const g = app.match(/id: 'agents', title: '[^']+', sections: \[([^\]]*)\]/)[1];
+  const g = require('../lib/ui-settings-groups.js').GROUPS.find((x) => x.id === 'safety').sections.join(',');   // sandboxes then the lockbox, in People and safety
   assert.ok(g.indexOf('st-sb-section') < g.indexOf('st-lb-section') && g.includes('st-lb-section'));
   // the host reason comes from the status route, so it is written with textContent
   const a = app.indexOf('async function loadLockboxHost()'), b = app.indexOf('async function saveMemberPolicy(');

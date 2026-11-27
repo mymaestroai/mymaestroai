@@ -66,10 +66,10 @@ test('app.js: applyMemberView hides the two new ⋯ items', () => {
 });
 
 test('app.js: Settings has the Go to line for admins (Data connectors always, Remote computers when the check passed); the old section stays', () => {
-  assert.match(app, /window\.hubMe && window\.hubMe\.isAdmin \? `<div id="st-quick-links"[^`]*Go to: <a href="\/modules"[^>]*>🔌 Data connectors<\/a><a href="\/modules#remote-computers" id="st-remote-link"[^>]*display:\$\{remoteComputersOk === true \? '' : 'none'\}[^>]*>💻 Remote computers<\/a>(?:<a href="\/changes" id="st-changes-link"[^>]*>Changes to how agents behave<\/a>)?<\/div>` : ''\)\s*\+ ST_GROUPS\.map/);
-  assert.ok(app.indexOf('st-quick-links') < app.indexOf('ST_GROUPS.map(g =>'), 'above the groups');
+  assert.match(app, /window\.hubMe && window\.hubMe\.isAdmin \? `<div id="st-quick-links"[^`]*Go to: <a href="\/modules"[^>]*>🔌 Data connectors<\/a><a href="\/modules#remote-computers" id="st-remote-link"[^>]*display:\$\{remoteComputersOk === true \? '' : 'none'\}[^>]*>💻 Remote computers<\/a>(?:<a href="\/changes" id="st-changes-link"[^>]*>Changes to how agents behave<\/a>)?<\/div>` : ''\)\s*\+ `<div class="st-panes">/);
+  assert.ok(app.indexOf('st-quick-links') < app.indexOf('STG.GROUPS.map(g =>'), 'above the groups');
   assert.match(app, /id="st-connectors-link"/);
-  assert.ok(/Data connectors/.test(app.slice(app.indexOf('ST_GROUPS = ['))), 'the Tools and data section is still there');
+  assert.ok(require('../lib/ui-settings-groups.js').groupOfSection('st-modules-section').group === 'tools', 'the Data connectors section is still there, in Tools and connections');
 });
 
 test('mobile.html: menu-remote follows menu-connectors, hidden by default, no variation selector', () => {

@@ -62,9 +62,7 @@ const view = (items, extra = {}) => ({ settings: SETTINGS, running: false, lastR
 
 // ── the section ──
 test('Health is a Status section placed right after the setup checklist, and is drawn for admins only', () => {
-  const m = app.match(/id: 'status', title: '[^']*', sections: \[([^\]]*)\]/);
-  assert.ok(m, 'status group found');
-  const list = [...m[1].matchAll(/'([^']+)'/g)].map(x => x[1]);
+  const list = require('../lib/ui-settings-groups.js').GROUPS.find((g) => g.id === 'review').sections;   // the first group, For your review
   assert.strictEqual(list[list.indexOf('st-ready-section') + 1], 'st-health-section');
   const at = app.indexOf('id="st-health-section"');
   assert.ok(at > 0, 'the section is drawn');
