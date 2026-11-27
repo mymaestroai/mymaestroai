@@ -392,3 +392,81 @@ test('review prompt: explains each change, records the recommendation with the t
   assert.match(p, /Switch nothing in this turn/);
   assert.match(p, /Never claim you switched one when you did not/);
 });
+
+// ── p5b round 1 ──
+const OWNER_ERR = 'Only the owner of this Maestro can switch this one.';
+const OWNER_EXPR = '!!(req.hubUser && !req.hubService && !req.hubPendingTotp && hubAuth.isOwner(req.hubUser))';
+test('r1 fix1: an entry the lead may not switch needs the install\'s owner; one the lead may switch keeps the admin rule', () => {
+  const s = setup();
+  assert.strictEqual(typeof bc.ownerRefusal, 'function');
+  assert.strictEqual(bc.ownerRefusal('beta-two', { isOwner: false, manifestFile: s.manifestFile }), OWNER_ERR);
+  assert.strictEqual(bc.ownerRefusal('beta-two', { isOwner: true, manifestFile: s.manifestFile }), null);
+  assert.strictEqual(bc.ownerRefusal('alpha', { isOwner: false, manifestFile: s.manifestFile }), null);
+  assert.strictEqual(bc.ownerRefusal('quiet-risky', { isOwner: false, manifestFile: s.manifestFile }), OWNER_ERR);
+  const server = read('server.js');
+  const dec = server.indexOf("const m = pathname.match(/^\\/api\\/behaviour-changes\\/([a-z][a-z0-9-]{1,40})$/);");
+  const post = server.slice(dec, dec + 4500);
+  assert.ok(post.includes('ownerRefusal(m[1]'));
+  assert.ok(post.includes(OWNER_EXPR));
+  assert.ok(post.includes('jsonResponse(res, 403, { ok: false, error: refused })'));
+});
+test('r1 fix1: Restore of an owner-only entry needs the owner; a second admin may restore one the lead may switch', async () => {
+  const s = setup(); existing(s);
+  await asPerson('sam', () => bc.decide('alpha', 'on', { user: 'sam', ...s.o }));
+  await asPerson('sam', () => bc.decide('beta-two', 'on', { user: 'sam', ...s.o }));
+  const j = sj.forDir(s.d);
+  const list = entriesOf(s);
+  const beta = list.find((e) => e.key === 'behaviour.beta-two'), alpha = list.find((e) => e.key === 'behaviour.alpha');
+  let r = j.restoreFor(beta.id, { user: 'second', isAdmin: true, isAdminSession: true, isOwner: false });
+  assert.strictEqual(r.status, 403); assert.strictEqual(r.error, OWNER_ERR);
+  assert.strictEqual(st(s)['beta-two'].state, 'on');
+  r = j.restoreFor(alpha.id, { user: 'second', isAdmin: true, isAdminSession: true, isOwner: false });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  r = j.restoreFor(beta.id, { user: 'sam', isAdmin: true, isAdminSession: true, isOwner: true });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(st(s)['beta-two'].state, 'pending');
+  assert.ok(read('server.js').includes('isOwner: ' + OWNER_EXPR), 'the restore route passes who is the owner');
+});
+test('r1 fix2: a stale second device gets already decided and the state stays the first one\'s (decide, snooze, markSeen with expect)', async () => {
+  const s = setup(); existing(s);
+  await bc.decide('alpha', 'on', { user: 'a', expect: 'pending', ...s.o });
+  await assert.rejects(() => bc.decide('alpha', 'off', { user: 'b', expect: 'pending', ...s.o }), /already decided/);
+  assert.strictEqual(st(s).alpha.state, 'on'); assert.strictEqual(st(s).alpha.user, 'a');
+  await assert.rejects(() => bc.snooze('alpha', { user: 'b', expect: 'pending', ...s.o }), /already decided/);
+  await bc.decide('quiet-one', 'off', { user: 'a', ...s.o });
+  await assert.rejects(() => bc.markSeen('quiet-one', { user: 'b', expect: 'on', ...s.o }), /already decided/);
+  // a notice row pressed from a device that saw it on, while another device already turned it off
+  await bc.decide('beta-two', 'off', { user: 'a', ...s.o });
+  await assert.rejects(() => bc.decide('beta-two', 'off', { user: 'b', expect: 'on', ...s.o }), /already decided/);
+  // no expect (the /changes page): nothing changes
+  await bc.decide('alpha', 'off', { user: 'b', ...s.o });
+  assert.strictEqual(st(s).alpha.state, 'off');
+  const server = read('server.js');
+  const dec = server.indexOf("const m = pathname.match(/^\\/api\\/behaviour-changes\\/([a-z][a-z0-9-]{1,40})$/);");
+  assert.ok(/expect/.test(server.slice(dec, dec + 4500)));
+});
+test('r1 fix8: the review turn accepts the agent the review was scheduled for as well as the owner lead names', () => {
+  const fn = read('lib/sdk-chat.js').match(/function behaviourReviewTurn\([\s\S]*?\n\}/)[0];
+  assert.match(fn, /ownerLeadNames\(\)\.includes\(agentName\)/);
+  assert.ok(/!require\('\.\/agents'\)\.ownerLeadNames\(\)\.includes\(agentName\) && require\('\.\/behaviour-review'\)\.leadName\(\) !== agentName/.test(fn));
+});
+test('r1 fix9: the brief lists only entries still to decide (pending, not snoozed)', () => {
+  const s = setup(); existing(s);
+  assert.strictEqual(typeof card.waitingTitles, 'function');
+  assert.deepStrictEqual(card.waitingTitles({ ...s.o, now: T0 }).sort(), ['Alpha', 'Beta', 'Quiet but owner only'].sort());
+  fs.writeFileSync(s.stateFile, JSON.stringify({ entries: { ...st(s), alpha: { ...st(s).alpha, snoozedUntil: new Date(T0 + DAY).toISOString() }, 'beta-two': { ...st(s)['beta-two'], state: 'on' } } }));
+  assert.deepStrictEqual(card.waitingTitles({ ...s.o, now: T0 }).sort(), ['Quiet but owner only']);
+  assert.deepStrictEqual(card.waitingTitles({ ...s.o, now: T0 + 2 * DAY }).sort(), ['Alpha', 'Quiet but owner only'].sort());
+  assert.deepStrictEqual(card.waitingTitles({ stateFile: path.join(s.d, 'none.json'), manifestFile: s.manifestFile }), []);
+});
+test('r1 fix10: Restore of a quiet entry\'s notice to unseen keeps by quiet-update so the notice shows again', async () => {
+  const s = setup(); existing(s);
+  assert.strictEqual(st(s)['quiet-one'].by, 'quiet-update');
+  await asPerson('sam', () => bc.markSeen('quiet-one', { user: 'sam', now: T0, ...s.o }));
+  assert.strictEqual(card.cardState({ ...s.o, deps, now: T0 }).notices.length, 0);
+  const [seen] = entriesOf(s);
+  const r = sj.forDir(s.d).restoreFor(seen.id, { user: 'sam', isAdmin: true, isAdminSession: true, isOwner: true });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(st(s)['quiet-one'].by, 'quiet-update');
+  assert.deepStrictEqual(card.cardState({ ...s.o, deps, now: T0 }).notices.map((n) => n.id), ['quiet-one']);
+});

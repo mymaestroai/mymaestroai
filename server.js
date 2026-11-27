@@ -734,13 +734,18 @@ async function handleHttpRequest(req, res) {
         if (b.decision !== 'on' && b.decision !== 'off' && b.decision !== 'snooze' && b.decision !== 'seen') return jsonResponse(res, 400, { ok: false, error: 'decision must be "on", "off", "snooze" or "seen"' });
         const bc = require('./lib/behaviour-changes');
         if (!bc.manifest().some((e) => e.id === m[1])) return jsonResponse(res, 404, { ok: false, error: 'no such change' });
+        // A change the lead may not switch (spending, security) is the install's owner's alone; any other admin's own session still decides the rest.
+        const refused = bc.ownerRefusal(m[1], { isOwner: !!(req.hubUser && !req.hubService && !req.hubPendingTotp && hubAuth.isOwner(req.hubUser)) });
+        if (refused) return jsonResponse(res, 403, { ok: false, error: refused });
+        // expect: the state the page drew this row from; checked inside the write lock, a stale second device gets 409 'already decided'.
+        const expect = b.expect === 'pending' || b.expect === 'on' || b.expect === 'off' ? b.expect : undefined;
         const who = req.hubUser && req.hubUser.id;
         try {
           // Run as the person who pressed: the change journal (Recent changes, Restore) names them.
           await require('./lib/settings-journal').withActor({ kind: 'person', user: who }, async () => {
-            if (b.decision === 'snooze') await bc.snooze(m[1], { user: who });
-            else if (b.decision === 'seen') await bc.markSeen(m[1], { user: who });
-            else await bc.decide(m[1], b.decision, { user: who });
+            if (b.decision === 'snooze') await bc.snooze(m[1], { user: who, expect });
+            else if (b.decision === 'seen') await bc.markSeen(m[1], { user: who, expect });
+            else await bc.decide(m[1], b.decision, { user: who, expect });
           });
           console.log(`[behaviour] ${m[1]} ${b.decision === 'on' || b.decision === 'off' ? `turned ${b.decision}` : b.decision === 'snooze' ? 'snoozed for a week' : 'notice seen'} by ${who || 'unknown'}`);
           if (m[1] === 'worker-proposals') {
@@ -3048,7 +3053,7 @@ async function handleHttpRequest(req, res) {
         const sj = require('./lib/settings-journal');
         const isAdmin = access.isAdmin(req.hubUser) || (!hubAuth.hasUsers() && !req.hubToken);
         const me = req.hubUser && req.hubUser.id;
-        const r = sj.restoreFor(rm[1], { user: me || null, isAdmin, isAdminSession: access.isAdminSession(req), agents: isAdmin ? [] : require('./lib/agents').getAgentsSync() });
+        const r = sj.restoreFor(rm[1], { user: me || null, isAdmin, isAdminSession: access.isAdminSession(req), isOwner: !!(req.hubUser && !req.hubService && !req.hubPendingTotp && hubAuth.isOwner(req.hubUser)), agents: isAdmin ? [] : require('./lib/agents').getAgentsSync() });
         return jsonResponse(res, r.ok ? 200 : (r.status || 400), r);
       }
     }

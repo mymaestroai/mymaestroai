@@ -206,7 +206,7 @@ test('each button POSTs its decision, disables the row while it runs, then shows
     await p.settle();
     const posts = p.calls.filter((c) => c.method === 'POST');
     assert.strictEqual(posts.length, 1);
-    assert.deepStrictEqual(posts[0], { url: '/api/behaviour-changes/quick-research', method: 'POST', body: { decision } });
+    assert.deepStrictEqual(posts[0], { url: '/api/behaviour-changes/quick-research', method: 'POST', body: { decision, expect: 'pending' } });
     assert.ok(p.btns(row()).every((b) => b.disabled), 'the row is locked while it runs');
     await p.answer('/api/behaviour-changes/quick-research', 200, { ok: true, change: { id: 'quick-research' } });
     assert.ok(row().text.includes(line), line);
@@ -252,7 +252,7 @@ test('every row answered: one closing line and no buttons', async () => {
   assert.ok(!c().text.includes('All set.'), 'one row is still open');
   p.btns(c(), 'Leave off')[0].click(); await p.settle();
   await p.answer('/api/behaviour-changes/protect-code', 200, { ok: true });
-  assert.ok(c().text.includes('All set. You can change these any time in Settings, For your review.'));
+  assert.ok(c().text.includes('All set. You can change these any time in Settings.'));
   assert.strictEqual(p.btns(c()).length, 0);
   assert.strictEqual(c().text.split('All set.').length, 2, 'once');
 });
@@ -266,11 +266,11 @@ test('quiet features already on: "<title> is now on. <line>" with Turn off and O
   assert.ok(rows()[0].text.includes('Faster history search is now on. Nothing for you to do.'));
   assert.deepStrictEqual(p.btns(rows()[0]).map((b) => b.textContent), ['Turn off', 'OK']);
   p.btns(rows()[0], 'Turn off')[0].click(); await p.settle();
-  assert.deepStrictEqual(p.calls.filter((x) => x.method === 'POST')[0], { url: '/api/behaviour-changes/quiet-fix', method: 'POST', body: { decision: 'off' } });
+  assert.deepStrictEqual(p.calls.filter((x) => x.method === 'POST')[0], { url: '/api/behaviour-changes/quiet-fix', method: 'POST', body: { decision: 'off', expect: 'on' } });
   await p.answer('/api/behaviour-changes/quiet-fix', 200, { ok: true });
   assert.ok(rows()[0].text.includes('Turned off.'));
   p.btns(rows()[1], 'OK')[0].click(); await p.settle();
-  assert.deepStrictEqual(p.calls.filter((x) => x.method === 'POST')[1].body, { decision: 'seen' });
+  assert.deepStrictEqual(p.calls.filter((x) => x.method === 'POST')[1].body, { decision: 'seen', expect: 'on' });
   await p.answer('/api/behaviour-changes/quiet-two', 200, { ok: true });
   assert.ok(!c().text.includes('Tidier logs'), 'the OK row disappears');
   assert.ok(c().text.includes('All set.'));
@@ -361,4 +361,100 @@ test('the module is documented, exports its API, and the pages load and call it'
   assert.match(fs.readFileSync(path.join(ROOT, 'lib', 'static-files.js'), 'utf8'), /\['ui-feature-card\.js', 'lib\/ui-feature-card\.js'\]/);
   assert.match(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8'), /FeatureCard\.chatShown\(/);
   assert.match(fs.readFileSync(path.join(ROOT, 'mobile.js'), 'utf8'), /FeatureCard\.chatShown\(/);
+});
+
+// ── p5b round 1 ──
+const rowsOf = (p, list) => p.cards(list)[0].find((n) => /\bfc-row\b/.test(n.className));
+test('r1 fix3: a 409 from a press refetches the card: the row shows the fresh state or disappears (no error, no dead buttons)', async () => {
+  const p = page(); const list = p.mkList();
+  p.FC.chatShown('harbor', list); await p.settle();
+  p.btns(rowsOf(p, list)[0], 'Turn on')[0].click(); await p.settle();
+  const gets = p.calls.filter((c) => c.method === 'GET').length;
+  p.cur.first = { status: 200, body: body({ entries: [E2] }) };   // another device already answered it
+  await p.answer('/api/behaviour-changes/quick-research', 409, { ok: false, error: 'already decided' });
+  assert.strictEqual(p.calls.filter((c) => c.method === 'GET').length, gets + 1, 'the card was fetched again');
+  assert.ok(!p.cards(list)[0].text.includes('Agents may start quick research'), 'the row is gone');
+  assert.ok(!p.cards(list)[0].text.includes('already decided'));
+  // still listed (snoozed on the other device, then back): the row shows the fresh data with working buttons
+  const q = page(); const l2 = q.mkList();
+  q.FC.chatShown('harbor', l2); await q.settle();
+  q.btns(rowsOf(q, l2)[0], 'Leave off')[0].click(); await q.settle();
+  q.cur.first = { status: 200, body: body({ entries: [{ ...E1, summary: 'A fresh summary.' }, E2] }) };
+  await q.answer('/api/behaviour-changes/quick-research', 409, { ok: false, error: 'already decided' });
+  assert.ok(rowsOf(q, l2)[0].text.includes('A fresh summary.'));
+  assert.ok(!rowsOf(q, l2)[0].text.includes('already decided'));
+  assert.ok(q.btns(rowsOf(q, l2)[0]).length === 3 && q.btns(rowsOf(q, l2)[0]).every((b) => !b.disabled));
+});
+test('r1 fix4: an answered row the server lists as actionable again (snooze ended, Restore) goes back to open with fresh data', async () => {
+  const p = page(); const list = p.mkList();
+  p.FC.chatShown('harbor', list); await p.settle();
+  p.btns(rowsOf(p, list)[0], 'Ask me in a week')[0].click(); await p.settle();
+  await p.answer('/api/behaviour-changes/quick-research', 200, { ok: true });
+  assert.ok(rowsOf(p, list)[0].text.includes('I will ask again next week.'));
+  p.cur.first = { status: 200, body: body({ entries: [{ ...E1, summary: 'Back, with new words.' }, E2] }) };
+  await p.FC.refresh(); await p.settle();
+  const r = rowsOf(p, list)[0];
+  assert.ok(r.text.includes('Back, with new words.') && !r.text.includes('I will ask again'));
+  assert.deepStrictEqual(p.btns(r).map((b) => b.textContent), ['Turn on', 'Leave off', 'Ask me in a week']);
+  // a row the server no longer lists keeps its result line
+  p.btns(rowsOf(p, list)[1], 'Leave off')[0].click(); await p.settle();
+  await p.answer('/api/behaviour-changes/protect-code', 200, { ok: true });
+  p.cur.first = { status: 200, body: body({ entries: [E1] }) };
+  await p.FC.refresh(); await p.settle();
+  assert.ok(p.cards(list)[0].text.includes('Left off.'));
+});
+test('r1 fix4: an answer that lands after a card fetch began is not undone by that older fetch', async () => {
+  const p = page(); const list = p.mkList();
+  p.FC.chatShown('harbor', list); await p.settle();
+  const held = [];
+  const real = p.ctx.fetch;
+  p.ctx.fetch = (url, init = {}) => ((init.method || 'GET') === 'GET' ? new Promise((resolve) => held.push(() => resolve({ status: 200, json: async () => body() }))) : real(url, init));
+  const f = p.FC.refresh();   // an older answer is on its way and still lists the row
+  p.btns(rowsOf(p, list)[0], 'Turn on')[0].click(); await p.settle();
+  await p.answer('/api/behaviour-changes/quick-research', 200, { ok: true });
+  held.forEach((h) => h()); await f; await p.settle();
+  assert.ok(rowsOf(p, list)[0].text.includes('Turned on.'), 'the answered row stays answered');
+});
+test('r1 fix5: a 401/403 on a fetch clears every row (answered too) and removes every copy', async () => {
+  for (const status of [401, 403]) {
+    const p = page(); const list = p.mkList(); const box = node('div');
+    p.FC.chatShown('harbor', list); await p.settle();
+    await p.FC.renderInto(box);
+    p.btns(rowsOf(p, list)[0], 'Turn on')[0].click(); await p.settle();
+    await p.answer('/api/behaviour-changes/quick-research', 200, { ok: true });
+    p.cur.first = { status, body: { ok: false } };
+    await p.FC.refresh(); await p.settle();
+    assert.strictEqual(p.cards(list).length, 0, 'no chat copy');
+    assert.strictEqual(box.find((n) => /\bfeature-card\b/.test(n.className)).length, 0, 'no Settings copy');
+    assert.strictEqual(p.FC.state.rows.length, 0);
+    assert.ok(!list.text.includes('Turned on.'));
+  }
+});
+test('r1 fix6: the lead\'s chat then another chat shown before the first answer: the card lands in the lead\'s list', async () => {
+  const p = page(); const lead = p.mkList(); const other = p.mkList();
+  p.FC.chatShown('harbor', lead);
+  p.FC.chatShown('scout', other);   // both before the first fetch resolves
+  await p.settle();
+  assert.strictEqual(p.cards(lead).length, 1);
+  assert.strictEqual(p.cards(other).length, 0);
+  assert.strictEqual(lead.lastChild, p.cards(lead)[0]);
+});
+test('r1 fix7: the header counts only open entry rows; no header when none is open; notices keep their own header while one is open', async () => {
+  const p = page(); const list = p.mkList();
+  p.FC.chatShown('harbor', list); await p.settle();
+  assert.ok(p.cards(list)[0].text.includes('Two new features are off until you say yes.'));
+  p.btns(rowsOf(p, list)[0], 'Leave off')[0].click(); await p.settle();
+  await p.answer('/api/behaviour-changes/quick-research', 200, { ok: true });
+  assert.ok(p.cards(list)[0].text.includes('One new feature is off until you say yes.'), 'only the open row counts');
+  p.btns(rowsOf(p, list)[1], 'Leave off')[0].click(); await p.settle();
+  await p.answer('/api/behaviour-changes/protect-code', 200, { ok: true });
+  const t = p.cards(list)[0].text;
+  assert.ok(!/new features? (is|are) off/.test(t), 'no entry header');
+  assert.ok(t.includes('Left off.') && t.includes('All set. You can change these any time in Settings.'));
+  const q = page({ first: { status: 200, body: body({ entries: [], notices: [N1] }) } }); const l2 = q.mkList();
+  q.FC.chatShown('harbor', l2); await q.settle();
+  assert.ok(q.cards(l2)[0].text.includes('New features were turned on for you.'));
+  q.btns(rowsOf(q, l2)[0], 'Turn off')[0].click(); await q.settle();
+  await q.answer('/api/behaviour-changes/quiet-fix', 200, { ok: true });
+  assert.ok(!q.cards(l2)[0].text.includes('New features were turned on for you.'), 'no notice open: no header');
 });
