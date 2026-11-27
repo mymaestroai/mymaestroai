@@ -137,6 +137,12 @@ git log -1 --date=local --format='%h %ad %s'
 
 ---
 
+### 3.9 Memory limits (`lib/mem-limit.js`, `lib/scope-wrap.js`, `lib/mem-watch.js`)
+- One setting, `settings.jobMemoryLimitGb` (record OPT-1095): GB; 0 = no limit; blank or a bad value = automatic, a quarter of RAM, at least 4 GB, at most 64 GB, never above the computer's memory. The running hub installs the settings reader at start (`setSettingsReader`); the default reads nothing (tests stay sealed).
+- Jobs (`lib/jobs.js`): host jobs in systemd mode get `-p MemoryMax=<limit> -p MemorySwapMax=0` on their own scope (no MemoryHigh: it throttles instead of ending a runaway). No --collect, so the scope's Result and MemoryPeak are read after the job ends, the job's final state is saved, then reset-failed. The wrapper (also its TERM trap) records memory.events `oom`/`oom_kill`. The notice "stopped: it used more than N GB of memory (its limit)" needs `oom` > 0 or Result oom-kill with MemoryPeak >= 95% of the limit; an OOM kill without that evidence says the computer ran short of memory; a job that exits 0 is finished. Without systemd (setsid mode, Mac): `lib/mem-watch.js`, a best-effort watchdog (one shared `ps -A` every 2 s; descendants by ppid tree and process group, pid + start time identity; SIGTERM, SIGKILL after 3 s only to still-verified members); the job shows as running (`stopping: true`) until its processes are gone. Boxed jobs keep the box's own `--memory`.
+- Agents' own commands: the host Bash tool, the Claude client and Codex run through `scope-wrap.wrap()`: `systemd-run --user --scope -p MemoryMax -p MemorySwapMax=0 -- cmd` (execs in place: same pid, pipes, group; about 6 ms per command). The probe uses the real properties and expires after 5 minutes; a scope failure only resets the probe for the next command (a command is never run twice). Without systemd: the same mem-watch watchdog.
+- The hub's own unit: `lib/service-manager.js` writes the drop-in `<unit>.d/50-mymaestro-memory.conf` (`ManagedOOMPreference=avoid`) at install and on Update; daemon-reload unless the unit already shows avoid; effective at the next restart; a failure is a warning, never a failed Update. Mac (launchd): no equivalent.
+
 ## 4. First run and configuration
 
 ### 4.1 Install

@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **One runaway program can no longer take your Maestro down.** Every background job, and every command an agent runs on this computer, now has a memory limit (automatic: a quarter of the computer's memory, between 4 and 64 GB; you can change it). A job that goes past it is stopped on its own and its notice says it used too much memory, instead of the computer running out and stopping your Maestro and every agent. Your Maestro is also marked to be the last thing the system stops when memory runs short; this takes effect after the next update or restart.
+
 - **Your main agents split complex work into parallel parts by themselves.** For a complex job they run independent parts at the same time on fitting models and check every part before using it, without you having to ask; work that is better done in one thread, such as one piece of writing or a chain of decisions, stays in one thread. On an existing install it waits for your decision under Settings, For your review.
 - **A real monthly spending cap.** Set a dollar limit for a month of pay-per-use spending (API keys) in Settings, and choose the day the month starts. You get one notice at 80% and one when it is reached; then agents on pay-per-use models stop answering until the month starts again or you raise the cap, while agents on a subscription or on this computer keep working and a reply already being written finishes. Paid pictures and paid web searches are stopped at the cap too; the free web search still answers.
 

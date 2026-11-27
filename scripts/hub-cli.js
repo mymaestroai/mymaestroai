@@ -525,6 +525,8 @@ const commands = {
       return;
     }
     for (const step of r.steps || []) out(`  ${step}`);
+    // The unit's memory drop-in (systemd-oomd avoids the hub): written here for installs older than it; the restart below picks it up.
+    try { const o = svc().ensureOomDropIn(); if (o && o.warning) out(`  warning: ${o.warning}; the update goes on`); } catch (e) { out(`  warning: could not set up the memory drop-in (${e.message}); the update goes on`); }
     await commands.restart();
   },
   async doctor() {

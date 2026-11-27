@@ -13,7 +13,9 @@ const cp = require('child_process');
 const toolPolicy = require('../lib/tool-policy');
 const lb = require('../lib/lockbox');
 const { createWire } = require('../lib/lockbox/wire');
-const { createHubTools } = require('../lib/hub-tools');
+const { createHubTools: realHubTools } = require('../lib/hub-tools');
+// These tests are about the lockbox's own spawn arguments: no memory scope around them (test/scope-wrap.test.js covers that).
+const createHubTools = (o) => realHubTools({ scopeWrap: null, ...o });
 const { JobRunner } = require('../lib/jobs');
 const { createGate } = require('../lib/policy-gate');
 const { createApprovals } = require('../lib/approvals');

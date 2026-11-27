@@ -32372,6 +32372,39 @@
         }
       ],
       "facts": "settings.ledger.monthlyResetDay 1-28 lib/ledger.js cleanMonthly/monthPeriod (hub zone, lib/timezone hubZone)."
+    },
+    {
+      "id": "OPT-1095",
+      "kind": "setting",
+      "name": "Memory limit for background work",
+      "labels": [
+        "Memory limit for background work (GB)"
+      ],
+      "what": "Sets how much memory one background job, or one command an agent runs on this computer, may use. Past it, only that job or command is stopped, so a runaway program can't use up the computer's memory and take your Maestro down with it.",
+      "when": "Raise it if a job you need, such as a large build or a browser test, is stopped for using too much memory. Lower it on a computer that is short of memory.",
+      "risk": "Set too low, ordinary jobs stop early. 0 turns the limit off, and then one runaway job can stop your Maestro and every agent.",
+      "def": "Default: automatic, a quarter of this computer's memory, at least 4 GB and at most 64 GB. We recommend leaving it on automatic.",
+      "restart": false,
+      "danger": "care",
+      "who": "admin",
+      "lead": "confirm",
+      "words": [
+        "memory",
+        "ram",
+        "limit",
+        "job",
+        "background",
+        "out of memory",
+        "oom",
+        "runaway",
+        "browser",
+        "gb"
+      ],
+      "scope": "install",
+      "home": "Settings > Upkeep",
+      "storedAs": "settings.jobMemoryLimitGb",
+      "anchors": [],
+      "facts": "settings.jobMemoryLimitGb read by lib/mem-limit.js limitBytes (auto 25% of RAM, 4-64 GB); MemoryMax + MemorySwapMax=0 on job scopes lib/jobs.js and on agents' command scopes lib/scope-wrap.js; best-effort watchdog without systemd lib/mem-watch.js (ps every 2 s, descendants + process group)."
     }
   ]
 }
