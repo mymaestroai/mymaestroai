@@ -25990,12 +25990,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       const waiting = new Set(listed.filter(n => agentLiveState(n).question));
       const before = qsWaiting;
       if (waiting.size === before.size && listed.every(n => waiting.has(n) === before.has(n))) return;
-      qsWaiting = waiting;
       const q = document.getElementById('qs-q');
       const rows = new Map(Array.from(list.children).filter(r => r.dataset.agent).map(r => [r.dataset.agent, r]));
       const roster = (AGENTS || []).filter(a => a && a.name && rows.has(a.name));
       const ranked = qsRank(roster, q ? q.value : '', { recent: qsRecent(), unread, waiting });
       if (ranked.length !== rows.size) return;   // the roster and the rows disagree: the next full render sorts it out
+      qsWaiting = waiting;   // recorded only once the reorder can be applied
       const keepName = qsList[qsSel] && qsList[qsSel].name;
       const top = list.scrollTop;
       qsList = ranked;
@@ -26008,6 +26008,8 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       qsSel = at >= 0 ? at : 0;
       qsPaintSel(false);
       list.scrollTop = top;
+      const selRow = list.children[qsSel];   // the selected row moved out of view: bring it back, nearest edge
+      if (selRow && (selRow.offsetTop < list.scrollTop || selRow.offsetTop + selRow.offsetHeight > list.scrollTop + list.clientHeight) && selRow.scrollIntoView) selRow.scrollIntoView({ block: 'nearest' });
     }
     function renderQuickSwitcher() {
       const q = document.getElementById('qs-q'), list = document.getElementById('qs-list'), status = document.getElementById('qs-status');
