@@ -77,15 +77,116 @@ test('the patch each row sends: nested keys, the default, a provider address', (
   const data = { updateCheck: { enabled: true, hours: 12 } };
   assert.deepStrictEqual(G.p5cPatch(row('OPT-0951'), 100, data), { filesMaxUploadMb: 100 });
   assert.deepStrictEqual(G.p5cPatch(row('OPT-0951'), null, data), { filesMaxUploadMb: null }, 'use default sends null');
-  assert.deepStrictEqual(G.p5cPatch(row('OPT-0943'), 6, data), { updateCheck: { enabled: true, hours: 6 } }, 'the hub replaces updateCheck whole: the switch is kept');
-  assert.deepStrictEqual(G.p5cPatch(row('OPT-0943'), null, data), { updateCheck: { enabled: true } });
+  assert.deepStrictEqual(G.p5cPatch(row('OPT-0943'), 6, data), { updateCheck: { hours: 6 } }, 'only the one field: no stale sibling goes along');
+  assert.deepStrictEqual(G.p5cPatch(row('OPT-0943'), null, data), { updateCheck: { hours: null } }, 'use default removes just the hours');
   assert.deepStrictEqual(G.p5cPatch(row('OPT-0945'), 80, data), { planFallback: { at: 80 } });
   assert.deepStrictEqual(G.p5cPatch(row('OPT-0946'), { opus: 'claude-sdk/x' }, data), { planFallback: { map: { opus: 'claude-sdk/x' } } });
   assert.deepStrictEqual(G.p5cPatch(row('OPT-0948'), 'tiny.en', data), { voice: { sttModel: 'tiny.en' } });
-  assert.deepStrictEqual(G.p5cPatch(row('OPT-0948'), null, data), { voice: { sttModel: '' } }, 'empty is automatic');
+  assert.deepStrictEqual(G.p5cPatch(row('OPT-0948'), null, data), { voice: { sttModel: null } }, 'null is automatic');
   assert.deepStrictEqual(G.p5cPatch(row('OPT-0934'), 'https://proxy.example.com', data), { providers: { openai: { url: 'https://proxy.example.com' } } });
-  assert.deepStrictEqual(G.p5cPatch(row('OPT-0934'), null, data), { providers: { openai: { url: '' } } }, 'the hub falls back to its own address');
-  assert.deepStrictEqual(G.p5cPatch(row('OPT-0931'), null, data), { providers: { ninfer: { url: '' } } });
+  assert.deepStrictEqual(G.p5cPatch(row('OPT-0934'), null, data), { providers: { openai: { url: null } } }, 'the hub falls back to its own address');
+  assert.deepStrictEqual(G.p5cPatch(row('OPT-0931'), null, data), { providers: { ninfer: { url: null } } });
+  // every row: Use default sends {<key>: null} (nested keys nest, nothing else goes along)
+  for (const r of G.P5C) {
+    const body = G.p5cPatch(r, null, { updateCheck: { enabled: true, hours: 12 }, imageModels: { google: { fast: 'a' } } });
+    let o = body; for (const p of r.key.split('.')) { assert.ok(o && typeof o === 'object' && Object.keys(o).length === 1, `${r.opt}: one key at each level`); o = o[p]; }
+    assert.strictEqual(o, null, `${r.opt}: null at the key`);
+  }
+  assert.deepStrictEqual(G.p5cPatch(row('OPT-0963'), null, data), { promptCache: null }, 'the default selection sends null');
+});
+
+test('picture models send only the tier that changed; clearing one is an explicit null; Use default is null', () => {
+  const r = row('OPT-0962');
+  const data = { imageModels: { google: { fast: 'gf', best: 'gb' }, openai: { fast: 'of' } } };
+  assert.deepStrictEqual(G.p5cPatch(r, { google: { fast: 'gf', best: 'gb2' }, openai: { fast: 'of' } }, data), { imageModels: { google: { best: 'gb2' } } });
+  assert.deepStrictEqual(G.p5cPatch(r, { google: { best: 'gb' }, openai: { fast: 'of' } }, data), { imageModels: { google: { fast: null } } }, 'a cleared tier removes it');
+  assert.deepStrictEqual(G.p5cPatch(r, { google: { fast: 'gf', best: 'gb' }, openai: { fast: 'of', best: 'ob' } }, data), { imageModels: { openai: { best: 'ob' } } }, 'a new tier');
+  assert.deepStrictEqual(G.p5cPatch(r, null, data), { imageModels: null });
+  assert.deepStrictEqual(G.p5cPatch(r, { google: { fast: 'x' } }, {}), { imageModels: { google: { fast: 'x' } } });
+});
+
+test('the provider address question names the provider, the new address and the old one, for a reset too', () => {
+  assert.strictEqual(G.p5cConfirmText(row('OPT-0933'), null, 'https://203.0.113.10/v1'), 'Keys and prompts for Anthropic will go to https://api.anthropic.com instead of https://203.0.113.10/v1. Change it?');
+  assert.strictEqual(G.p5cConfirmText(row('OPT-0933'), 'https://p.example.com', undefined), 'Keys and prompts for Anthropic will go to https://p.example.com instead of https://api.anthropic.com. Change it?');
+});
+
+// The row saver with a fake page: a post that finishes late, so an edit lands while a save runs.
+function fakeSaver(opts = {}) {
+  const raws = {}; const posts = []; const toasts = []; const paints = []; const asked = []; const gates = [];
+  const data = opts.data || {};
+  const saver = G.p5cSaver({
+    data: () => data,
+    readRaw: (r) => raws[r.opt],
+    post: (body) => new Promise((res) => { posts.push(body); gates.push(() => res(opts.fail ? { ok: false, error: opts.fail } : { ok: true })); if (!opts.late) gates.pop()(); }),
+    readBack: async () => (opts.back ? opts.back(data) : data),
+    confirm: (t) => { asked.push(t); return opts.yes !== false; },
+    toast: (t) => toasts.push(t),
+    paint: (r) => paints.push(r.opt),
+  });
+  return { saver, raws, posts, toasts, paints, asked, gates, data };
+}
+const tick = () => new Promise((r) => setImmediate(r));
+
+test('an edit made while a save runs is kept and saved after it; the row is not repainted over it', async () => {
+  const f = fakeSaver({ late: true });
+  f.raws['OPT-0951'] = '100';
+  const first = f.saver.save('OPT-0951');
+  await tick();
+  assert.deepStrictEqual(f.posts, [{ filesMaxUploadMb: 100 }]);
+  f.raws['OPT-0951'] = '200'; const second = f.saver.save('OPT-0951');   // lands while the first is in flight
+  f.raws['OPT-0951'] = '300'; const third = f.saver.save('OPT-0951');
+  await tick();
+  assert.strictEqual(f.posts.length, 1, 'one save at a time');
+  f.gates.shift()();   // the first save ends
+  await tick(); await tick();
+  assert.deepStrictEqual(f.posts, [{ filesMaxUploadMb: 100 }, { filesMaxUploadMb: 300 }], 'only the latest wanted value follows');
+  assert.deepStrictEqual(f.paints, [], 'no repaint over the newer edit while it is pending or saving');
+  f.gates.shift()();
+  await Promise.all([first, second, third]);
+  assert.strictEqual(f.data.filesMaxUploadMb, 300);
+  assert.deepStrictEqual(f.paints, ['OPT-0951'], 'painted once, at the end');
+});
+
+test('an edit that returns to the saved value while a save runs sends nothing more', async () => {
+  const f = fakeSaver({ late: true, data: { filesMaxUploadMb: 50 } });
+  f.raws['OPT-0951'] = '100';
+  const first = f.saver.save('OPT-0951'); await tick();
+  f.raws['OPT-0951'] = '100'; const again = f.saver.save('OPT-0951');
+  f.gates.shift()();
+  await Promise.all([first, again]);
+  assert.strictEqual(f.posts.length, 1);
+});
+
+test('after a save the stored value is read back: "back to the default" only when it really is', async () => {
+  const stuck = fakeSaver({ data: { filesMaxUploadMb: 100 }, back: () => ({ filesMaxUploadMb: 100 }) });
+  await stuck.saver.save('OPT-0951', true);
+  assert.deepStrictEqual(stuck.posts, [{ filesMaxUploadMb: null }]);
+  assert.ok(!stuck.toasts.some((t) => /back to the default/.test(t)), stuck.toasts.join('|'));
+  assert.strictEqual(stuck.data.filesMaxUploadMb, 100, 'the screen shows what the hub holds');
+  const ok = fakeSaver({ data: { filesMaxUploadMb: 100 }, back: () => ({}) });
+  await ok.saver.save('OPT-0951', true);
+  assert.deepStrictEqual(ok.toasts, ['Biggest upload (MB): back to the default.']);
+  assert.ok(!('filesMaxUploadMb' in ok.data));
+});
+
+test('a provider address asks before every change, a reset included; no answer, no change', async () => {
+  const f = fakeSaver({ data: { providers: { anthropic: { url: 'https://203.0.113.10/v1' } } } });
+  await f.saver.save('OPT-0933', true);
+  assert.deepStrictEqual(f.asked, ['Keys and prompts for Anthropic will go to https://api.anthropic.com instead of https://203.0.113.10/v1. Change it?']);
+  assert.deepStrictEqual(f.posts, [{ providers: { anthropic: { url: null } } }]);
+  const no = fakeSaver({ yes: false, data: { providers: { anthropic: { url: 'https://203.0.113.10/v1' } } } });
+  await no.saver.save('OPT-0933', true);
+  assert.strictEqual(no.posts.length, 0);
+  assert.deepStrictEqual(no.paints, ['OPT-0933']);
+});
+
+test('a failed save says the hub\'s words and puts the box back', async () => {
+  const f = fakeSaver({ fail: 'Too big.' });
+  f.raws['OPT-0951'] = '100';
+  await f.saver.save('OPT-0951');
+  assert.deepStrictEqual(f.toasts, ['Could not save: Too big.']);
+  assert.deepStrictEqual(f.paints, ['OPT-0951']);
+  assert.ok(!('filesMaxUploadMb' in f.data));
 });
 
 test('what a row shows: unset shows the default, a saved value shows as set, the screen copy follows a save', () => {
@@ -111,10 +212,11 @@ test('app.js: admins only, the ⓘ attribute on every control, saves through POS
   assert.ok(app.slice(at, at + 700).includes('id="st-expert-section"><h4>Expert values</h4>'));
   assert.ok(app.includes('const di = `id="${r.id}" data-setting="${r.opt}"`;'), 'every control carries data-setting and its id');
   assert.ok(app.includes("p5cSave('${r.opt}', true)") && app.includes('>Use default</button>'), 'Use default');
-  assert.ok(app.includes('STG.p5cPatch(r, c.value, p5cData)') && app.includes("stSaveFetch('/api/settings', { method: 'POST'"), 'saved through POST /api/settings');
-  assert.ok(app.includes('`Keys and prompts for ${r.label} go to this address. Change it?`'), 'the confirm words');
-  assert.ok(app.includes("hubToast('Could not save: ' + e.message)") && app.includes('d.error || `HTTP ${resp.status}`'), 'a failure shows the hub\'s words');
-  assert.ok(app.includes('p5cBusy[opt]') && app.includes('p5cPaint(r);'), 'one save at a time per row, the box put back after');
+  assert.ok(app.includes('STG.p5cSaver({') && app.includes("stSaveFetch('/api/settings', { method: 'POST'") && app.includes('JSON.stringify(body)'), 'saved through POST /api/settings by the shared saver');
+  assert.ok(app.includes("readBack: async () => { const r = await fetch('/api/settings'"), 'the stored value is read back');
+  assert.ok(app.includes('confirm: (t) => confirm(t)'), 'the address question goes through the saver, which words it (STG.p5cConfirmText)');
+  assert.ok(app.includes('d.error || `HTTP ${resp.status}`'), 'a failure shows the hub\'s words');
+  assert.ok(app.includes('paint: p5cPaint'), 'the box put back after');
   const html = app.slice(app.indexOf('function p5cRowHtml('), app.indexOf('function p5cPaint('));
   assert.ok(html.includes('${STG.p5cDefaultText(r)}') || html.includes('STG.p5cDefaultText(r)'), 'Default: ... is shown');
   assert.ok(!/\bdata-setting="OPT-\d+"/.test(html), 'the id comes from the table, not typed in');

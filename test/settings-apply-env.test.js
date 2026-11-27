@@ -320,6 +320,101 @@ test('cleanSettingsPatch(): numbers sent as text are made numbers; nested object
   assert.deepEqual(clean({ updateCheck: { hours: null } }).patch.updateCheck, { enabled: true, lastCheck: 'x' });
 });
 
+// ── round 1 review (R2, R3, R4, R8, R9, R10) ────────────────────────────────────────────────────────
+test('R2: updateCheck merge deletes a key sent as null, whatever the key; the whole key as null is removed', () => {
+  assert.deepEqual(clean({ updateCheck: { hours: null } }).patch.updateCheck, { enabled: true, lastCheck: 'x' });
+  assert.deepEqual(clean({ updateCheck: { enabled: null } }).patch.updateCheck, { lastCheck: 'x' });
+  assert.deepEqual(clean({ updateCheck: { lastCheck: null, hours: 12 } }).patch.updateCheck, { enabled: true, hours: 12 });
+  const withHours = apply.cleanSettingsPatch({ updateCheck: { hours: null } }, { getSetting: (k) => (k === 'updateCheck' ? { enabled: true, hours: 6 } : undefined) });
+  assert.deepEqual(withHours.patch.updateCheck, { enabled: true }, 'the stored hours do not come back');
+  const p = clean({ updateCheck: null });
+  assert.deepEqual(p.errors, []); assert.equal(p.patch.updateCheck, null);
+});
+
+test('R3: imageModels: a tier sent as null is removed; a service as null, {} or null removes the key; clearing the last tier removes the key', () => {
+  assert.deepEqual(clean({ imageModels: { google: { fast: null } } }).patch.imageModels, null, 'the only tier stored is cleared: the key goes');
+  const two = (patch) => apply.cleanSettingsPatch(patch, { getSetting: (k) => (k === 'imageModels' ? { google: { fast: 'g-fast', best: 'g-best' }, openai: { best: 'o-best' } } : undefined) }).patch.imageModels;
+  assert.deepEqual(two({ imageModels: { google: { fast: null } } }), { google: { best: 'g-best' }, openai: { best: 'o-best' } });
+  assert.deepEqual(two({ imageModels: { google: null } }), { openai: { best: 'o-best' } });
+  assert.deepEqual(two({ imageModels: { google: { fast: null, best: '' } } }), { openai: { best: 'o-best' } });
+  for (const empty of [null, {}]) { const r = clean({ imageModels: empty }); assert.deepEqual(r.errors, []); assert.equal(r.patch.imageModels, null); }
+  assert.match(clean({ imageModels: { bing: null } }).errors[0], /not a picture service/);
+});
+
+test('R4: every cleaner takes null as "remove the key"; updateSettings deletes the stored key (no null is kept)', () => {
+  const nulls = {};
+  for (const k of [...Object.keys({ approvalTimeoutMinutes: 1, connectorsUnlockMinutes: 1, filesMaxUploadMb: 1, filesZipMaxMb: 1, filesZipMaxFiles: 1, recordsMaxBytes: 1, sandboxHomeMoveMinutes: 1, compactionAt: 1, jobMemoryLimitGb: 1 }),
+    'compactionMode', 'imageProvider', 'confirmTools', 'hubBrief', 'sandboxMemory', 'sandboxCpus', 'memberDefaultModel', 'memberModels', 'imageModels', 'promptCache', 'updateCheck', 'planFallback']) nulls[k] = null;
+  const r = clean({ ...nulls });
+  assert.deepEqual(r.errors, [], r.errors[0]);
+  for (const k of Object.keys(nulls)) assert.equal(r.patch[k], null, k);
+  // every key the cleaners hand back as null is one updateSettings removes
+  const settings = L('settings');
+  for (const k of Object.keys(nulls)) assert.ok(settings.REMOVE_ON_NULL.includes(k), `${k} is removed, not stored as null`);
+  // and it is real: the stored key is gone, so a reader with a fallback gets its fallback
+  settings.updateSettings({ promptCache: { enabled: true, ttl: '1h' }, hubBrief: true, memberDefaultModel: 'a/b', confirmTools: true, imageModels: { google: { fast: 'x' } }, planFallback: { at: 80 }, updateCheck: { hours: 5 } });
+  assert.deepEqual(settings.getSetting('promptCache'), { enabled: true, ttl: '1h' });
+  settings.updateSettings({ promptCache: null, hubBrief: null, memberDefaultModel: null, confirmTools: null, imageModels: null, planFallback: null, updateCheck: null });
+  for (const k of ['promptCache', 'hubBrief', 'memberDefaultModel', 'confirmTools', 'imageModels', 'planFallback', 'updateCheck']) assert.equal(k in settings.get(), false, `${k} is not stored`);
+  assert.equal(settings.getSetting('memberDefaultModel', 'claude-sdk/claude-sonnet-5-5'), 'claude-sdk/claude-sonnet-5-5');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(inst.data, 'settings.json'), 'utf8')).promptCache, undefined, 'and not in the file either');
+  // the pieces: promptCache fields
+  assert.deepEqual(clean({ promptCache: { ttl: null } }).patch.promptCache, { enabled: true });
+  assert.equal(clean({ promptCache: { enabled: null } }).errors.length, 0);
+  assert.equal(clean({ promptCache: { enabled: null, ttl: null } }).patch.promptCache, null, 'nothing left: the key goes');
+  assert.deepEqual(clean({ hubBrief: null }).errors, []);
+  assert.match(clean({ hubBrief: 'x' }).errors[0], /must be true or false/);
+});
+
+test('R8: planFallback.at null deletes at; map { family: null } deletes that family; map null deletes the map; what is stored is what is read', () => {
+  const pu = L('plan-usage');
+  const prev = { enabled: true, at: 80, map: { opus: 'claude-sdk/claude-haiku-5-5', sonnet: 'claude-sdk/claude-haiku-5-5' } };
+  assert.deepEqual(pu.cleanPolicy({ at: null }, prev), { enabled: true, map: prev.map });
+  assert.deepEqual(pu.cleanPolicy({ map: { opus: null } }, prev), { enabled: true, at: 80, map: { sonnet: 'claude-sdk/claude-haiku-5-5' } });
+  assert.deepEqual(pu.cleanPolicy({ map: { opus: null, sonnet: null } }, prev), { enabled: true, at: 80 }, 'the last family goes: no empty map is kept');
+  assert.deepEqual(pu.cleanPolicy({ map: null }, prev), { enabled: true, at: 80 });
+  assert.deepEqual(pu.cleanPolicy({ map: { fable: 'claude-sdk/claude-opus-5-5' } }, prev).map, { ...prev.map, fable: 'claude-sdk/claude-opus-5-5' });
+  assert.deepEqual(prev.map, { opus: 'claude-sdk/claude-haiku-5-5', sonnet: 'claude-sdk/claude-haiku-5-5' }, 'the stored value is not changed in place');
+  // through the route's cleaner (which refuses a bad value but takes null)
+  const via = (patch) => apply.cleanSettingsPatch(patch, { getSetting: (k) => (k === 'planFallback' ? prev : undefined) });
+  assert.deepEqual(via({ planFallback: { at: null } }).patch.planFallback, { enabled: true, map: prev.map });
+  assert.deepEqual(via({ planFallback: { map: { opus: null } } }).errors, []);
+  assert.equal(via({ planFallback: { map: { opus: null } } }).patch.planFallback.map.opus, undefined);
+  assert.equal(via({ planFallback: null }).patch.planFallback, null);
+  assert.match(via({ planFallback: { map: { opus: 'openai/x' } } }).errors[0], /must be a Claude model/);
+  // what is stored is what is read: a removed at / family reads as the default
+  const stored2 = pu.cleanPolicy({ at: null, map: { opus: null } }, prev);
+  const reader = pu.createPlanUsage({ getSetting: (k) => (k === 'planFallback' ? stored2 : undefined), stateFile: path.join(inst.data, 'pu-r8.json') });
+  const pol = reader.policy();
+  assert.equal(pol.at, pu.DEFAULT_POLICY.at); assert.equal(pol.map.opus, pu.DEFAULT_POLICY.map.opus); assert.equal(pol.map.sonnet, 'claude-sdk/claude-haiku-5-5');
+});
+
+test('R9: a provider address is checked only when it differs from the stored one; an odd stored address passes untouched', () => {
+  const odd = 'https://sam:pw@192.0.2.10:8080/v1';
+  const getSetting = (k) => (k === 'providers' ? { openai: { url: odd }, anthropic: { url: 'https://203.0.113.5/v1' } } : undefined);
+  const run = (providers) => apply.cleanSettingsPatch({ providers, filesMaxUploadMb: 10 }, { getSetting });
+  const same = run({ openai: { url: odd }, anthropic: { url: 'https://203.0.113.5/v1' } });
+  assert.deepEqual(same.errors, []); assert.equal(same.patch.providers.openai.url, odd, 'sent back as it was stored');
+  assert.deepEqual(run({ openai: { url: ` ${odd} ` } }).errors, [], 'the same address with spaces around it is not a change');
+  const noScheme = apply.cleanSettingsPatch({ providers: { x: { url: 'gateway.local' } } }, { getSetting: (k) => (k === 'providers' ? { x: { url: 'gateway.local' } } : undefined) });
+  assert.deepEqual(noScheme.errors, []);
+  // a changed address is checked, the changed one only
+  assert.match(run({ openai: { url: 'https://sam:pw@192.0.2.11/v1' } }).errors[0], /must not hold a user name or password/);
+  assert.match(run({ openai: { url: odd }, anthropic: { url: 'gateway' } }).errors[0], /^providers\.anthropic\.url must be a web address/);
+  assert.match(run({ openai: { url: 'https://203.0.113.9/' + 'a'.repeat(300) } }).errors[0], /must be a web address/);
+  assert.equal(run({ openai: { url: '' } }).patch.providers.openai.url, '', 'blank = the provider\'s own');
+});
+
+test('R10: POST /api/settings/env needs a "value" property (null or empty goes back to the default)', () => {
+  const server = fs.readFileSync(path.join(REAL, 'server.js'), 'utf8');
+  const at = server.indexOf("pathname === '/api/settings/env'");
+  const block = server.slice(at, server.indexOf("pathname === '/api/settings/test-provider'"));
+  assert.match(block, /hasOwnProperty\.call\(b, 'value'\)/);
+  assert.match(block, /error: 'value is needed \(null or empty to go back to the default\)'/);
+  assert.ok(block.indexOf("'value is needed") < block.indexOf('.setEnv('), 'refused before anything is written');
+  assert.doesNotMatch(block, /b\.value === undefined \? ''/, 'a missing value is no longer the same as an empty one');
+});
+
 test('cleanSettingsPatch(): toolPolicy, teamTemplates, walletAgents, walletOwner and receiverAliases are dropped; the lead cannot change them either', () => {
   for (const key of ['toolPolicy', 'teamTemplates', 'walletAgents', 'walletOwner', 'receiverAliases']) {
     assert.ok(key in apply.DROPPED_KEYS, key);

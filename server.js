@@ -3113,7 +3113,8 @@ async function handleHttpRequest(req, res) {
       let b;
       try { b = JSON.parse((await readBody(req)) || '{}'); } catch { return jsonResponse(res, 400, { error: 'invalid JSON' }); }
       if (!b || typeof b !== 'object' || Array.isArray(b) || typeof b.key !== 'string') return jsonResponse(res, 400, { error: 'key is needed' });
-      const w = require('./lib/settings-apply').setEnv(b.key, b.value === undefined ? '' : b.value);
+      if (!Object.prototype.hasOwnProperty.call(b, 'value')) return jsonResponse(res, 400, { error: 'value is needed (null or empty to go back to the default)' });
+      const w = require('./lib/settings-apply').setEnv(b.key, b.value);
       if (!w.ok) return jsonResponse(res, 400, { error: w.error });
       return jsonResponse(res, 200, { ok: true, key: w.key, value: w.after, restartNeeded: true });
     }

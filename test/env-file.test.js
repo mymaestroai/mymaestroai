@@ -147,10 +147,82 @@ test('write(): CRLF files keep CRLF on the changed, the added and every other li
   assert.equal(txt(f), 'PORT=8888\r\n# note\r\n\r\nHUB_HOME=/srv\r\nHUB_MEMORY_HEALTH=off\r\n');
 });
 
-test('write(): an "export " prefix on the key\'s own line is kept; a line with the same prefix text in a comment is not touched', () => {
-  const f = envAt('# HUB_TZ=Asia/Tokyo\nexport HUB_TZ=UTC\n');
+test('write(): an "export KEY=" line is not read by the hub, so writing the key replaces it with a plain line (R11); a comment is not touched', () => {
+  const f = envAt('# HUB_TZ=Asia/Tokyo\nexport HUB_TZ=UTC\nexport HUB_HOME=/srv\n');
   ef.write('HUB_TZ', 'Europe/Rome', { file: f });
-  assert.equal(txt(f), '# HUB_TZ=Asia/Tokyo\nexport HUB_TZ=Europe/Rome\n');
+  assert.equal(txt(f), '# HUB_TZ=Asia/Tokyo\nHUB_TZ=Europe/Rome\nexport HUB_HOME=/srv\n');
+  // when a plain line of the key exists too, that one (the one the hub reads) is replaced and the export line stays
+  const g = envAt('export HUB_TZ=UTC\nHUB_TZ=Asia/Tokyo\n');
+  ef.write('HUB_TZ', 'Europe/Rome', { file: g });
+  assert.equal(txt(g), 'export HUB_TZ=UTC\nHUB_TZ=Europe/Rome\n');
+});
+
+test('read(): an "export KEY=" line is not a value (the loader ignores it); the row says note: export (R11)', () => {
+  const f = envAt('export HUB_TZ=UTC\nexport HUB_SELFCHECK=off\nHUB_SELFCHECK=off\n');
+  const tz = rowOf(f, 'HUB_TZ');
+  assert.equal(tz.value, null); assert.equal(tz.set, false); assert.equal(tz.note, 'export');
+  const sc = rowOf(f, 'HUB_SELFCHECK');
+  assert.equal(sc.value, 'off'); assert.equal(sc.note, undefined, 'a plain line of the key exists: that is what is read');
+  assert.equal(rowOf(f, 'HUB_COMMS_DISABLED').note, undefined);
+  // the loader and this reader agree
+  const env = {}; const fsx = require('node:fs');
+  require('../lib/hub-secrets').loadEnvFile(f, { env });
+  assert.equal(env.HUB_TZ, undefined); assert.equal(env.HUB_SELFCHECK, 'off');
+  assert.equal(fsx.existsSync(f), true);
+});
+
+test('write(): a trailing " # comment" of a replaced line moves to its own line above, so the hub reads only the value (R14), also after a quoted value and in CRLF files', () => {
+  const f = envAt('HUB_TZ=UTC   # the zone\nHUB_SELFCHECK="off" # quoted\nHUB_MEMORY_HEALTH=off\n');
+  ef.write('HUB_TZ', 'Europe/Rome', { file: f });
+  ef.write('HUB_SELFCHECK', 'off', { file: f });
+  ef.write('HUB_MEMORY_HEALTH', 'off', { file: f });
+  assert.equal(txt(f), '# the zone\nHUB_TZ=Europe/Rome\n# quoted\nHUB_SELFCHECK=off\nHUB_MEMORY_HEALTH=off\n');
+  const c = envAt('HUB_TZ=UTC # note\r\nA=1\r\n');
+  ef.write('HUB_TZ', 'Asia/Tokyo', { file: c });
+  assert.equal(txt(c), '# note\r\nHUB_TZ=Asia/Tokyo\r\nA=1\r\n');
+  const q = envAt('HUB_PUSH_SUBJECT="mailto:a@example.com # x" # keep\n');
+  ef.write('HUB_PUSH_SUBJECT', 'https://example.com/c', { file: q });
+  assert.equal(txt(q), '# keep\nHUB_PUSH_SUBJECT=https://example.com/c\n');
+  // the hub's own loader then reads exactly the new value
+  const seen = {};
+  const hs = require('../lib/hub-secrets');
+  const before = process.env.HUB_PUSH_SUBJECT;
+  delete process.env.HUB_PUSH_SUBJECT;
+  try { hs.loadEnvFile(q); seen.v = process.env.HUB_PUSH_SUBJECT; } finally { if (before === undefined) delete process.env.HUB_PUSH_SUBJECT; else process.env.HUB_PUSH_SUBJECT = before; }
+  assert.equal(seen.v, 'https://example.com/c');
+});
+
+// ── R6: the whole buffer is written, fsync must succeed, the rename comes last, nothing is left behind ──
+function failsLeaveFileAlone(label, io, errRe) {
+  const f = envAt(SAMPLE);
+  const dir = path.dirname(f);
+  const r = ef.write('HUB_WORKER_DEFAULT_SCOPE', 'full', { file: f, io });
+  assert.equal(r.ok, false, label);
+  assert.match(r.error, errRe, label);
+  assert.equal(txt(f), SAMPLE, `${label}: the original is byte for byte the same`);
+  assert.deepEqual(fs.readdirSync(dir), ['.env'], `${label}: no temp file is left`);
+}
+test('write(): a short write is finished in a loop (every byte lands); a write that takes nothing, ENOSPC and a failed fsync leave the file as it was and no temp file (R6)', () => {
+  // a disk that takes 3 bytes at a time: the file still comes out whole
+  const f = envAt(SAMPLE);
+  let calls = 0;
+  const slow = { writeSync: (fd, buf, off, len) => { calls++; return fs.writeSync(fd, buf, off, Math.min(3, len)); } };
+  assert.equal(ef.write('HUB_WORKER_DEFAULT_SCOPE', 'full', { file: f, io: slow }).ok, true);
+  assert.equal(txt(f), SAMPLE + 'HUB_WORKER_DEFAULT_SCOPE=full\n');
+  assert.ok(calls > 10, 'written in pieces');
+  assert.deepEqual(fs.readdirSync(path.dirname(f)), ['.env']);
+  // a write that stops half way (takes some bytes, then nothing)
+  let n = 0;
+  failsLeaveFileAlone('short write', { writeSync: (fd, buf, off, len) => (n++ === 0 ? fs.writeSync(fd, buf, off, 5) : 0) }, /EIO/);
+  failsLeaveFileAlone('ENOSPC', { writeSync: () => { const e = new Error('no space'); e.code = 'ENOSPC'; throw e; } }, /ENOSPC/);
+  failsLeaveFileAlone('ENOSPC after some bytes', { writeSync: (fd, buf, off, len) => { if (off > 0) { const e = new Error('no space'); e.code = 'ENOSPC'; throw e; } return fs.writeSync(fd, buf, off, 4); } }, /ENOSPC/);
+  failsLeaveFileAlone('fsync fails', { fsyncSync: () => { const e = new Error('io'); e.code = 'EIO'; throw e; } }, /EIO/);
+  failsLeaveFileAlone('rename fails', { renameSync: () => { const e = new Error('busy'); e.code = 'EBUSY'; throw e; } }, /EBUSY/);
+  // the rename is never tried before the bytes and the fsync are done
+  const order = [];
+  const f2 = envAt(SAMPLE);
+  ef.write('HUB_WORKER_DEFAULT_SCOPE', 'full', { file: f2, io: { writeSync: (...a) => { order.push('w'); return fs.writeSync(...a); }, fsyncSync: (fd) => { order.push('s'); fs.fsyncSync(fd); }, renameSync: (a, b) => { order.push('r'); fs.renameSync(a, b); } } });
+  assert.equal(order[order.length - 1], 'r'); assert.equal(order[order.length - 2], 's');
 });
 
 test('write(): the file mode is kept (0640 stays 0640), no temp file is left behind, a symlinked file stays a symlink', () => {
@@ -216,17 +288,42 @@ test('read(): 36 rows, each with its group; a protected secret has no value, onl
   assert.equal(none.rows.length, 36); assert.ok(none.rows.every((r) => r.value === null || r.secret === false));
 });
 
-test('read(): running is what the hub started with (captured once); pending is a saved value that differs from it', () => {
-  const f = envAt('HUB_TZ=America/Chicago\nHUB_SELFCHECK=off\n');
+test('read(): running is what the hub started with (captured once); pending is the file now differing from the file at start, not from the running value (R7)', () => {
+  // HUB_TZ and HUB_MEMORY_HEALTH are set outside the file (as systemd or docker would); the file never said anything about them
+  const f = envAt('HUB_TZ=America/Chicago\nHUB_SELFCHECK=off\nHUB_CONSULT_BUSY_WAIT_MS=30000\nHUB_CODEX_TRANSPORT=exec\n');
   const code = `const ef = require(process.argv[1]); const file = process.argv[2];
-    const first = ef.read({ file }).rows;
-    process.env.HUB_TZ = 'Asia/Tokyo';             // changed after the start: running does not follow it
+    const first = ef.read({ file }).rows;                  // the file as the hub started with it
+    process.env.HUB_TZ = 'Asia/Tokyo';                     // changed after the start: running does not follow it
+    ef.write('HUB_SELFCHECK', '', { file }); ef.write('HUB_CONSULT_BUSY_WAIT_MS', '45000', { file }); ef.write('HUB_COMMS_DISABLED', '1', { file });
     const again = ef.read({ file }).rows;
-    const pick = (rows, k) => { const r = rows.find((x) => x.key === k); return { value: r.value, running: r.running, pending: r.pending }; };
-    console.log(JSON.stringify({ tz: pick(first, 'HUB_TZ'), tz2: pick(again, 'HUB_TZ'), self: pick(first, 'HUB_SELFCHECK'), mem: pick(first, 'HUB_MEMORY_HEALTH') }));`;
-  const out = JSON.parse(execFileSync(process.execPath, ['-e', code, path.join(__dirname, '..', 'lib', 'env-file.js'), f], { env: { PATH: process.env.PATH, HUB_TZ: 'UTC', HUB_MEMORY_HEALTH: 'off' }, encoding: 'utf8' }));
-  assert.deepEqual(out.tz, { value: 'America/Chicago', running: 'UTC', pending: true });
-  assert.deepEqual(out.tz2, out.tz, 'running was captured once');
-  assert.deepEqual(out.self, { value: 'off', running: null, pending: true });
-  assert.deepEqual(out.mem, { value: null, running: 'off', pending: true }, 'a line removed from the file also waits for a restart');
+    const pick = (rows, k) => { const r = rows.find((x) => x.key === k); return { value: r.value, running: r.running, pending: r.pending, outside: r.outside }; };
+    console.log(JSON.stringify({ tz: pick(first, 'HUB_TZ'), tz2: pick(again, 'HUB_TZ'), mem: pick(first, 'HUB_MEMORY_HEALTH'), mem2: pick(again, 'HUB_MEMORY_HEALTH'),
+      port: pick(first, 'PORT'), self: pick(again, 'HUB_SELFCHECK'), wait: pick(again, 'HUB_CONSULT_BUSY_WAIT_MS'), comms: pick(again, 'HUB_COMMS_DISABLED'), transport: pick(again, 'HUB_CODEX_TRANSPORT'),
+      pendingAny: again.filter((r) => r.pending).map((r) => r.key).sort(), readonlyPending: again.filter((r) => (r.readonly || r.danger) && r.pending).length }));`;
+  const out = JSON.parse(execFileSync(process.execPath, ['-e', code, path.join(__dirname, '..', 'lib', 'env-file.js'), f], { env: { PATH: process.env.PATH, HUB_TZ: 'UTC', HUB_MEMORY_HEALTH: 'off', PORT: '4321', HUB_SELFCHECK: 'off', HUB_CONSULT_BUSY_WAIT_MS: '30000' }, encoding: 'utf8' }));
+  // the file says America/Chicago and the process has UTC (the file was edited by hand before this start, or the process was started with it): no change is waiting
+  assert.deepEqual(out.tz, { value: 'America/Chicago', running: 'UTC', pending: false, outside: null });
+  assert.deepEqual(out.tz2, out.tz, 'running was captured once; the file did not change');
+  // a value the file has no line for is set outside it: shown as outside, never pending
+  assert.deepEqual(out.mem, { value: null, running: 'off', pending: false, outside: 'off' });
+  assert.deepEqual(out.mem2, out.mem);
+  assert.deepEqual(out.port, { value: null, running: '4321', pending: false, outside: '4321' });
+  // changes made here after the start wait for a restart: a line removed, a line changed, a line added
+  assert.deepEqual(out.self, { value: null, running: 'off', pending: true, outside: null }, 'a line removed from the file waits for a restart (it is not "outside": the file had it at start)');
+  assert.deepEqual(out.wait, { value: '45000', running: '30000', pending: true, outside: null });
+  assert.deepEqual(out.comms, { value: '1', running: null, pending: true, outside: null });
+  assert.deepEqual(out.transport, { value: 'exec', running: null, pending: false, outside: null });
+  assert.deepEqual(out.pendingAny, ['HUB_COMMS_DISABLED', 'HUB_CONSULT_BUSY_WAIT_MS', 'HUB_SELFCHECK']);
+  assert.equal(out.readonlyPending, 0);
+});
+
+test('read(): a read-only or protected row is never pending, even when its line changed in the file by hand; a secret has outside null and no value (R7)', () => {
+  const f = envAt('PORT=8888\nHUB_BIND_HOST=127.0.0.1\nHUB_AUTH_PASSWORD=pw-not-real\n');
+  ef.read({ file: f });   // the start
+  fs.writeFileSync(f, 'PORT=9999\nHUB_BIND_HOST=0.0.0.0\nHUB_AUTH_PASSWORD=other-not-real\n');
+  const rows = ef.read({ file: f }).rows;
+  for (const k of ['PORT', 'HUB_BIND_HOST', 'HUB_AUTH_PASSWORD']) assert.equal(rows.find((r) => r.key === k).pending, false, k);
+  const pw = rows.find((r) => r.key === 'HUB_AUTH_PASSWORD');
+  assert.equal(pw.outside, null); assert.equal(pw.value, null); assert.equal(pw.running, null);
+  assert.ok(!JSON.stringify(rows).includes('not-real'));
 });

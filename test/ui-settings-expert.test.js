@@ -162,6 +162,42 @@ test('memory limit (OPT-1095): model, payload, and saving through POST /api/sett
   assert.ok(host.innerHTML.includes('Automatic'));
 });
 
+test('R7/R11: a value set outside the .env file and an export line are said in words; only writable pending rows count', () => {
+  const rows = [row('HUB_TZ', { writable: true, outside: 'UTC' }), row('HUB_MEMORY_HEALTH', { writable: true, note: 'export' }), row('PORT', { readonly: true, value: null, outside: '3000', running: '3000' }), row('HUB_AUTH_PASSWORD', { danger: true, readonly: true, set: true, outside: 'hunter2' })];
+  const html = X.expertHtml(X.models(rows, records, null));
+  assert.ok(html.includes('Set outside the .env file: UTC'));
+  assert.ok(html.includes('Set outside the .env file: 3000'), 'a read-only row too');
+  assert.ok(html.includes('This line starts with export, so it is not read.'));
+  assert.ok(!html.includes('hunter2'), 'a secret never shows its running value');
+  assert.ok(!html.includes('Set outside the .env file: null') && !html.includes('Set outside the .env file: </'), 'no line when nothing runs outside');
+  assert.strictEqual(X.reviewItem([row('PORT', { readonly: true, pending: true }), row('X', { danger: true, writable: true, pending: true })]), null);
+  assert.strictEqual(X.pendingCount([row('A', { writable: true, pending: true }), row('B', { pending: true })]), 1);
+});
+
+test('R12: a value the control does not know is its own selected option; the number limits are the server\'s', () => {
+  const html = X.expertHtml(X.models([row('HUB_COMMS_DISABLED', { writable: true, value: 'true', set: true }), row('HUB_CODEX_TRANSPORT', { writable: true, value: 'exec', set: true })], records, null));
+  assert.ok(html.includes('<option value="true" selected>true (now)</option>'), html);
+  assert.ok(html.includes('<option value="exec" selected>exec</option>') && !html.includes('exec (now)'));
+  const lim = (k) => [X.KEYS[k].min, X.KEYS[k].max];
+  assert.deepStrictEqual(lim('HUB_SECURITY_CHECK_HOURS'), [1, 8760]);
+  assert.deepStrictEqual(lim('HUB_UPDATE_CHECK_HOURS'), [1, 8760]);
+  assert.deepStrictEqual(lim('HUB_UPDATE_CHECK_FIRST_SECONDS'), [1, 86400]);
+  assert.deepStrictEqual(lim('HUB_CONSULT_BUSY_WAIT_MS'), [1000, 600000]);
+  assert.deepStrictEqual(lim('HUB_DELIVERY_COOLDOWN_MS'), [1000, 3600000]);
+  assert.deepStrictEqual(lim('HUB_SDK_AUTO_COMPACT_WINDOW'), [10000, 2000000]);
+  const m = X.models([row('HUB_CONSULT_BUSY_WAIT_MS', { writable: true })], [], null).expert[0];
+  assert.match(X.checkValue(m, '999'), /1000 or more/);
+  assert.match(X.checkValue(m, '600001'), /600000 or less/);
+});
+
+test('R13: a read-only address shows without user:pass@ and with the query replaced', () => {
+  assert.strictEqual(X.safeUrl('https://sam:pw@gw.example.com:8443/v1/x?token=abc&y=1'), 'https://gw.example.com:8443/v1/x?…');
+  assert.strictEqual(X.safeUrl('https://gw.example.com/v1'), 'https://gw.example.com/v1');
+  assert.strictEqual(X.safeUrl('3000'), '3000');
+  const html = X.expertHtml(X.models([row('GATEWAY_URL', { readonly: true, set: true, value: 'https://sam:pw@gw.example.com/a?key=SECRET' })], [], null));
+  assert.ok(html.includes('https://gw.example.com/a?…') && !html.includes('SECRET') && !html.includes('sam:pw'), html);
+});
+
 test('the module is served to the browser', () => {
   assert.ok(JSON.stringify([...files.PUBLIC_FILES || []]).length >= 0);
   assert.ok(require('fs').readFileSync(require('path').join(__dirname, '../lib/static-files.js'), 'utf8').includes("['ui-settings-expert.js', 'lib/ui-settings-expert.js']"));

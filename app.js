@@ -6056,9 +6056,8 @@
     // ── Expert values (phase 5c, admins only): one row for each settings.json key that only a file edit changed ──
     // The table is STG.P5C (lib/ui-settings-groups.js: name, OPT id, kind, limits, default words, home). Each row is drawn in the Expert values
     // section and moved to its group by stPlaceRows. Each box saves on its own through POST /api/settings; a failure shows the hub's words and puts
-    // the box back. "Use default" sends null (a provider address: empty) so the hub falls back to its built-in value.
+    // the box back. "Use default" sends null for every row so the hub removes the key and falls back to its built-in value.
     let p5cData = {};     // the settings the dialog was drawn with, kept current as rows save
-    const p5cBusy = {};   // OPT id -> a save is in flight
     function p5cRowHtml(r, data) {
       const di = `id="${r.id}" data-setting="${r.opt}"`;
       const on = `onchange="p5cSave('${r.opt}')"`;
@@ -6131,26 +6130,25 @@
       if (r.kind === 'cache') return { enabled: byId('on').checked, ttl: byId('ttl').value };
       return el.value;
     }
-    async function p5cSave(opt, useDefault = false) {
-      const r = STG.p5cByOpt(opt);
-      if (!r || p5cBusy[opt]) return;
-      const c = STG.p5cClean(r, useDefault ? null : p5cRaw(r));
-      if (!c.ok) { hubToast(c.error); p5cPaint(r); return; }
-      const before = STG.p5cValue(r, p5cData);
-      if (c.value === null ? before === undefined : JSON.stringify(c.value) === JSON.stringify(r.mult && typeof before === 'number' ? before * r.mult : before)) { p5cPaint(r); return; }   // nothing changed
-      if (r.kind === 'url' && c.value !== null && !confirm(`Keys and prompts for ${r.label} go to this address. Change it?`)) { p5cPaint(r); return; }
-      p5cBusy[opt] = true;
-      try {
-        const resp = await stSaveFetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(STG.p5cPatch(r, c.value, p5cData)) });
-        if (!resp.ok) { const d = await resp.json().catch(() => ({})); throw new Error(d.error || `HTTP ${resp.status}`); }
-        STG.p5cStore(r, c.value, p5cData);
-        hubToast(c.value === null ? `${r.name}: back to the default.` : `${r.name}: saved.`);
-      } catch (e) {
-        hubToast('Could not save: ' + e.message);
-      } finally {
-        p5cBusy[opt] = false;
-        p5cPaint(r);
-      }
+    // The loop (one save per row at a time, the latest edit kept while one runs, read back after a save, the address question) lives in
+    // STG.p5cSaver (lib/ui-settings-groups.js) so a test can run it; here only the page's hands are given to it.
+    let p5cRunner = null;
+    function p5cSave(opt, useDefault = false) {
+      if (!p5cRunner) p5cRunner = STG.p5cSaver({
+        data: () => p5cData,
+        readRaw: p5cRaw,
+        post: async (body) => {
+          const resp = await stSaveFetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) });
+          if (resp.ok) return { ok: true };
+          const d = await resp.json().catch(() => ({}));
+          return { ok: false, error: d.error || `HTTP ${resp.status}` };
+        },
+        readBack: async () => { const r = await fetch('/api/settings', { credentials: 'include' }); return r.ok ? r.json() : null; },
+        confirm: (t) => confirm(t),
+        toast: (t) => hubToast(t),
+        paint: p5cPaint,
+      });
+      return p5cRunner.save(opt, useDefault);
     }
 
     // Thorough deep research (admin): settings.researchThorough { maxSources, readersAtOnce, reviewRounds, timeLimitMinutes, pdf,
