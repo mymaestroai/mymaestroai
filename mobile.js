@@ -1081,7 +1081,9 @@ function formatContent(content) {
       const tok = images[Number(im[1])];
       if (tok && tok.held) { after += tok.held; tok.held = ''; }
     }
-    const tag = (u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(pt.clean)}</a>` : `<code>[blocked link: ${esc(pt.clean)}]</code>`) + after;
+    // A link to one of the hub's own doors (an agent's card at a row, a Settings row or group) opens in place on this phone page, in one press
+    const inPlace = !!u && /^\/(?:mobile)?#(?:agent-card|settings-for|settings-group)=/.test(u);
+    const tag = (u ? (inPlace ? `<a href="${esc(u.replace(/^\/#/, '/mobile#'))}" data-door="1">${esc(pt.clean)}</a>` : `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(pt.clean)}</a>`) : `<code>[blocked link: ${esc(pt.clean)}]</code>`) + after;
     out = out.replace(mk('L', i), () => tag);
   });
   images.forEach((im, i) => {

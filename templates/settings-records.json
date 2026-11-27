@@ -1,5 +1,5 @@
 {
-  "version": "bd24606ceb7519fb7a555f1cc26536f19da69825",
+  "version": "cad730ae418303991f00a9c7bdae4fc13d7fe047",
   "records": [
     {
       "id": "OPT-0001",
@@ -527,7 +527,7 @@
       "restart": false,
       "danger": "dangerous",
       "who": "admin",
-      "lead": "screen",
+      "lead": "confirm",
       "words": [
         "folders",
         "shared folders",
@@ -542,7 +542,8 @@
       "home": "Agent card > Access",
       "storedAs": "agents[].policy.roots",
       "anchors": [],
-      "facts": "Stored agents[].policy.roots; roots add to defaultRoots lib/tool-policy.js defaultRoots; a sandboxed agent sees exactly these plus its own workspace; box is rebuilt on next turn (audit help text, lib/agents.js:1324 for the rename case). Team folders medical/legal are recognised from roots lib/tool-policy.js:68-74. No restart."
+      "facts": "Stored agents[].policy.roots; roots add to defaultRoots lib/tool-policy.js defaultRoots; a sandboxed agent sees exactly these plus its own workspace; box is rebuilt on next turn (audit help text, lib/agents.js:1324 for the rename case). Team folders medical/legal are recognised from roots lib/tool-policy.js:68-74. No restart.",
+      "leadAgentAccess": true
     },
     {
       "id": "OPT-0018",
@@ -558,7 +559,7 @@
       "restart": false,
       "danger": "dangerous",
       "who": "admin",
-      "lead": "screen",
+      "lead": "confirm",
       "words": [
         "folder path",
         "extra folders",
@@ -573,7 +574,8 @@
       "home": "Agent card > Access",
       "storedAs": "agents[].policy.roots",
       "anchors": [],
-      "facts": "Same store as OPT-0017: agents[].policy.roots; '~' is expanded lib/tool-policy.js:70. 'Without asking' is from the audit text: roots are where write_inside applies; not checked further. No restart."
+      "facts": "Same store as OPT-0017: agents[].policy.roots; '~' is expanded lib/tool-policy.js:70. 'Without asking' is from the audit text: roots are where write_inside applies; not checked further. No restart.",
+      "leadAgentAccess": true
     },
     {
       "id": "OPT-0019",
@@ -1621,7 +1623,7 @@
       "restart": false,
       "danger": "dangerous",
       "who": "admin",
-      "lead": "screen",
+      "lead": "confirm",
       "words": [
         "sandbox",
         "container",
@@ -1636,7 +1638,8 @@
       "home": "Agent card > Access",
       "storedAs": "agents[].sandbox",
       "anchors": [],
-      "facts": "Values inherit / off / container lib/agents.js:270; defaults member container, admin off lib/sandbox.js:37, resolved lib/sandbox.js:79-90. Turning it off is on the dangerous list (audit). Box made on the agent's next turn, so no restart. Docker and image requirement from the audit help text; not re-checked here."
+      "facts": "Values inherit / off / container lib/agents.js:270; defaults member container, admin off lib/sandbox.js:37, resolved lib/sandbox.js:79-90. Turning it off is on the dangerous list (audit). Box made on the agent's next turn, so no restart. Docker and image requirement from the audit help text; not re-checked here.",
+      "leadAgentAccess": true
     },
     {
       "id": "OPT-0054",
@@ -1652,7 +1655,7 @@
       "restart": false,
       "danger": "dangerous",
       "who": "admin",
-      "lead": "screen",
+      "lead": "confirm",
       "words": [
         "lockbox",
         "watch",
@@ -1667,7 +1670,8 @@
       "home": "Agent card > Access",
       "storedAs": "agents[].lockbox",
       "anchors": [],
-      "facts": "Values inherit / off / watch / enforce lib/lockbox/settings.js:7; agent value wins, else settings.lockboxDefault, else off lib/lockbox/index.js:44-46. Mode is read on each command (no cache at start-up) so no restart; audit said 'unknown'. Changes are audited and admins told server.js:3130. Block mode: a command that cannot be wrapped is not run (lib/policy-gate.js:349 per sample 13)."
+      "facts": "Values inherit / off / watch / enforce lib/lockbox/settings.js:7; agent value wins, else settings.lockboxDefault, else off lib/lockbox/index.js:44-46. Mode is read on each command (no cache at start-up) so no restart; audit said 'unknown'. Changes are audited and admins told server.js:3130. Block mode: a command that cannot be wrapped is not run (lib/policy-gate.js:349 per sample 13).",
+      "leadAgentAccess": true
     },
     {
       "id": "OPT-0055",

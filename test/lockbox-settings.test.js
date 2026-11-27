@@ -161,7 +161,8 @@ test('server.js wires the default check, its audit line, the notice, the PATCH g
   assert.match(a, /require\('\.\/lockbox\/settings'\)\.checkDefaultPatchFor\(patch, \{ ownSession: !!ctx\.ownSession/);
   assert.match(s, /require\('\.\/lib\/settings-apply'\)\.cleanSettingsPatch\(patch, \{ ownSession: access\.isAdminSession\(req\)/);
   assert.match(s, /hubAuth\.audit\(String\(req\.hubUser\.id\), 'settings\.lockboxDefault', lockboxChange/);
-  assert.match(a, /\('lockbox' in body \|\| 'lockboxEnv' in body\) && !ctx\.ownSession\) return \{ ok: false, status: 403/);
+  // an admin's own browser session, or (P4-lead) the settings tool's private proof of the owner's Confirm: nothing else
+  assert.match(a, /\('lockbox' in body \|\| 'lockboxEnv' in body\) && !ctx\.ownSession && !\(ctx\.leadConfirmed && leadConfirmedObjects\.has\(ctx\.leadConfirmed\)\)\) return \{ ok: false, status: 403/);
   assert.match(s, /ownSession: require\('\.\/lib\/lockbox\/settings'\)\.isAdminSession\(req\)/);
   assert.match(a, /notifyAdmins: \(text\) => require\('\.\/push'\)\.getPush\(\)\.notify\(\{[^}]*\}, \{ adminsOnly: true, kind: 'security' \}\)/);
   assert.match(s, /pathname\.startsWith\('\/api\/lockbox\/'\)/);

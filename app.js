@@ -26565,8 +26565,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
           const tok = imageTokens[Number(im[1])];
           if (tok && tok.held) { after += tok.held; tok.held = ''; }
         }
+        // A link to one of this page's own doors (an agent's card at a row, a Settings row or group) opens in place, in one press
+        const inPlace = !!u && /^\/(?:mobile)?#(?:agent-card|settings-for|settings-group)=/.test(u);
         const linkTag = (u
-          ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer" style="color: var(--link); text-decoration: underline;">${eText}</a>`
+          ? (inPlace
+            ? `<a href="${escapeHtml(u.replace(/^\/mobile#/, '/#'))}" data-door="1" style="color: var(--link); text-decoration: underline;">${eText}</a>`
+            : `<a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer" style="color: var(--link); text-decoration: underline;">${eText}</a>`)
           : `<code>[blocked link: ${eText}]</code>`) + after;
         formatted = formatted.replace(mk('L', i), () => linkTag);
       }

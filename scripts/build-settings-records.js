@@ -37,7 +37,7 @@ const ID_RE = /(?<![\w-])id=(["'])([A-Za-z][\w:.-]*)\1/;
 const HOME_RENAMES = [[/Needs you/g, 'For your review']];
 const DANGER_RANK = { everyday: 0, care: 1, dangerous: 2 };
 const LEAD_RANK = { apply: 0, confirm: 1, screen: 2, none: 3 };
-const OVERRIDE_KEYS = ['who', 'danger', 'lead', 'anchors', 'home', 'scope', 'applyOk', 'what', 'when', 'risk', 'def', 'facts', 'reason'];
+const OVERRIDE_KEYS = ['who', 'danger', 'lead', 'leadAgentAccess', 'anchors', 'home', 'scope', 'applyOk', 'what', 'when', 'risk', 'def', 'facts', 'reason'];
 const TEXT_KEYS = ['what', 'when', 'risk', 'def', 'facts'];   // corrected help text (a stale sentence); a non-empty string
 // Every field a record added by an override must carry (facts and mergedInto are optional).
 const ADD_FIELDS = ['kind', 'name', 'labels', 'what', 'when', 'risk', 'def', 'restart', 'danger', 'who', 'lead', 'words', 'scope', 'home', 'storedAs', 'anchors'];
@@ -231,6 +231,12 @@ function applyOverrides(records, overrides, applyOk = new Set()) {
     for (const k of TEXT_KEYS) if (o[k] !== undefined) { if (typeof o[k] !== 'string' || !o[k].trim()) throw new Error(`overrides: ${id} ${k} must be a non-empty string`); r[k] = o[k]; }
     if (o.home !== undefined) { if (typeof o.home !== 'string' || !o.home.trim()) throw new Error(`overrides: ${id} home`); r.home = o.home; }
     if (o.scope !== undefined) { if (typeof o.scope !== 'string' || !o.scope.trim()) throw new Error(`overrides: ${id} scope`); r.scope = o.scope; }
+    // leadAgentAccess: a per-agent Access row the lead may change (always a card, never at once); the record must say lead confirm
+    if (o.leadAgentAccess !== undefined) {
+      if (o.leadAgentAccess !== true) throw new Error(`overrides: ${id} leadAgentAccess must be true`);
+      if (r.lead !== 'confirm') throw new Error(`overrides: ${id} leadAgentAccess needs lead confirm`);
+      r.leadAgentAccess = true;
+    }
     if (o.applyOk !== undefined) { if (o.applyOk !== true) throw new Error(`overrides: ${id} applyOk must be true`); applyOk.add(id); }
     if (o.anchors !== undefined) {
       if (!Array.isArray(o.anchors)) throw new Error(`overrides: ${id} anchors must be a list`);
