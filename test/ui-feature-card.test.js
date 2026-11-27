@@ -458,3 +458,121 @@ test('r1 fix7: the header counts only open entry rows; no header when none is op
   await q.answer('/api/behaviour-changes/quiet-fix', 200, { ok: true });
   assert.ok(!q.cards(l2)[0].text.includes('New features were turned on for you.'), 'no notice open: no header');
 });
+
+// ── p5b round 2 ──
+const OWNER_LINE = 'Only the owner of this Maestro can switch this one.';
+const gets = (p) => p.calls.filter((c) => c.method === 'GET').length;
+test('r2 fix1: a press sends the rev the row was drawn from', async () => {
+  const p = page({ first: { status: 200, body: body({ entries: [{ ...E1, rev: 'pending' }, { ...E2, rev: 'snoozed until 2026-12-03T12:00:00.000Z' }], notices: [{ ...N1, rev: 'on, seen x' }] }) } }); const list = p.mkList();
+  p.FC.chatShown('harbor', list); await p.settle();
+  p.btns(rowsOf(p, list)[0], 'Turn on')[0].click(); await p.settle();
+  p.btns(rowsOf(p, list)[1], 'Leave off')[0].click(); await p.settle();
+  p.btns(rowsOf(p, list)[2], 'OK')[0].click(); await p.settle();
+  const posts = p.calls.filter((c) => c.method === 'POST').map((c) => c.body);
+  assert.deepStrictEqual(posts, [{ decision: 'on', rev: 'pending' }, { decision: 'off', rev: 'snoozed until 2026-12-03T12:00:00.000Z' }, { decision: 'seen', rev: 'on, seen x' }]);
+});
+test('r2 fix2: a row with canSwitch false has no buttons and says only the owner can switch it', async () => {
+  const p = page({ first: { status: 200, body: body({ entries: [{ ...E1, canSwitch: true }, { ...E2, canSwitch: false }] }) } }); const list = p.mkList();
+  p.FC.chatShown('harbor', list); await p.settle();
+  const [r1, r2] = rowsOf(p, list);
+  assert.strictEqual(p.btns(r1).length, 3);
+  assert.strictEqual(p.btns(r2).length, 0);
+  assert.ok(r2.text.includes(OWNER_LINE) && !r1.text.includes(OWNER_LINE));
+});
+test('r2 fix3: role revoked while the card is open: a press gets 403, the fresh card is denied too: the card is gone everywhere', async () => {
+  const p = page(); const list = p.mkList(); const box = node('div');
+  p.FC.chatShown('harbor', list); await p.settle();
+  await p.FC.renderInto(box);
+  p.btns(rowsOf(p, list)[0], 'Turn on')[0].click(); await p.settle();
+  const g = gets(p);
+  p.cur.first = { status: 403, body: { ok: false } };
+  await p.answer('/api/behaviour-changes/quick-research', 403, { ok: false, error: 'Sign in with an admin account in your browser to decide this.' });
+  assert.strictEqual(gets(p), g + 1, 'the card was fetched again');
+  assert.strictEqual(p.cards(list).length, 0);
+  assert.strictEqual(box.find((n) => /\bfeature-card\b/.test(n.className)).length, 0);
+  assert.strictEqual(p.FC.state.rows.length, 0);
+  // 401 the same
+  const q = page(); const l2 = q.mkList();
+  q.FC.chatShown('harbor', l2); await q.settle();
+  q.btns(rowsOf(q, l2)[0], 'Leave off')[0].click(); await q.settle();
+  q.cur.first = { status: 401, body: {} };
+  await q.answer('/api/behaviour-changes/quick-research', 401, { ok: false });
+  assert.strictEqual(q.cards(l2).length, 0);
+});
+test('r2 fix3: a 403 from a press while the card is still allowed keeps the card: the error shows; canSwitch false from the fresh card turns it into the owner-only line', async () => {
+  const p = page(); const list = p.mkList();
+  p.FC.chatShown('harbor', list); await p.settle();
+  p.btns(rowsOf(p, list)[1], 'Turn on')[0].click(); await p.settle();
+  p.cur.first = { status: 200, body: body({ entries: [E1, { ...E2, canSwitch: false }] }) };
+  await p.answer('/api/behaviour-changes/protect-code', 403, { ok: false, error: OWNER_LINE });
+  const r2 = rowsOf(p, list)[1];
+  assert.strictEqual(p.btns(r2).length, 0);
+  assert.strictEqual(r2.text.split(OWNER_LINE).length - 1, 1, 'the line shows once');
+  assert.strictEqual(p.btns(rowsOf(p, list)[0]).length, 3, 'other rows keep their buttons');
+  // some other 403 text with a card that still allows it: text shown, buttons back
+  p.btns(rowsOf(p, list)[0], 'Turn on')[0].click(); await p.settle();
+  p.cur.first = { status: 200, body: body({ entries: [E1, E2] }) };
+  await p.answer('/api/behaviour-changes/quick-research', 403, { ok: false, error: 'Sign in with an admin account in your browser to decide this.' });
+  const r1 = rowsOf(p, list)[0];
+  assert.ok(r1.text.includes('Sign in with an admin account'));
+  assert.strictEqual(p.btns(r1).length, 3);
+  assert.ok(p.btns(r1).every((b) => !b.disabled));
+});
+test('r2 fix4: only already decided means stale; any other 409 text or a 500 is shown in the row with the buttons back and no refetch', async () => {
+  for (const [status, error] of [[409, 'not decided yet'], [409, 'the behaviour changes file could not be read, so it is not overwritten'], [500, 'Something broke.']]) {
+    const p = page(); const list = p.mkList();
+    p.FC.chatShown('harbor', list); await p.settle();
+    p.btns(rowsOf(p, list)[0], 'Turn on')[0].click(); await p.settle();
+    const g = gets(p);
+    await p.answer('/api/behaviour-changes/quick-research', status, { ok: false, error });
+    assert.strictEqual(gets(p), g, 'no refetch');
+    const r = rowsOf(p, list)[0];
+    assert.ok(r.text.includes(error), error);
+    assert.strictEqual(p.btns(r).length, 3);
+    assert.ok(p.btns(r).every((b) => !b.disabled));
+  }
+});
+test('r2 fix4: already decided while a fetch is in flight: waits for it, then fetches once more', async () => {
+  const p = page(); const list = p.mkList();
+  p.FC.chatShown('harbor', list); await p.settle();
+  const held = []; const real = p.ctx.fetch; let live = body();
+  p.ctx.fetch = (url, init = {}) => ((init.method || 'GET') === 'GET' ? new Promise((resolve) => { const b = live; held.push(() => resolve({ status: 200, json: async () => b })); }) : real(url, init));
+  const f = p.FC.refresh();   // in flight, still lists the row (older answer)
+  p.btns(rowsOf(p, list)[0], 'Turn on')[0].click(); await p.settle();
+  live = body({ entries: [E2] });   // the other device answered it
+  await p.answer('/api/behaviour-changes/quick-research', 409, { ok: false, error: 'already decided' });
+  assert.strictEqual(held.length, 1, 'no second GET while the first is in flight');
+  held.shift()(); await f; await p.settle();
+  assert.strictEqual(held.length, 1, 'one more GET after the first');
+  held.shift()(); await p.settle();
+  assert.ok(!p.cards(list)[0].text.includes('Agents may start quick research'), 'the answer reflects the other device');
+});
+test('r2 fix5: a card answer with no lead (or another lead) takes the chat copy off the old lead\'s list; Settings copies stay', async () => {
+  const p = page(); const list = p.mkList(); const other = p.mkList(); const box = node('div');
+  p.FC.chatShown('harbor', list); p.FC.chatShown('quill', other); await p.settle();
+  await p.FC.renderInto(box);
+  assert.strictEqual(p.cards(list).length, 1);
+  p.cur.first = { status: 200, body: body({ lead: null, leadDisplay: null }) };
+  await p.FC.refresh(); await p.settle();
+  assert.strictEqual(p.FC.state.lead, '');
+  assert.strictEqual(p.cards(list).length, 0, 'gone from the old lead\'s list');
+  assert.strictEqual(p.cards(other).length, 0);
+  assert.strictEqual(box.find((n) => /\bfeature-card\b/.test(n.className)).length, 1, 'the Settings copy stays');
+  p.cur.first = { status: 200, body: body({ lead: 'quill', leadDisplay: 'Quill' }) };
+  await p.FC.refresh(); await p.settle();
+  assert.strictEqual(p.cards(list).length, 0);
+  assert.strictEqual(p.cards(other).length, 1, 'now in the new lead\'s list');
+  // show:false with no lead too
+  p.cur.first = { status: 200, body: { ok: true, show: false, lead: null, entries: [], notices: [] } };
+  await p.FC.refresh(); await p.settle();
+  assert.strictEqual(p.FC.state.lead, '');
+});
+test('r2 fix6: a closed chat (its list no longer connected) is forgotten', async () => {
+  const p = page(); const list = p.mkList(); const other = p.mkList();
+  p.FC.chatShown('harbor', list); p.FC.chatShown('quill', other); await p.settle();
+  assert.ok(p.FC.state.lists.has('quill'));
+  other.isConnected = false;
+  await p.FC.refresh(); await p.settle();
+  assert.ok(!p.FC.state.lists.has('quill'));
+  assert.ok(p.FC.state.lists.has('harbor'), 'a list without isConnected info stays');
+});

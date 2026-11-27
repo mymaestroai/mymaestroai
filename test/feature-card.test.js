@@ -108,7 +108,7 @@ test('cardState: only pending entries (decided ones are not on it); summary and 
   assert.strictEqual(c.ok, true);
   assert.deepStrictEqual(c.entries.map((e) => e.id), ['alpha', 'beta-two', 'quiet-risky']);
   const a = c.entries[0];
-  assert.deepStrictEqual(Object.keys(a).sort(), ['cost', 'id', 'leadMay', 'recommendation', 'summary', 'title']);
+  assert.deepStrictEqual(Object.keys(a).sort(), ['canSwitch', 'cost', 'id', 'leadMay', 'recommendation', 'rev', 'summary', 'title']);
   assert.deepStrictEqual([a.title, a.summary, a.cost, a.leadMay, a.recommendation], ['Alpha', 'Agents get alpha.', 'It costs a little.', true, null]);
   assert.strictEqual(c.entries[1].leadMay, false);
   assert.strictEqual(c.show, true);
@@ -161,7 +161,7 @@ test('migrate: quiet + leadMay true is seeded on by quiet-update; quiet + leadMa
 test('quiet notice: one line until acknowledged; seen records noticeSeenAt; off keeps it; quiet + leadMay false is on the card as an entry, not a notice', async () => {
   const s = setup(); existing(s);
   let c = card.cardState({ ...s.o, deps, now: T0 });
-  assert.deepStrictEqual(c.notices, [{ id: 'quiet-one', title: 'Quiet one', line: 'Quiet one tidies up.' }]);
+  assert.deepStrictEqual(c.notices, [{ id: 'quiet-one', title: 'Quiet one', line: 'Quiet one tidies up.', rev: 'on' }]);
   assert.ok(c.entries.some((e) => e.id === 'quiet-risky'));
   assert.ok(!c.entries.some((e) => e.id === 'quiet-one'));
   await bc.markSeen('quiet-one', { user: 'u1', now: T0, ...s.o });
@@ -444,6 +444,39 @@ test('r1 fix2: a stale second device gets already decided and the state stays th
   const server = read('server.js');
   const dec = server.indexOf("const m = pathname.match(/^\\/api\\/behaviour-changes\\/([a-z][a-z0-9-]{1,40})$/);");
   assert.ok(/expect/.test(server.slice(dec, dec + 4500)));
+});
+test('r2 fix1: a stale Turn on (old rev) after a hub-wide snooze is refused and the snooze stays; a fresh rev works', async () => {
+  const s = setup(); existing(s);
+  const rev0 = card.cardState({ ...s.o, deps, now: T0 }).entries.find((e) => e.id === 'alpha').rev;
+  assert.strictEqual(rev0, 'pending');
+  await bc.snooze('alpha', { user: 'a', now: T0, expectRev: rev0, ...s.o });   // device A
+  const until = st(s).alpha.snoozedUntil;
+  await assert.rejects(() => bc.decide('alpha', 'on', { user: 'b', expectRev: rev0, ...s.o }), /already decided/);   // device B, old rev
+  assert.strictEqual(st(s).alpha.state, 'pending'); assert.strictEqual(st(s).alpha.snoozedUntil, until);
+  await assert.rejects(() => bc.snooze('alpha', { user: 'b', expectRev: rev0, ...s.o }), /already decided/);
+  const rev1 = bc.viewOf(st(s).alpha);
+  assert.strictEqual(rev1, 'snoozed until ' + until);
+  await bc.decide('alpha', 'on', { user: 'b', expectRev: rev1, ...s.o });
+  assert.strictEqual(st(s).alpha.state, 'on');
+  const n0 = card.cardState({ ...s.o, deps, now: T0 }).notices.find((n) => n.id === 'quiet-one').rev;
+  assert.strictEqual(n0, 'on');
+  await bc.markSeen('quiet-one', { user: 'a', now: T0, expectRev: n0, ...s.o });
+  await assert.rejects(() => bc.markSeen('quiet-one', { user: 'b', expectRev: n0, ...s.o }), /already decided/);
+  await assert.rejects(() => bc.decide('quiet-one', 'off', { user: 'b', expectRev: n0, ...s.o }), /already decided/);
+  const server = read('server.js');
+  const dec = server.indexOf("const m = pathname.match(/^\\/api\\/behaviour-changes\\/([a-z][a-z0-9-]{1,40})$/);");
+  const post = server.slice(dec, dec + 5500);
+  assert.match(post, /b\.rev/); assert.match(post, /80/); assert.match(post, /expectRev/);
+});
+test('r2 fix2: cardState gives each entry canSwitch: leadMay, or the caller is the owner', () => {
+  const s = setup(); existing(s);
+  const ids = (o) => Object.fromEntries(card.cardState({ ...s.o, deps, now: T0, ...o }).entries.map((e) => [e.id, e.canSwitch]));
+  assert.deepStrictEqual(ids({ isOwner: false }), { alpha: true, 'beta-two': false, 'quiet-risky': false });
+  assert.deepStrictEqual(ids({ isOwner: true }), { alpha: true, 'beta-two': true, 'quiet-risky': true });
+  assert.deepStrictEqual(ids({}), { alpha: true, 'beta-two': false, 'quiet-risky': false });
+  const server = read('server.js');
+  const at = server.indexOf("pathname === '/api/behaviour-changes/card'");
+  assert.ok(/cardState\(\{[^}]*isOwner/.test(server.slice(at, at + 700)));
 });
 test('r1 fix8: the review turn accepts the agent the review was scheduled for as well as the owner lead names', () => {
   const fn = read('lib/sdk-chat.js').match(/function behaviourReviewTurn\([\s\S]*?\n\}/)[0];

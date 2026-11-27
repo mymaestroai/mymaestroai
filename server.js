@@ -710,7 +710,7 @@ async function handleHttpRequest(req, res) {
     }
     // The one card for features that arrive switched off (lib/feature-card): admin only, like the list above (lib/access: not public, not a session route).
     if (pathname === '/api/behaviour-changes/card' && req.method === 'GET') {
-      return jsonResponse(res, 200, require('./lib/feature-card').cardState());
+      return jsonResponse(res, 200, require('./lib/feature-card').cardState({ isOwner: !!(req.hubUser && !req.hubService && !req.hubPendingTotp && hubAuth.isOwner(req.hubUser)) }));
     }
     // How often the lead looks at how the install is used (worker-proposals): saves the setting, then makes the weekly task match.
     if (pathname === '/api/behaviour-changes/worker-proposals/cadence' && req.method === 'POST') {
@@ -739,13 +739,15 @@ async function handleHttpRequest(req, res) {
         if (refused) return jsonResponse(res, 403, { ok: false, error: refused });
         // expect: the state the page drew this row from; checked inside the write lock, a stale second device gets 409 'already decided'.
         const expect = b.expect === 'pending' || b.expect === 'on' || b.expect === 'off' ? b.expect : undefined;
+        // rev: the row's journal phrase (viewOf) the page drew it from; compared inside the lock, so a stale device never undoes a fresh snooze.
+        const expectRev = typeof b.rev === 'string' && b.rev.length <= 80 ? b.rev : undefined;
         const who = req.hubUser && req.hubUser.id;
         try {
           // Run as the person who pressed: the change journal (Recent changes, Restore) names them.
           await require('./lib/settings-journal').withActor({ kind: 'person', user: who }, async () => {
-            if (b.decision === 'snooze') await bc.snooze(m[1], { user: who, expect });
-            else if (b.decision === 'seen') await bc.markSeen(m[1], { user: who, expect });
-            else await bc.decide(m[1], b.decision, { user: who, expect });
+            if (b.decision === 'snooze') await bc.snooze(m[1], { user: who, expect, expectRev });
+            else if (b.decision === 'seen') await bc.markSeen(m[1], { user: who, expect, expectRev });
+            else await bc.decide(m[1], b.decision, { user: who, expect, expectRev });
           });
           console.log(`[behaviour] ${m[1]} ${b.decision === 'on' || b.decision === 'off' ? `turned ${b.decision}` : b.decision === 'snooze' ? 'snoozed for a week' : 'notice seen'} by ${who || 'unknown'}`);
           if (m[1] === 'worker-proposals') {
