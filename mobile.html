@@ -314,8 +314,7 @@
     /* Provider pacing: slim amber bar under the header of every screen (tap to resume full parallel) */
     #review-banner { flex-shrink: 0; box-sizing: border-box; width: 100%; padding: 6px 12px; background: var(--health-notice-bg); color: var(--on-health-notice); font-size: 13px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
     #review-banner[hidden] { display: none; }
-    html.mm-rvb-cached #review-banner[hidden] { display: block; min-height: var(--mm-rvb-h); }
-    html.mm-rvb-cached #review-banner[hidden]::before { content: var(--mm-rvb-text); }
+    html.mm-rvb-cached #review-banner[hidden] { display: block; visibility: hidden; min-height: var(--mm-rvb-h); }   /* its place, empty, from the first paint (lib/ui-looks.js) */
     @keyframes mm-rvb-enter { from { transform: translateY(-100%); } to { transform: none; } }
     #review-banner.mm-rvb-enter { animation: mm-rvb-enter .22s ease-out; }
     @media (prefers-reduced-motion: reduce) { #review-banner.mm-rvb-enter { animation: none; } }

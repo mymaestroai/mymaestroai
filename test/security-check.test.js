@@ -292,10 +292,9 @@ test('Run now in the security box reloads the review list, count and banner; the
   assert.strictEqual(review.style.top, '0px');
   fn(page({}))();
   assert.strictEqual(pushed['--banner-h'], '0px', 'no notices: the page goes back up');
-  // the review banner's early stand-in (html.mm-rvb-cached) keeps its place last in the stack until the real bar replaces it
+  // the review banner's reserved place (html.mm-rvb-cached) counts in the stack until the real bar takes it
   fn(page({ 'hub-theme-notice': theme }, 41))();
-  assert.strictEqual(pushed['--mm-rvb-top'], '20px', 'the stand-in sits under the theme line');
-  assert.strictEqual(pushed['--banner-h'], '61px', 'and counts in the stack');
+  assert.strictEqual(pushed['--banner-h'], '61px', 'the theme line plus the reserved place');
   fn(page({ 'hub-review-banner': review }, 41))();
   assert.strictEqual(pushed['--banner-h'], '34px', 'the real bar: the stand-in no longer counts');
   const html = require('fs').readFileSync(require('path').join(__dirname, '..', 'index.html'), 'utf8');

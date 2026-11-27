@@ -15758,7 +15758,7 @@ function reviewPaint(r) {
 // html.mm-rvb-cached (lib/ui-looks.js) holds the banner's place from the first paint; only a SETTLED call (hubMe known, or the no-accounts build)
 // may drop it or touch the remembered banner.
 let reviewBannerSettled = false;
-const reviewBannerBackstop = setTimeout(() => { if (!reviewBannerSettled) document.documentElement.classList.remove('mm-rvb-cached'); }, 15000);   // backstop
+const reviewBannerBackstop = setTimeout(() => { if (reviewBannerSettled) return; document.documentElement.classList.remove('mm-rvb-cached'); try { if (window.HubLooks) window.HubLooks.rememberBanner(window.HubLooks.storageOf(window), 'phone', null); } catch { /* blocked */ } }, 15000);   // backstop: no answer, so the next load reserves nothing
 if (reviewBannerBackstop && reviewBannerBackstop.unref) reviewBannerBackstop.unref();   // (Node tests only)
 function reviewPaintBanner(r) {
   const bar = $('review-banner');
@@ -15791,7 +15791,7 @@ function reviewPaintBanner(r) {
   if (!hadCached && wasHidden) { bar.classList.add('mm-rvb-enter'); setTimeout(() => bar.classList.remove('mm-rvb-enter'), 300); }   // newly appearing: slides in once
   bar.hidden = false;
   html.classList.remove('mm-rvb-cached');
-  try { if (window.HubLooks && bar.offsetHeight > 0) window.HubLooks.rememberBanner(store(), 'phone', { t: bar.textContent.trim().slice(0, 400), h: bar.offsetHeight }); } catch { /* blocked storage */ }
+  try { if (window.HubLooks && bar.offsetHeight > 0) window.HubLooks.rememberBanner(store(), 'phone', { h: bar.offsetHeight }); } catch { /* blocked storage */ }
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) reviewRefresh().catch(() => {}); });
 setInterval(() => reviewRefresh().catch(() => {}), 5 * 60 * 1000);

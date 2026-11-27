@@ -3721,6 +3721,7 @@
     const reviewBannerBackstop = setTimeout(() => {   // backstop: nothing settled in 15 s, so the placeholder must not stay
       if (reviewBannerSettled) return;
       document.documentElement.classList.remove('mm-rvb-cached');
+      try { if (window.HubLooks) window.HubLooks.rememberBanner(window.HubLooks.storageOf(window), 'desk', null); } catch { /* blocked storage */ }   // no answer: the next load reserves nothing
       layoutBanners();
     }, 15000);
     if (reviewBannerBackstop && reviewBannerBackstop.unref) reviewBannerBackstop.unref();   // (Node tests only)
@@ -3765,7 +3766,7 @@
       }
       html.classList.remove('mm-rvb-cached');   // same task as the insert: the real bar replaces the placeholder
       layoutBanners();
-      try { if (window.HubLooks && bar.offsetHeight > 0) window.HubLooks.rememberBanner(store(), 'desk', { t: bar.textContent.trim().slice(0, 400), h: bar.offsetHeight }); } catch { /* blocked storage */ }
+      try { if (window.HubLooks && bar.offsetHeight > 0) window.HubLooks.rememberBanner(store(), 'desk', { h: bar.offsetHeight }); } catch { /* blocked storage */ }
     }
     // "Ask me in a week" on a suggestion: kept in this browser (localStorage 'hub-review-snooze'), so a calm install can clear its suggestions. No request is made.
     function reviewSnooze(id) {
@@ -4797,12 +4798,11 @@
         n.style.top = `${top}px`;
         top += n.offsetHeight || 0;
       }
-      // the review banner's early stand-in (html.mm-rvb-cached, lib/ui-looks.js) keeps its place last in the stack until the real bar replaces it
-      const html = document.documentElement;
-      if (!document.getElementById('hub-review-banner') && html.classList.contains('mm-rvb-cached')) {
-        html.style.setProperty('--mm-rvb-top', `${top}px`);
-        top += parseFloat(html.style.getPropertyValue('--mm-rvb-h')) || 0;
-      }
+      // the review banner's reserved place (html.mm-rvb-cached, lib/ui-looks.js) stays in the stack until the real bar takes it;
+      // the real bar's height is remembered again after every layout (a resize or a late font changes it)
+      const html = document.documentElement, rb = document.getElementById('hub-review-banner');
+      if (!rb && html.classList.contains('mm-rvb-cached')) top += parseFloat(html.style.getPropertyValue('--mm-rvb-h')) || 0;
+      if (rb && rb.offsetHeight > 0) { try { if (window.HubLooks) window.HubLooks.rememberBanner(window.HubLooks.storageOf(window), 'desk', { h: rb.offsetHeight }); } catch { /* blocked storage */ } }
       html.style.setProperty('--banner-h', `${top}px`);
     }
     // A notice's height can change after it is drawn (the web font arrives, the window narrows and its text wraps).

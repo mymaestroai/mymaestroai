@@ -336,8 +336,7 @@
       overflow: hidden;
       touch-action: pan-y;
     }
-    /* The red review banner's place from the first paint (lib/ui-looks.js applyCachedBanner): same look as the real bar (app.js reviewPaintBanner). */
-    html.mm-rvb-cached body::before { content: var(--mm-rvb-text); position: fixed; top: var(--mm-rvb-top, 0px); left: 0; right: 0; height: var(--mm-rvb-h); overflow: hidden; z-index: 9995; background: var(--banner-critical-bg); color: var(--on-color-text); padding: 6px 14px; font-weight: 700; box-sizing: border-box; display: flex; align-items: center; }
+    /* The red review banner's place is reserved, empty, from the first paint: lib/ui-looks.js applyCachedBanner sets --banner-h (the padding above). */
     @keyframes mm-rvb-enter { from { transform: translateY(-100%); } to { transform: none; } }
     #hub-review-banner.mm-rvb-enter { animation: mm-rvb-enter .22s ease-out; }
     html.mm-rvb-anim body { transition: padding-top .22s ease-out; }
