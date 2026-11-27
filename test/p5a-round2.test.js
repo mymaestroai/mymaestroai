@@ -24,7 +24,7 @@ const { JobRunner } = L('jobs');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'p5a2-'));
 after(() => { try { sdk.resumeHub({ scheduledTasks: { release: () => 0 } }); } catch {} fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
-const CAP = 'Your monthly pay-per-use cap of $50 is used up ($51 spent since Nov 1). X uses a pay-per-use model, so it can\'t answer until Dec 1 or until you raise the cap in Settings > Money and safety.';
+const CAP = 'Your monthly pay-per-use cap of $50 is used up ($51 spent since Nov 1). X uses a pay-per-use model, so it can\'t answer until Dec 1 or until you raise the monthly cap in Settings.';
 const T0 = Date.parse('2026-11-20T12:00:00Z');
 
 // ── cap 1: paid calls outside the gateway ─────────────────────────────────────────────────────────────

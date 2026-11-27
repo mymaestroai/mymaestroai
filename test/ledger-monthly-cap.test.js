@@ -104,7 +104,7 @@ test('at 100% a new turn\'s paid call is refused with the sentence; a turn that 
   assert.equal(l.monthlyGate({ provider: 'anthropic', agent: 'Scout', turnStartedAt: turnStart }), null, 'the turn started before the cap was reached');
   const g = l.monthlyGate({ provider: 'anthropic', agent: 'Scout', turnStartedAt: reachedAt + 1 });
   assert.equal(g.refused, true);
-  assert.equal(g.text, 'Your monthly pay-per-use cap of $50 is used up ($51 spent since Nov 1). Scout uses a pay-per-use model, so it can\'t answer until Dec 1 or until you raise the cap in Settings > Money and safety.');
+  assert.equal(g.text, 'Your monthly pay-per-use cap of $50 is used up ($51 spent since Nov 1). Scout uses a pay-per-use model, so it can\'t answer until Dec 1 or until you raise the monthly cap in Settings.');
   const rows = () => l.monthlySpend().turns;
   const before = rows(); l.monthlyGate({ provider: 'openai', agent: 'Scout' }); assert.equal(rows(), before, 'a refusal books nothing');
   // Raising the cap lifts the stop at once.
@@ -113,6 +113,32 @@ test('at 100% a new turn\'s paid call is refused with the sentence; a turn that 
   c.v = { monthlyUsd: 200, monthlyResetDay: 1 }; assert.equal(l2.monthlyGate({ provider: 'openai', agent: 'x' }), null);
   c.v = { monthlyUsd: null, monthlyResetDay: 1 }; assert.equal(l2.monthlyGate({ provider: 'openai', agent: 'x' }), null, 'no cap = never refused');
   void c2;
+});
+
+test('the refusal names the agent by its display name, else its id, else "This agent"; the pointer is the monthly cap in Settings; a failing lookup still refuses', () => {
+  const mkWith = (getAgents) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcap-')); dirs.push(dir);
+    const l = createLedger({ file: path.join(dir, 'ledger.db'), now: () => T0, getCaps: () => ({ monthlyUsd: 10, monthlyResetDay: 1 }), getZone: () => 'UTC', getAgents });
+    pay(l, 20);
+    return l;
+  };
+  const recs = () => [{ name: 'scout', display: 'Scout Prime' }, { name: 'plain', display: '' }, { name: 'nodisplay' }];
+  const l = mkWith(recs);
+  const text = (agent) => l.monthlyGate({ provider: 'anthropic', agent }).text;
+  assert.match(text('scout'), /\)\. Scout Prime uses a pay-per-use model, so it can't answer until Dec 1 or until you raise the monthly cap in Settings\.$/);
+  assert.match(text('plain'), /\)\. plain uses a pay-per-use model/, 'empty display: the id');
+  assert.match(text('nodisplay'), /\)\. nodisplay uses a pay-per-use model/, 'no display: the id');
+  assert.match(text('worker-label'), /\)\. worker-label uses a pay-per-use model/, 'not in the list (a temporary worker): its label');
+  for (const none of [undefined, null, '', '  ']) assert.match(text(none), /\)\. This agent uses a pay-per-use model/, `no agent: ${JSON.stringify(none)}`);
+  assert.ok(!/Money and safety/.test(text('scout')), 'no old group name');
+  // A lookup that throws, or returns junk, never breaks the gate.
+  for (const bad of [() => { throw new Error('agents file broken'); }, () => null, () => 'x']) {
+    const lb = mkWith(bad);
+    const g = lb.monthlyGate({ provider: 'anthropic', agent: 'scout' });
+    assert.equal(g.refused, true);
+    assert.match(g.text, /\)\. scout uses a pay-per-use model, so it can't answer until Dec 1 or until you raise the monthly cap in Settings\.$/);
+    assert.match(lb.monthlyGate({ provider: 'anthropic' }).text, /\)\. This agent uses/);
+  }
 });
 
 // The guard sits in lib/gateway-client, the one place every pay-per-use request passes (chat, consults, workers, research, tests).
