@@ -15539,7 +15539,7 @@ function wire() {
     const g = e.target.closest('.group-title[data-group]');
     if (g) { collapsed[g.dataset.group] = !collapsed[g.dataset.group]; saveJson('hub-mobile-collapsed', collapsed); renderAgents(); return; }
     const r = e.target.closest('.agent-row');
-    if (r && e.target.closest('.dot.bg-work, .agent-bg-line')) { bgOpenChat(r.dataset.agent); return; }   // the ring or the blue line: the chat with the panel open
+    if (r && e.target.closest('.dot.bg-work, .agent-bg-line')) { bgOpenChat(r.dataset.agent); return; }   // the ring or the blue line: the chat, its panel collapsed like any chat's
     if (r) navigate('chat', r.dataset.agent);
   });
   $('bg-chip')?.addEventListener('click', () => bgOpenChat($('bg-chip').dataset.agent));

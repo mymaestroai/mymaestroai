@@ -11625,7 +11625,7 @@
         bl.title = AgentDot.dotLabel(state, { background: n, name });
       } else if (bl) bl.remove();
     }
-    // A click on a ring or on the blue line opens that agent's chat with the panel open (before the row's own click).
+    // A click on a ring or on the blue line opens that agent's chat, its panel collapsed like any chat's (before the row's own click).
     document.addEventListener('click', (e) => {
       // the same in the Teams view: its rows paint the ring and the line through lib/ui-agent-dot.js too
       const t = e.target && e.target.closest ? e.target.closest('.agent-btn .agent-status.bg-work, .agent-btn .agent-bg-line, .teams-row .teams-dot.bg-work, .teams-row .teams-bg-line') : null;

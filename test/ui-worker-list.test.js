@@ -57,6 +57,7 @@ test('the chip names the list ("Workers") and the counts; setWorkerButtonLabel f
   const plain = { textContent: '' }; L.setWorkerButtonLabel(plain, { running: 1, done: 2, failed: 0 });
   assert.strictEqual(plain.textContent, 'Workers: 1 working · 2 done', 'no spans: textContent still works');
   for (const f of ['index.html', 'mobile.html']) assert.match(read(f), /<span class="wb-label"><span class="wb-noun">Workers<\/span><span class="wb-counts"><\/span><\/span>/, f);
+  assert.match(read('mobile.html'), /\.wk-chip \{ max-width: 100%; box-sizing: border-box; min-width: 0; \}/, 'the chip is never wider than its row (review r1)');
   assert.match(read('mobile.html'), /\.wk-chip \.wb-noun \{[^}]*text-overflow: ellipsis/, 'the noun may truncate on the phone');
   assert.match(read('mobile.html'), /\.wk-chip \.wb-counts \{ flex: none;/, 'the counts never do');
 });
