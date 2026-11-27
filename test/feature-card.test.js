@@ -23,9 +23,9 @@ const tempDir = () => { const d = fs.mkdtempSync(path.join(fs.realpathSync(os.tm
 after(() => { for (const d of temps) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} } });
 const DAY = 24 * 3600 * 1000;
 const MANIFEST = [
-  { id: 'alpha', leadMay: true, title: 'Alpha', changes: 'Alpha does a thing. And a second sentence.', benefits: 'b', costs: 'It costs a little. More words follow.', check: 'c', on: 'o', off: 'f' },
+  { id: 'alpha', leadMay: true, title: 'Alpha', changes: 'Alpha does a thing. And a second sentence.', benefits: 'b', costs: 'It costs a little. More words follow.', check: 'c', on: 'Agents get alpha. Then more.', off: 'f' },
   { id: 'beta-two', leadMay: false, title: 'Beta', changes: 'Beta spends money', benefits: 'b', costs: 'It spends. Really.', check: 'c', on: 'o', off: 'f' },
-  { id: 'quiet-one', leadMay: true, quiet: true, title: 'Quiet one', changes: 'Quiet one tidies up. Nothing else.', benefits: 'b', costs: 'Nothing.', check: 'c', on: 'o', off: 'f' },
+  { id: 'quiet-one', leadMay: true, quiet: true, title: 'Quiet one', changes: 'Quiet one tidies up. Nothing else.', benefits: 'b', costs: 'Nothing.', check: 'c', on: 'Quiet one tidies up. Nothing else.', off: 'f' },
   { id: 'quiet-risky', leadMay: false, quiet: true, title: 'Quiet but owner only', changes: 'Quiet risky touches limits. Careful.', benefits: 'b', costs: 'Spends.', check: 'c', on: 'o', off: 'f' },
 ];
 // A folder with the manifest, the state file (named like the real one: Restore finds it beside the journal) and an agents file.
@@ -92,6 +92,16 @@ test('snooze: two at once and a decision at once all land in a readable file', a
 
 // ── cardState ──
 const deps = { leads: () => ['maestro'], agents: [{ name: 'maestro', display: 'Maestro the lead', category: 'primary', lead: true }], adminIds: [] };
+test('cardState: the summary is what turning it on does (the first sentence of `on`), else the first sentence of `changes`', () => {
+  const s = setup(); existing(s);
+  const raw = JSON.parse(fs.readFileSync(s.o.manifestFile, 'utf8'));
+  raw.changes.find((e) => e.id === 'beta-two').on = '';
+  fs.writeFileSync(s.o.manifestFile, JSON.stringify(raw));
+  const c = card.cardState({ ...s.o, deps, now: T0 });
+  assert.strictEqual(c.entries.find((e) => e.id === 'alpha').summary, 'Agents get alpha.');
+  assert.strictEqual(c.entries.find((e) => e.id === 'beta-two').summary, 'Beta spends money');
+});
+
 test('cardState: only pending entries (decided ones are not on it); summary and cost are the first sentences', () => {
   const s = setup(); existing(s);
   const c = card.cardState({ ...s.o, deps, now: T0 });
@@ -99,7 +109,7 @@ test('cardState: only pending entries (decided ones are not on it); summary and 
   assert.deepStrictEqual(c.entries.map((e) => e.id), ['alpha', 'beta-two', 'quiet-risky']);
   const a = c.entries[0];
   assert.deepStrictEqual(Object.keys(a).sort(), ['cost', 'id', 'leadMay', 'recommendation', 'summary', 'title']);
-  assert.deepStrictEqual([a.title, a.summary, a.cost, a.leadMay, a.recommendation], ['Alpha', 'Alpha does a thing.', 'It costs a little.', true, null]);
+  assert.deepStrictEqual([a.title, a.summary, a.cost, a.leadMay, a.recommendation], ['Alpha', 'Agents get alpha.', 'It costs a little.', true, null]);
   assert.strictEqual(c.entries[1].leadMay, false);
   assert.strictEqual(c.show, true);
 });
