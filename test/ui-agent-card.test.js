@@ -271,7 +271,7 @@ test('a row whose live() says false is read-only with a line saying who can chan
   await t.card.open('harbor');
   const row = rowOf(t.card.el(), 'OPT-0047');
   assert.strictEqual(all(row, 'select').length, 0);
-  assert.match(row.textContent, /Change this on the agent's full settings page\./);
+  assert.match(row.textContent, /This can't be changed right now\./);
 });
 
 test('whyNot(agent, ctx) replaces the notHere line for an admin; "" draws no line at all, and the row stays read-only', async () => {

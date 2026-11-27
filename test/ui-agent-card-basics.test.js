@@ -207,9 +207,31 @@ test('Model: a model missing from the list reads "<words> · not in the list"; t
   assert.ok(dl.includes('Sonnet · API $'), dl.join(' | '));
   const same = await opened({ models: ['claude-sdk/claude-sonnet-4-6', 'claude-sdk/claude-sonnet-4-5', 'openai/gpt-6-astra'] });
   const sl = all(all(rowOf(same.card.el(), 'OPT-0047'), 'select')[0], 'option').map((o) => o.textContent);
-  assert.ok(sl.includes('Sonnet · Subscription (claude-sonnet-4-6)'), sl.join(' | '));
-  assert.ok(sl.includes('Sonnet · Subscription (claude-sonnet-4-5)'), sl.join(' | '));
+  assert.ok(sl.includes('Sonnet · Subscription (claude-sdk/claude-sonnet-4-6)'), sl.join(' | '));
+  assert.ok(sl.includes('Sonnet · Subscription (claude-sdk/claude-sonnet-4-5)'), sl.join(' | '));
   assert.ok(sl.includes('gpt-6-astra · API $'), 'a unique label gets no id');
+  // the same model on two local servers: the full id (provider included) tells them apart
+  const local = await opened({ models: ['ollama/qwen3:8b', 'lmstudio/qwen3:8b', 'openai/gpt-6-astra'] });
+  const ll = all(all(rowOf(local.card.el(), 'OPT-0047'), 'select')[0], 'option').map((o) => o.textContent).filter((l) => /qwen3/.test(l));
+  assert.strictEqual(ll.length, 2, ll.join(' | '));
+  assert.strictEqual(new Set(ll).size, 2, 'two different labels: ' + ll.join(' | '));
+  assert.ok(ll.some((l) => l.includes('(ollama/qwen3:8b)')) && ll.some((l) => l.includes('(lmstudio/qwen3:8b)')), ll.join(' | '));
+});
+
+test('Notifications: until the preferences are read the row says "Checking…", after a failed read "Not available", never a guessed default', async () => {
+  B.reset();
+  const t = setup();
+  t.state.fail['GET /api/notify/prefs'] = { status: 503, error: 'busy' };
+  await t.card.open('harbor');
+  const early = rowOf(t.card.el(), 'OPT-0168');
+  assert.ok(!/Same as all agents/.test(early.textContent), early.textContent);
+  await flush(); await flush();
+  t.card.refresh(); await flush();
+  const row = rowOf(t.card.el(), 'OPT-0168');
+  assert.match(row.textContent, /Not available/);
+  assert.strictEqual(all(row, 'select').length, 0, 'no list to choose from');
+  assert.ok(!/Same as all agents/.test(row.textContent), row.textContent);
+  assert.deepStrictEqual(writes(t), []);
 });
 
 test('Model: Auto is PATCH {autoModel:true}; choosing a model while Auto is on also turns Auto off', async () => {
@@ -535,7 +557,7 @@ test('Recordings: only the owner of the Maestro may change them (the route\'s ru
   all(notOwner.card.el(), '.ac-more-head')[0].click();
   const row = rowOf(notOwner.card.el(), 'OPT-0033');
   assert.strictEqual(all(row, 'input').length, 0);
-  assert.match(row.textContent, /Change this on the agent's full settings page\./);
+  assert.match(row.textContent, /This can't be changed right now\./);
 });
 
 test('Model extras and limits: keep model, Auto per message, speed and price, longest reply, cheapest and fallback model', async () => {

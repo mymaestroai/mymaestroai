@@ -229,7 +229,7 @@ test('Memory: the shortest-background switch saves {minimalContext}; Compress no
   const t3 = setup({ state: { compaction: { pct: 80, tokens: 1, limit: 2, running: true } } });
   const row3 = await openAt(t3, 'OPT-0833');
   assert.match(row3.textContent, /Compressing…/);
-  assert.match(row3.textContent, /Change this on the agent's full settings page\./);
+  assert.match(row3.textContent, /This can't be changed right now\./);
 });
 
 test('Memory: the notes files and the record editor open the agent page at their record (a new tab), without saving anything', async () => {
