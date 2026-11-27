@@ -980,7 +980,7 @@
   #call-panel .cp-disp select { flex: 1; max-width: 60%; min-height: 44px; font-size: 16px; border-radius: 10px; background: var(--bg-card); color: var(--text); border: 1px solid var(--border); padding: 0 8px; }
   /* Call display pickers: Linux WebKit paints a closed select white on white unless colour, background and colour-scheme are explicit (also the option rows) */
   select#cp-display, select#vp-display, select.ucd-display { color: var(--text); background-color: var(--bg-input); color-scheme: dark; }
-  html.mm-light select#cp-display, html.mm-light select#vp-display, html.mm-light select.ucd-display { color-scheme: light; }
+  html.mm-simple.mm-light select#cp-display, html.mm-simple.mm-light select#vp-display, html.mm-simple.mm-light select.ucd-display { color-scheme: light; }
   select#cp-display option, select#vp-display option, select.ucd-display option { color: var(--text); background-color: var(--bg-input); }
   /* Hang up never needs a scroll: on a short or landscape phone the panel scrolls, and this row stays at its bottom edge on an opaque panel-colored background. */
   #call-panel .cp-actions { display: flex; gap: 8px; position: sticky; bottom: 0; z-index: 2; background: var(--bg-card); padding-top: 8px; }
