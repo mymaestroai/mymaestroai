@@ -253,3 +253,23 @@ test('~/… keeps its .. for the kernel-style walk (not folded before a symlink 
   const t = shellWriteTargets('echo x > ~/l/../x.js', '/');
   assert.deepStrictEqual(t, [`${os.homedir()}/l/../x.js`]);
 });
+
+test('a { inside $( ) or a ( inside ${ } does not hide a redirection after the substitution; the same expansion alone is free', () => {
+  const pairs = [['echo $(echo {)', '>lib/a.js'], ['echo ${v:-(}', '>lib/a.js'], ['echo $(case x in x) echo;; esac)', '>lib/a.js'], ['echo $[a+1]', '>lib/a.js']];
+  for (const [e, r] of pairs) {
+    assert.strictEqual(cpOn.commandWritesProtected(e, app), false, e);
+    assert.strictEqual(cpOn.commandWritesProtected(e + r, app), true, e + r);
+  }
+  assert.strictEqual(cpOn.commandWritesProtected('echo $[a>b]', path.join(app, 'lib')), false, '$[ ] is arithmetic');
+});
+
+test('git -C through a symlink and ..: judged by the repository git really enters', () => {
+  const b = tmp();
+  mk(b, '.git', 'lib/sub', 'workspaces/sam/.git', 'hub-home/share/sam');
+  const ws = path.join(b, 'workspaces', 'sam');
+  fs.symlinkSync(path.join(b, 'lib', 'sub'), path.join(ws, 'l'));
+  const cp = make(b, path.join(b, 'hub-home'));
+  assert.strictEqual(cp.commandWritesProtected(`git -C ${ws}/l/.. checkout -- .`, ws), true, 'l/.. is lib/, in the install');
+  assert.strictEqual(cp.commandWritesProtected('cd l/.. && git checkout -- .', ws), true, 'after a cd too');
+  assert.strictEqual(cp.commandWritesProtected(`git -C ${ws} checkout -- .`, ws), false, 'the workspace\'s own repository');
+});
