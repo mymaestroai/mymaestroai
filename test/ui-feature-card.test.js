@@ -190,7 +190,6 @@ test('buttons per row: Turn on (primary), Leave off, Ask me in a week', async ()
   const rows = p.cards(list)[0].find((n) => /\bfc-row\b/.test(n.className));
   for (const r of rows) {
     assert.deepStrictEqual(p.btns(r).map((b) => b.textContent), ['Turn on', 'Leave off', 'Ask me in a week']);
-    assert.ok(/\bfc-go\b/.test(p.btns(r)[0].className), 'the primary one');
     assert.ok(!/\bfc-go\b/.test(p.btns(r)[1].className));
   }
 });
@@ -208,10 +207,10 @@ test('each button POSTs its decision, disables the row while it runs, then shows
     assert.strictEqual(posts.length, 1);
     assert.deepStrictEqual(posts[0], { url: '/api/behaviour-changes/quick-research', method: 'POST', body: { decision, expect: 'pending' } });
     assert.ok(p.btns(row()).every((b) => b.disabled), 'the row is locked while it runs');
-    await p.answer('/api/behaviour-changes/quick-research', 200, { ok: true, change: { id: 'quick-research' } });
+    await p.answer('/api/behaviour-changes/quick-research', 200, { ok: true, change: { id: 'quick-research' }, rev: 'r1' });
     assert.ok(row().text.includes(line), line);
-    assert.strictEqual(p.btns(row()).length, 0, 'the buttons are replaced');
-    assert.strictEqual(p.btns(p.cards(list)[0]).length, 3, 'the other row is untouched');
+    assert.deepStrictEqual(p.btns(row()).map((b) => b.textContent), ['Undo'], 'the buttons are replaced by Undo');
+    assert.strictEqual(p.btns(p.cards(list)[0]).length, 4, 'the other row is untouched');
   }
 });
 
@@ -248,12 +247,12 @@ test('every row answered: one closing line and no buttons', async () => {
   p.FC.chatShown('harbor', list); await p.settle();
   const c = () => p.cards(list)[0];
   p.btns(c(), 'Turn on')[0].click(); await p.settle();
-  await p.answer('/api/behaviour-changes/quick-research', 200, { ok: true });
+  await p.answer('/api/behaviour-changes/quick-research', 200, { ok: true, rev: 'r1' });
   assert.ok(!c().text.includes('All set.'), 'one row is still open');
   p.btns(c(), 'Leave off')[0].click(); await p.settle();
-  await p.answer('/api/behaviour-changes/protect-code', 200, { ok: true });
+  await p.answer('/api/behaviour-changes/protect-code', 200, { ok: true, rev: 'r1' });
   assert.ok(c().text.includes('All set. You can change these any time in Settings.'));
-  assert.strictEqual(p.btns(c()).length, 0);
+  assert.deepStrictEqual(p.btns(c()).map((b) => b.textContent), ['Undo', 'Undo', 'Settings'], 'only Undo and the Settings link');
   assert.strictEqual(c().text.split('All set.').length, 2, 'once');
 });
 
@@ -618,4 +617,121 @@ test('r3 fix1: the allowed variant: the fresh GET\'s 200 draws the card from fre
   assert.ok(r.text.includes('Fresh title') && !r.text.includes('OLD'));
   assert.ok(r.text.includes('Admins only.'));
   assert.strictEqual(p.btns(r).length, 3);
+});
+
+// ---- round 4 page changes ----
+test('r4 fix1: a press 403, then a failed fresh GET (503): every copy stays hidden; a later 200 draws from that answer', async () => {
+  const p = page(); const list = p.mkList(); const box = node('div');
+  p.FC.chatShown('harbor', list); await p.settle();
+  await p.FC.renderInto(box);
+  const { held } = heldGets(p, body());
+  p.btns(rowsOf(p, list)[0], 'Turn on')[0].click(); await p.settle();
+  await p.answer('/api/behaviour-changes/quick-research', 403, { ok: false, error: 'No.' });
+  assert.strictEqual(held.length, 1);
+  held.shift()(503, null); await p.settle();
+  assert.strictEqual(p.cards(list).length, 0, 'chat copy hidden');
+  assert.strictEqual(box.find((n) => /\bfc-row\b/.test(n.className)).length, 0, 'page copy hidden');
+  const f = p.FC.refresh(); await p.settle();
+  held.shift()(200, body({ entries: [{ ...E1, title: 'Fresh title' }, E2] })); await f; await p.settle();
+  assert.ok(rowsOf(p, list)[0].text.includes('Fresh title'));
+  assert.ok(box.find((n) => /\bfc-row\b/.test(n.className)).length >= 1);
+});
+test('r4 fix1: a press 403, then GET 403: gone', async () => {
+  const p = page(); const list = p.mkList();
+  p.FC.chatShown('harbor', list); await p.settle();
+  const { held } = heldGets(p, body());
+  p.btns(rowsOf(p, list)[0], 'Turn on')[0].click(); await p.settle();
+  await p.answer('/api/behaviour-changes/quick-research', 403, { ok: false, error: 'No.' });
+  held.shift()(403, { ok: false }); await p.settle();
+  assert.strictEqual(p.cards(list).length, 0);
+  assert.strictEqual(p.FC.state.rows.length, 0);
+});
+
+async function pressed(decision = 'Turn on', extra = {}) {
+  const p = page({ first: { status: 200, body: body({ entries: [{ ...E1, rev: 'pending' }, E2] }) } }); const list = p.mkList();
+  p.FC.chatShown('harbor', list); await p.settle();
+  const box = node('div'); await p.FC.renderInto(box);
+  p.btns(rowsOf(p, list)[0], decision)[0].click(); await p.settle();
+  await p.answer('/api/behaviour-changes/quick-research', 200, { ok: true, change: {}, rev: 'on, x1', ...extra });
+  return { p, list, box };
+}
+test('r4 fix2: Undo sits beside each result line (not for a notice OK) and every copy shows it', async () => {
+  for (const [label, line] of [['Turn on', 'Turned on.'], ['Leave off', 'Left off.'], ['Ask me in a week', 'I will ask again next week.']]) {
+    const { p, list, box } = await pressed(label);
+    const r = rowsOf(p, list)[0];
+    assert.ok(r.text.includes(line)); assert.deepStrictEqual(p.btns(r).map((b) => b.textContent), ['Undo']);
+    assert.ok(box.find((n) => n.tag === 'button' && n.textContent === 'Undo').length === 1);
+  }
+  const p = page({ first: { status: 200, body: body({ entries: [], notices: [{ ...N1, rev: 'on, s' }] }) } }); const list = p.mkList();
+  p.FC.chatShown('harbor', list); await p.settle();
+  p.btns(rowsOf(p, list)[0], 'OK')[0].click(); await p.settle();
+  await p.answer('/api/behaviour-changes/quiet-fix', 200, { ok: true, rev: 'x' });
+  assert.strictEqual(p.btns(p.cards(list)[0] || node('div'), 'Undo').length, 0);
+});
+test('r4 fix2: Undo posts reopen with the press rev; the row goes back to open with its buttons and a refetch', async () => {
+  const { p, list, box } = await pressed();
+  const getsBefore = p.calls.filter((c) => c.method === 'GET').length;
+  p.btns(rowsOf(p, list)[0], 'Undo')[0].click(); await p.settle();
+  const post = p.calls.filter((c) => c.method === 'POST').pop();
+  assert.deepStrictEqual(post.body, { decision: 'reopen', rev: 'on, x1' });
+  p.cur.first = { status: 200, body: body({ entries: [{ ...E1, title: 'Refetched', rev: 'pending' }, E2] }) };
+  await p.answer('/api/behaviour-changes/quick-research', 200, { ok: true, rev: 'pending' });
+  assert.ok(p.calls.filter((c) => c.method === 'GET').length > getsBefore, 'refetched');
+  const r = rowsOf(p, list)[0];
+  assert.deepStrictEqual(p.btns(r).map((b) => b.textContent), ['Turn on', 'Leave off', 'Ask me in a week']);
+  assert.ok(r.text.includes('Refetched'));
+  assert.ok(box.find((n) => n.tag === 'button' && n.textContent === 'Turn on').length >= 1, 'page copy follows');
+});
+test('r4 fix2: Undo 409 refetches; another error shows on the row', async () => {
+  let { p, list } = await pressed();
+  p.btns(rowsOf(p, list)[0], 'Undo')[0].click(); await p.settle();
+  const g = p.calls.filter((c) => c.method === 'GET').length;
+  await p.answer('/api/behaviour-changes/quick-research', 409, { ok: false, error: 'already decided' });
+  assert.ok(p.calls.filter((c) => c.method === 'GET').length > g, 'refetched');
+  ({ p, list } = await pressed());
+  p.btns(rowsOf(p, list)[0], 'Undo')[0].click(); await p.settle();
+  await p.answer('/api/behaviour-changes/quick-research', 500, { ok: false, error: 'Disk is full.' });
+  const r = rowsOf(p, list)[0];
+  assert.ok(r.text.includes('Disk is full.') && r.text.includes('Turned on.'));
+  assert.strictEqual(p.btns(r, 'Undo').length, 1, 'Undo stays');
+});
+test('r5: a refused Undo hides every copy until a fresh card answer; a 403 there too clears the card', async () => {
+  const { p, list, box } = await pressed();
+  const { held } = heldGets(p, body());
+  p.btns(rowsOf(p, list)[0], 'Undo')[0].click(); await p.settle();
+  await p.answer('/api/behaviour-changes/quick-research', 403, { ok: false, error: 'No.' });
+  assert.strictEqual(p.cards(list).length, 0, 'hidden while access is checked');
+  assert.strictEqual(box.find((n) => n.tag === 'button' && n.textContent === 'Undo').length, 0, 'the page copy is hidden too');
+  assert.strictEqual(p.FC.state.suspect, true);
+  held.shift()(403, { ok: false }); await p.settle();
+  assert.strictEqual(p.cards(list).length, 0);
+  assert.strictEqual(p.FC.state.rows.length, 0);
+});
+test('r4 fix3: Settings in the closing line opens Settings through FeatureCard.openSettings, else window.openSettings', async () => {
+  for (const mode of ['fc', 'global']) {
+    const p = page({ first: { status: 200, body: body({ entries: [E1], notices: [] }) } }); const list = p.mkList();
+    let n = 0;
+    if (mode === 'fc') p.FC.openSettings = () => { n++; }; else p.ctx.openSettings = () => { n++; };
+    p.FC.chatShown('harbor', list); await p.settle();
+    p.btns(rowsOf(p, list)[0], 'Leave off')[0].click(); await p.settle();
+    await p.answer('/api/behaviour-changes/quick-research', 200, { ok: true, rev: 'r' });
+    const c = p.cards(list)[0];
+    assert.ok(c.text.includes('All set. You can change these any time in Settings.'));
+    p.btns(c, 'Settings')[0].click();
+    assert.strictEqual(n, 1, mode);
+  }
+});
+test('r4 fix4: Turn on is the primary only on a row whose recommendation is on', async () => {
+  const off = { ...E2, recommendation: { decision: 'off', why: 'x' } };
+  const p = page({ first: { status: 200, body: body({ entries: [E1, E2, off] }) } }); const list = p.mkList();
+  p.FC.chatShown('harbor', list); await p.settle();
+  const rs = rowsOf(p, list);
+  assert.ok(/\bfc-go\b/.test(p.btns(rs[0], 'Turn on')[0].className));
+  for (const r of rs.slice(1)) assert.ok(p.btns(r).every((b) => !/\bfc-go\b/.test(b.className)));
+});
+test('r4 fix5: accent outline on the card, recommendation at full text colour, var() only', () => {
+  const css = page().FC.CSS;
+  assert.match(css, /\.feature-card \{[^}]*border: 1px solid var\(--accent\)/);
+  assert.match(css, /\.fc-rec \{[^}]*color: var\(--text\)/);
+  assert.doesNotMatch(css, /\.fc-cost, \.feature-card \.fc-rec/);
 });

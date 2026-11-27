@@ -731,7 +731,7 @@ async function handleHttpRequest(req, res) {
         // Only the owner decides: a signed-in admin's own browser session (never the hub's service identity, a token or an agent).
         if (!require('./lib/access').isAdminSession(req)) return jsonResponse(res, 403, { ok: false, error: 'Sign in with an admin account in your browser to decide this.' });
         const b = (await authJson()) || {};
-        if (b.decision !== 'on' && b.decision !== 'off' && b.decision !== 'snooze' && b.decision !== 'seen') return jsonResponse(res, 400, { ok: false, error: 'decision must be "on", "off", "snooze" or "seen"' });
+        if (b.decision !== 'on' && b.decision !== 'off' && b.decision !== 'snooze' && b.decision !== 'seen' && b.decision !== 'reopen') return jsonResponse(res, 400, { ok: false, error: 'decision must be "on", "off", "snooze", "seen" or "reopen"' });
         const bc = require('./lib/behaviour-changes');
         if (!bc.manifest().some((e) => e.id === m[1])) return jsonResponse(res, 404, { ok: false, error: 'no such change' });
         // A change the lead may not switch (spending, security) is the install's owner's alone; any other admin's own session still decides the rest.
@@ -741,19 +741,21 @@ async function handleHttpRequest(req, res) {
         const expect = b.expect === 'pending' || b.expect === 'on' || b.expect === 'off' ? b.expect : undefined;
         // rev: the row's journal phrase (viewOf) the page drew it from; compared inside the lock, so a stale device never undoes a fresh snooze.
         const expectRev = typeof b.rev === 'string' && b.rev.length <= 80 ? b.rev : undefined;
+        if (b.decision === 'reopen' && expectRev === undefined) return jsonResponse(res, 400, { ok: false, error: 'rev is needed to undo' });
         const who = req.hubUser && req.hubUser.id;
         try {
           // Run as the person who pressed: the change journal (Recent changes, Restore) names them.
           await require('./lib/settings-journal').withActor({ kind: 'person', user: who }, async () => {
             if (b.decision === 'snooze') await bc.snooze(m[1], { user: who, expect, expectRev });
+            else if (b.decision === 'reopen') await bc.reopen(m[1], { user: who, expectRev });
             else if (b.decision === 'seen') await bc.markSeen(m[1], { user: who, expect, expectRev });
             else await bc.decide(m[1], b.decision, { user: who, expect, expectRev });
           });
-          console.log(`[behaviour] ${m[1]} ${b.decision === 'on' || b.decision === 'off' ? `turned ${b.decision}` : b.decision === 'snooze' ? 'snoozed for a week' : 'notice seen'} by ${who || 'unknown'}`);
+          console.log(`[behaviour] ${m[1]} ${b.decision === 'on' || b.decision === 'off' ? `turned ${b.decision}` : b.decision === 'snooze' ? 'snoozed for a week' : b.decision === 'reopen' ? 'put back to waiting' : 'notice seen'} by ${who || 'unknown'}`);
           if (m[1] === 'worker-proposals') {
             try { await require('./lib/behaviour-review').syncProposalsTask(); } catch (e) { console.warn('[behaviour] could not update the weekly team review:', e.message); }
           }
-          return jsonResponse(res, 200, { ok: true, change: bc.list().find((c) => c.id === m[1]) });
+          return jsonResponse(res, 200, { ok: true, change: bc.list().find((c) => c.id === m[1]), rev: bc.viewOf(bc.readState().entries[m[1]]) });
         } catch (e) {
           const msg = e && e.message ? e.message : String(e);
           if (msg === 'already decided') return jsonResponse(res, 409, { ok: false, error: 'already decided' });

@@ -15558,6 +15558,7 @@ function wire() {
   $('approval-sheet').__dialogClose = () => { approvalsHidden = true; paintApprovals(); };
   $('menu-profile')?.addEventListener('click', openProfileSheet);   // ?.: a page cached before Profile existed has no such item
   $('menu-settings')?.addEventListener('click', settingsSheetOpen);
+  try { if (window.FeatureCard) FeatureCard.openSettings = () => settingsSheetOpen(); } catch { /* cosmetic */ }   // the new-features card's "Settings" link
   // ⋮ > Agent settings opens the agent's card (the link to the old page stays for a page without the card).
   $('menu-agent-settings')?.addEventListener('click', (e) => { if (!current || !window.hubAgentCard) return; if (e && e.preventDefault) e.preventDefault(); $('menu').classList.remove('open'); openAgentCard(current); });
   $('menu-build-team')?.addEventListener('click', (e) => { e.stopPropagation(); $('menu').classList.remove('open'); if (current && !$('menu-build-team').disabled) buildTeamStart(current); });   // ?.: a page cached before Settings existed has no such item

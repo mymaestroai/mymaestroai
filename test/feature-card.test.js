@@ -503,3 +503,66 @@ test('r1 fix10: Restore of a quiet entry\'s notice to unseen keeps by quiet-upda
   assert.strictEqual(st(s)['quiet-one'].by, 'quiet-update');
   assert.deepStrictEqual(card.cardState({ ...s.o, deps, now: T0 }).notices.map((n) => n.id), ['quiet-one']);
 });
+
+// ── Undo from the card: reopen ──
+test('reopen: after on, off and snooze the entry is pending again and back on the card; the recommendation and bookkeeping stay', async () => {
+  for (const how of ['on', 'off', 'snooze']) {
+    const s = setup(); existing(s);
+    fs.writeFileSync(s.stateFile, JSON.stringify({ entries: { ...st(s), alpha: { ...st(s).alpha, recommend: 'on', recommendWhy: 'cheap', reviewTask: 'task-1' } } }));
+    if (how === 'snooze') await bc.snooze('alpha', { user: 'u1', now: T0, ...s.o }); else await bc.decide('alpha', how, { user: 'u1', ...s.o });
+    const rev = bc.viewOf(st(s).alpha);
+    const r = await bc.reopen('alpha', { user: 'u2', expectRev: rev, ...s.o });
+    const e = st(s).alpha;
+    assert.deepStrictEqual([e.state, e.by, e.snoozedUntil, e.snoozedBy, e.recommend, e.recommendWhy, e.reviewTask], ['pending', 'owner', undefined, undefined, 'on', 'cheap', 'task-1'], how);
+    assert.strictEqual(r.id, 'alpha');
+    assert.ok(card.cardState({ ...s.o, deps, now: T0 }).entries.some((x) => x.id === 'alpha'), `${how}: back on the card`);
+  }
+});
+test('reopen: a stale rev is refused (already decided) and nothing changes', async () => {
+  const s = setup(); existing(s);
+  await bc.decide('alpha', 'on', { user: 'u1', ...s.o });
+  const stale = bc.viewOf(st(s).alpha);
+  await bc.decide('alpha', 'off', { user: 'u3', ...s.o });
+  await assert.rejects(bc.reopen('alpha', { user: 'u2', expectRev: stale, ...s.o }), /already decided/);
+  assert.strictEqual(st(s).alpha.state, 'off');
+});
+test('reopen: an untouched pending entry is refused (already decided); an unknown id is refused; an unreadable file is not overwritten', async () => {
+  const s = setup(); existing(s);
+  await assert.rejects(bc.reopen('alpha', { user: 'u2', expectRev: 'pending', ...s.o }), /already decided/);
+  await assert.rejects(bc.reopen('nope', { user: 'u2', expectRev: 'pending', ...s.o }), /no such change/);
+  fs.writeFileSync(s.stateFile, '{not json');
+  await assert.rejects(bc.reopen('alpha', { user: 'u2', expectRev: 'pending', ...s.o }));
+  assert.strictEqual(fs.readFileSync(s.stateFile, 'utf8'), '{not json');
+});
+test('reopen: the journal gets an entry whose value becomes pending, with the person who pressed', async () => {
+  const s = setup(); existing(s);
+  await asPerson('sam', () => bc.decide('alpha', 'on', { user: 'sam', ...s.o }));
+  await asPerson('sam', () => bc.reopen('alpha', { user: 'sam', expectRev: 'on', ...s.o }));
+  const list = entriesOf(s);
+  assert.strictEqual(list.length, 2);
+  assert.ok(list.some((e) => e.after === 'pending' && e.before === 'on' && e.who.user === 'sam'), JSON.stringify(list));
+});
+test('reopen route: same owner rule and own-session guard as the other decisions, needs a rev, and every reply carries the new rev', () => {
+  const server = read('server.js');
+  const dec = server.indexOf("const m = pathname.match(/^\\/api\\/behaviour-changes\\/([a-z][a-z0-9-]{1,40})$/);");
+  const post = server.slice(dec, dec + 6000);
+  assert.match(post, /decision !== 'reopen'/);
+  assert.match(post, /bc\.reopen\(/);
+  assert.match(post, /ownerRefusal\(/);
+  assert.match(post, /rev: bc\.viewOf\(/);
+  assert.match(post, /reopen[\s\S]{0,200}rev/);
+  assert.ok(post.indexOf('ownerRefusal(') < post.indexOf('bc.reopen('));
+  assert.ok(post.indexOf('bc.viewOf(') > post.indexOf('bc.reopen('), 'rev read after the write');
+});
+test('reopen: leadMay false entries are the owner\'s alone (ownerRefusal applies to the entry, whatever the decision)', () => {
+  const s = setup();
+  assert.ok(bc.ownerRefusal('beta-two', { isOwner: false, manifestFile: s.manifestFile }));
+  assert.strictEqual(bc.ownerRefusal('beta-two', { isOwner: true, manifestFile: s.manifestFile }), null);
+  assert.strictEqual(bc.ownerRefusal('alpha', { isOwner: false, manifestFile: s.manifestFile }), null);
+});
+test('manifest: research-own-work has the short title; every other field stays', () => {
+  const e = bc.manifest(path.join(REAL, 'templates', 'behaviour-changes.json')).find((x) => x.id === 'research-own-work');
+  assert.strictEqual(e.title, "Quick research for an agent's own work");
+  assert.strictEqual(e.leadMay, false);
+  assert.match(e.on, /^Agents may start quick research for their own work/);
+});

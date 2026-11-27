@@ -752,7 +752,7 @@ test('the guidance tells an agent how to ask for research for its own work', () 
 test('the wording of the grant, the off texts and the cap are exactly the plan\'s words', () => {
   // with the change off, or the person's Never: carry on without research, say so, and (change off) name the switch once in words
   // the agent can pass on, without asking for it every time
-  assert.equal(research.OWN_WORK_OFF, 'Research for an agent\'s own work is not switched on here: carry on without it and say so in your report. If the missing research matters, mention once that the owner can switch on "Agents may start quick research for their own work" on the Changes page.');
+  assert.equal(research.OWN_WORK_OFF, 'Research for an agent\'s own work is not switched on here: carry on without it and say so in your report. If the missing research matters, mention once that the owner can switch on "Quick research for an agent\x27s own work" on the Changes page.');
   assert.equal(research.RESEARCH_OFF, 'Deep research is switched off for the person you work for (they chose Never): do the work without it and say so in your report.');
   const entry = JSON.parse(require('fs').readFileSync(path.join(__dirname, '..', 'templates', 'behaviour-changes.json'), 'utf8')).changes.find((c) => c.id === 'research-own-work');
   assert.ok(research.OWN_WORK_OFF.includes(`"${entry.title.split(',')[0]}`), 'the off text names the entry the owner sees on the Changes page');

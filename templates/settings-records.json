@@ -17872,7 +17872,7 @@
       "kind": "setting",
       "name": "Agents start quick research themselves",
       "labels": [
-        "Agents may start quick research for their own work, and a question nobody answers starts a quick run"
+        "Quick research for an agent's own work"
       ],
       "what": "Lets agents start a quick research run for their own work, and starts one if you do not answer a research question in time. Each run shows a notice with the question, the reason and the cost, and buttons to Stop or Make it thorough.",
       "when": "Turn it on for agents that do long tasks on their own. It does nothing unless Agents offer deep research is on.",
