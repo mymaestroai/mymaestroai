@@ -24,6 +24,13 @@ const dec = (agent, tool, input, on = true) => {
   try { return tp.decide({ agent, tool, input, cwd: cwdOf(agent) }); } finally { tp.setCodeProtectProvider(null); }
 };
 const refused = (d) => d.decision === 'deny' && d.protectedCode === true && d.reason === 'protected code: ' + REFUSAL;
+// Paths in data/ are judged in their real form (a symlink there must not carry a write into the code), which looks at them on
+// disk: data/ cases use a scratch install, never this install's own data/ (the data guard refuses that).
+const scratch = () => {
+  const app = fs.mkdtempSync(path.join(os.tmpdir(), 'cp-scratch-'));
+  for (const d of ['data', 'lib', 'workspaces']) fs.mkdirSync(path.join(app, d));
+  return { app, cp: createCodeProtect({ stateOf: () => 'on', hubRoot: app, hubHome: path.join(os.tmpdir(), 'elsewhere-home') }) };
+};
 
 test('state(): on, off, pending; unreadable keeps the last known state; unreadable with none protects and shows an item', () => {
   assert.deepStrictEqual(make('on').state(), { on: true, why: 'on' });
@@ -55,7 +62,8 @@ test('state(): on, off, pending; unreadable keeps the last known state; unreadab
 test('isProtectedPath: the program files are, data, workspaces, node_modules and the hub home inside the root are not', () => {
   const cp = createCodeProtect({ stateOf: () => 'on', hubRoot: ROOT, hubHome: P('hub-home') });
   for (const p of [P('lib', 'x.js'), P('app.js'), P('.git', 'config'), P('scripts', 'a.sh'), P('lib', '..', 'lib', 'y.js'), P('data', '..', 'lib', 'z.js'), ROOT]) assert.strictEqual(cp.isProtectedPath(p), true, p);
-  for (const p of [P('data', 'x'), P('workspaces', 'sam', 'x'), P('node_modules', 'x'), P('hub-home', 'share', 'f'), P('hub-home'), path.join(path.dirname(ROOT), 'other', 'lib', 'x.js'), '/tmp/x', '', null]) assert.strictEqual(cp.isProtectedPath(p), false, String(p));
+  { const s = scratch(); assert.strictEqual(s.cp.isProtectedPath(path.join(s.app, 'data', 'x')), false, 'data/x (scratch install)'); }
+  for (const p of [P('workspaces', 'sam', 'x'), P('node_modules', 'x'), P('hub-home', 'share', 'f'), P('hub-home'), path.join(path.dirname(ROOT), 'other', 'lib', 'x.js'), '/tmp/x', '', null]) assert.strictEqual(cp.isProtectedPath(p), false, String(p));
   const outside = createCodeProtect({ stateOf: () => 'on', hubRoot: ROOT, hubHome: path.join(path.dirname(ROOT), 'home-out') });
   assert.strictEqual(outside.isProtectedPath(P('lib', 'x.js')), true);
 });
@@ -82,8 +90,16 @@ test('decide(), protection on: file tools and shell writes into the program file
 });
 
 test('decide(), protection on: reads, git that only looks, and data / workspaces are not refused by this rule', () => {
+  { // data/ in a scratch install (see scratch above)
+    const s = scratch();
+    tp.setCodeProtectProvider(() => s.cp);
+    try {
+      for (const agent of [lead, head, worker]) {
+        assert.ok(!refused(tp.decide({ agent, tool: 'Write', input: { file_path: path.join(s.app, 'data', 'x') }, cwd: path.join(s.app, 'workspaces') })), 'data');
+      }
+    } finally { tp.setCodeProtectProvider(null); }
+  }
   for (const agent of [lead, head, worker]) {
-    assert.ok(!refused(dec(agent, 'Write', { file_path: P('data', 'x') })), 'data');
     assert.ok(!refused(dec(agent, 'Write', { file_path: P('workspaces', agent.name, 'x') })), 'own workspace');
     assert.ok(!refused(dec(agent, 'mcp__hub__Edit', { file_path: P('workspaces', agent.name, 'x') })), 'mcp edit workspace');
   }
@@ -176,7 +192,8 @@ test('review prep: GIT_WORK_TREE / GIT_DIR in front of git point it at the insta
   // protection on and the command can't be read: refused, never let through
   const broken = { ...make('on'), commandWritesProtected: () => { throw new Error('scan broke'); } };
   tp.setCodeProtectProvider(() => broken);
-  try { assert.ok(refused(tp.decide({ agent: lead, tool: 'Bash', input: { command: 'echo hi' }, cwd: cwdOf(lead) }))); }
+  // (a command that only reads is not refused by this feature: test/code-protect-scope.test.js)
+  try { assert.ok(refused(tp.decide({ agent: lead, tool: 'Bash', input: { command: 'echo hi > out.txt' }, cwd: cwdOf(lead) }))); }
   finally { tp.setCodeProtectProvider(null); }
   // no provider registered (a unit test, a script): nothing is read and nothing refused by this rule
   tp.setCodeProtectProvider(null);
@@ -282,18 +299,14 @@ test('r2: the same commands inside quotes or backticks (sh -c, bash -c, command 
 
 test('review r1: a detection error inside the command reading refuses (no internal catch); the settings files in data/ are protected', () => {
   const cp = make('on');
-  const verify = require('../lib/selfcheck/verify');
-  const orig = verify.shellWritePaths;
-  verify.shellWritePaths = () => { throw new Error('scan broke'); };
-  try {
-    assert.throws(() => cp.commandWritesProtected(`echo change > ${P('app.js')}`, '/'), /scan broke/);
-    tp.setCodeProtectProvider(() => cp);
-    try { assert.ok(refused(tp.decide({ agent: lead, tool: 'Bash', input: { command: `echo change > ${P('app.js')}` }, cwd: cwdOf(lead) }))); }
-    finally { tp.setCodeProtectProvider(null); }
-  } finally { verify.shellWritePaths = orig; }
+  // the reading now lives in code-protect itself (shellWriteTargets): a reader that throws still refuses a command that might write
+  const broken = { ...cp, commandWritesProtected: () => { throw new Error('scan broke'); } };
+  tp.setCodeProtectProvider(() => broken);
+  try { assert.ok(refused(tp.decide({ agent: lead, tool: 'Bash', input: { command: `echo change > ${P('app.js')}` }, cwd: cwdOf(lead) }))); }
+  finally { tp.setCodeProtectProvider(null); }
   assert.strictEqual(cp.isProtectedPath(P('data', 'behaviour-reviews.json')), true);
   assert.strictEqual(cp.isProtectedPath(P('data', 'put-aside.json')), true);
-  assert.strictEqual(cp.isProtectedPath(P('data', 'other.json')), false);
+  { const s = scratch(); assert.strictEqual(s.cp.isProtectedPath(path.join(s.app, 'data', 'other.json')), false, 'data/other.json (scratch install)'); }
   // behaviour-reviews.json is also one of the always-protected settings files (lib/tool-policy touchesSettingsFile), judged
   // first: refused for every role whether or not code protection is on. put-aside.json is refused by code protection alone.
   const settingsRefused = (d) => d.decision === 'deny' && d.cls === 'settings_file';
