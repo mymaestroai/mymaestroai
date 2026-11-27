@@ -1648,6 +1648,10 @@
     .voice-callbar .vcb-hang { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; background: var(--call-bg); border: 1px solid var(--mic-rec); color: var(--on-color-text); border-radius: 6px; padding: 5px 12px; cursor: pointer; }
     .voice-callbar .vcb-disp { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
     .voice-callbar .vcb-disp select { background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; font-size: 13px; }
+    /* Call display pickers: Linux WebKit paints a closed select white on white unless colour, background and colour-scheme are explicit (also the option rows) */
+    .voice-pop select[data-vp="display"], .voice-callbar select[data-vcb="display"], select.ucd-display { color: var(--text); background-color: var(--bg-input); color-scheme: dark; }
+    html.mm-light .voice-pop select[data-vp="display"], html.mm-light .voice-callbar select[data-vcb="display"], html.mm-light select.ucd-display { color-scheme: light; }
+    .voice-pop select[data-vp="display"] option, .voice-callbar select[data-vcb="display"] option, select.ucd-display option { color: var(--text); background-color: var(--bg-input); }
     .voice-callbar .vcb-focus-hint { color: var(--text-dim); font-size: 0.8rem; }
     .voice-callbar .vcb-focus-hint[hidden] { display: none; }
     .voice-callbar .vcb-hang:hover { background: var(--call-bg-hover); }

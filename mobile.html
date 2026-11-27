@@ -978,6 +978,10 @@
   #call-panel .cp-dnd input { width: 26px; height: 26px; accent-color: var(--accent); flex: none; }
   #call-panel .cp-disp { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; font-size: 16px; }
   #call-panel .cp-disp select { flex: 1; max-width: 60%; min-height: 44px; font-size: 16px; border-radius: 10px; background: var(--bg-card); color: var(--text); border: 1px solid var(--border); padding: 0 8px; }
+  /* Call display pickers: Linux WebKit paints a closed select white on white unless colour, background and colour-scheme are explicit (also the option rows) */
+  select#cp-display, select#vp-display, select.ucd-display { color: var(--text); background-color: var(--bg-input); color-scheme: dark; }
+  html.mm-light select#cp-display, html.mm-light select#vp-display, html.mm-light select.ucd-display { color-scheme: light; }
+  select#cp-display option, select#vp-display option, select.ucd-display option { color: var(--text); background-color: var(--bg-input); }
   /* Hang up never needs a scroll: on a short or landscape phone the panel scrolls, and this row stays at its bottom edge on an opaque panel-colored background. */
   #call-panel .cp-actions { display: flex; gap: 8px; position: sticky; bottom: 0; z-index: 2; background: var(--bg-card); padding-top: 8px; }
   /* The Recording badge of a recorded call is the panel's first line, pinned to its top on the same opaque background, so it never scrolls away. */
@@ -1636,7 +1640,7 @@ html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, htm
       <button type="button" id="cp-retry-mic" class="cp-retry-mic" hidden>Try the microphone again</button>
       <div id="cp-held"></div>
       <label class="cp-dnd"><input type="checkbox" id="cp-dnd" role="switch"> <span>Do not disturb</span></label>
-      <label class="cp-disp ucd-dup" for="cp-display"><span>Display</span><select id="cp-display"><option value="follow">Follow agent default</option></select></label>
+      <label class="cp-disp ucd-dup" for="cp-display"><span>Call display</span><select id="cp-display"><option value="follow">Follow agent default</option></select></label>
       <div class="cp-actions">
         <button type="button" id="cp-levels" class="cp-levels">Levels</button>
         <button type="button" id="cp-hangup" class="cp-hang ucd-dup" aria-label="Hang up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 15c2-4 16-4 18 0l-3 2.5-3-1.5v-2c-2-.7-4-.7-6 0v2l-3 1.5z"></path></svg><span>Hang up</span></button>

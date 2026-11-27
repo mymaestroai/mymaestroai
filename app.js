@@ -21226,7 +21226,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return `<div class="vcb-top"><span class="vcb-state ucd-dup" id="${id('state')}" aria-live="polite">Starting</span>
         <span class="voice-meter ucd-dup" aria-hidden="true"><i id="${id('level')}"></i></span>
         <label class="vcb-dnd"><input type="checkbox" id="${id('dnd')}" data-vcb="dnd"> Do not disturb</label>
-        <label class="vcb-disp ucd-dup">Display <select id="${id('display')}" data-vcb="display" aria-label="Display"><option value="follow">Follow agent default</option></select></label>
+        <label class="vcb-disp ucd-dup">Call display <select id="${id('display')}" data-vcb="display" aria-label="Call display"><option value="follow">Follow agent default</option></select></label>
         <button type="button" class="vcb-hang ucd-dup" data-vcb="hang" aria-label="Hang up">${VOICE_HANGUP_SVG}<span>Hang up</span></button></div>
         <div class="vcb-focus-hint" id="${id('focushint')}" hidden>Music playing? Pause it for a clearer call</div>
         <div class="vcb-sliders ucd-dup">

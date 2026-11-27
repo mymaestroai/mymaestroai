@@ -829,8 +829,8 @@ test('chooser: a Display select sits first in the view side bar (before the hidd
   const w = world({ prefs: { choice: 'orb' } }); const { dom } = w;
   w.display.start(); await flushP();
   const ui = w.display.ui;
-  assert.ok(ui.disp && ui.disp.tagName === 'SELECT' && ui.disp.className === 'ucd-display'); assert.strictEqual(ui.disp.attrs['aria-label'], 'Display');
-  const label = ui.disp.parentNode; assert.strictEqual(label.tagName, 'LABEL'); assert.strictEqual(label.children[0].textContent, 'Display');
+  assert.ok(ui.disp && ui.disp.tagName === 'SELECT' && ui.disp.className === 'ucd-display'); assert.strictEqual(ui.disp.attrs['aria-label'], 'Call display');
+  const label = ui.disp.parentNode; assert.strictEqual(label.tagName, 'LABEL'); assert.strictEqual(label.children[0].textContent, 'Call display');
   const side = dom.find('ucd-side')[0]; assert.strictEqual(side.children[0], label, 'first in the side bar, before Back to chat');
   assert.ok(label.parentNode === side && side.children[1] === dom.find('ucd-show')[0] && side.children[1].hidden === true && side.children[2] === dom.find('ucd-back')[0], 'Show display (hidden in the full view) then Back to chat');
   assert.deepStrictEqual(ui.disp.children.map(o => o.value), ['follow', 'none', 'orb', 'pack:owl', 'pack:plain'], 'an Orb call lists the installed characters too');
