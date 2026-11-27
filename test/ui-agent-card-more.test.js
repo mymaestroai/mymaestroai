@@ -119,6 +119,7 @@ function setup(over = {}) {
     if (url === '/api/agents/harbor/files' && method === 'GET') return state.filesFail ? resp(500, { error: 'files unavailable' }) : resp(200, { files: state.files });
     const fm = /^\/api\/agents\/harbor\/files\/([^/]+)$/.exec(url);
     if (fm && method === 'PUT') { if (state.fileFail) return resp(400, { success: false, error: state.fileFail }); state.files[decodeURIComponent(fm[1])] = body.content; return resp(200, { success: true }); }
+    if (/^\/api\/agents\/harbor\/compaction$/.test(url) && method === 'GET' && state.compactionGetStatus && state.compactionGetStatus.length) return resp(state.compactionGetStatus.shift(), { error: 'no' });
     if (/^\/api\/agents\/harbor\/compaction$/.test(url)) return resp(200, { ok: true, ...state.compaction });
     if (/^\/api\/agents\/harbor\/compaction\/run$/.test(url)) return resp(state.runStatus, state.runStatus === 409 ? { error: 'already running' } : { ok: true, started: true });
     if (/^\/api\/root-grants\?agent=harbor$/.test(url)) return resp(200, { ok: true, ...state.root });
@@ -301,7 +302,7 @@ test('Memory: Compress now asks the old question for the mode, then every 5 s re
 });
 
 test('Memory: a failed compression says why; a postponed one says so and stops reading', async () => {
-  for (const [state, want] of [[{ lastOk: false, lastError: 'the model refused' }, /❌ Compression failed: the model refused/], [{ lastBusy: true, lastError: 'the agent stayed busy', runs: [{ at: new Date(Date.now() + 1000).toISOString() }] }, /⏸ Postponed: the agent stayed busy/]]) {
+  for (const [state, want] of [[{ lastOk: false, lastError: 'the model refused', lastRunAt: Date.now() + 1000 }, /❌ Compression failed: the model refused/], [{ lastBusy: true, lastError: 'the agent stayed busy', runs: [{ at: new Date(Date.now() + 1000).toISOString() }] }, /⏸ Postponed: the agent stayed busy/]]) {
     const clk = clock();
     const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout });
     await openAt(t, 'OPT-0833');
@@ -312,6 +313,50 @@ test('Memory: a failed compression says why; a postponed one says so and stops r
     assert.ok(!/Done, read the brief/.test(rowOf(t.card.el(), 'OPT-0833').textContent), 'no brief to read');
     assert.strictEqual(clk.live().length, 0);
   }
+});
+
+test('Memory r1: an older result is never shown as this run\'s Done; the reads go on until a result from this run arrives', async () => {
+  const clk = clock();
+  const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout });
+  await openAt(t, 'OPT-0833');
+  await pressCompress(t);
+  t.state.compaction = { ...t.state.compaction, running: false, requested: false, lastOk: true, lastReset: true, lastRunAt: Date.now() - 3600000 };   // yesterday's run
+  await clk.tick();
+  assert.ok(!/Done/.test(rowOf(t.card.el(), 'OPT-0833').textContent), 'not this run\'s Done');
+  assert.strictEqual(clk.live().length, 1, 'still reading');
+  t.state.compaction = { ...t.state.compaction, lastRunAt: Date.now() + 1000 };
+  await clk.tick();
+  assert.match(rowOf(t.card.el(), 'OPT-0833').textContent, /✅ Done/);
+  assert.strictEqual(clk.live().length, 0);
+});
+
+test('Memory r1: a refused status read stops the reads at once and says so; three failures in a row do the same', async () => {
+  for (const [codes, reads] of [[[403], 1], [[401], 1], [[500, 500, 500], 3]]) {
+    const clk = clock();
+    const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout });
+    await openAt(t, 'OPT-0833');
+    await pressCompress(t);
+    t.state.compaction = { ...t.state.compaction, running: true };
+    t.state.compactionGetStatus = codes.slice();
+    const before = compCalls(t);
+    for (let i = 0; i < reads; i++) {
+      assert.strictEqual(clk.live().length, 1, 'still reading before read ' + (i + 1));
+      await clk.tick();
+    }
+    assert.strictEqual(compCalls(t), before + reads);
+    assert.match(rowOf(t.card.el(), 'OPT-0833').textContent, /Could not check the progress\./);
+    assert.strictEqual(clk.live().length, 0, 'no more reads');
+  }
+  // two failures then an answer: the count starts again
+  const clk = clock();
+  const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout });
+  await openAt(t, 'OPT-0833');
+  await pressCompress(t);
+  t.state.compaction = { ...t.state.compaction, running: true };
+  t.state.compactionGetStatus = [500, 500];
+  await clk.tick(); await clk.tick(); await clk.tick();
+  assert.strictEqual(clk.live().length, 1, 'two failures then a good read: still going');
+  assert.ok(!/Could not check the progress/.test(rowOf(t.card.el(), 'OPT-0833').textContent));
 });
 
 test('Memory: the 5-second reads stop when the card closes, and when its row is no longer showing', async () => {
@@ -341,7 +386,7 @@ test('Memory: "Done, read the brief" chooses working-brief.md in the records pic
   const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout, state: { recordTexts: { 'working-brief.md': 'The brief text' }, records: { records: [{ name: 'BRIEF.md', bytes: 10 }, { name: 'working-brief.md', bytes: 14 }], maxBytes: 65536 } } });
   await openAt(t, 'OPT-0833');
   await pressCompress(t);
-  t.state.compaction = { ...t.state.compaction, running: false, requested: false, lastOk: true, lastReset: false };
+  t.state.compaction = { ...t.state.compaction, running: false, requested: false, lastOk: true, lastReset: false, lastRunAt: Date.now() + 1000 };
   await clk.tick();
   assert.match(rowOf(t.card.el(), 'OPT-0833').textContent, /✅ Done, read the brief/);
   all(rowOf(t.card.el(), 'OPT-0833'), 'button').find((b) => b.textContent === 'Done, read the brief').click();
@@ -354,7 +399,7 @@ test('Memory: "Done, read the brief" chooses working-brief.md in the records pic
   const t2 = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout });
   await openAt(t2, 'OPT-0833');
   await pressCompress(t2);
-  t2.state.compaction = { ...t2.state.compaction, running: false, requested: false, lastOk: true };
+  t2.state.compaction = { ...t2.state.compaction, running: false, requested: false, lastOk: true, lastRunAt: Date.now() + 1000 };
   await clk.tick();
   all(rowOf(t2.card.el(), 'OPT-0833'), 'button').find((b) => b.textContent === 'Done, read the brief').click();
   await flush();

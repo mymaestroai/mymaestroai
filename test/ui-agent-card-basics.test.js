@@ -94,7 +94,7 @@ function setup(over = {}) {
   const confirms = [];
   win.confirm = (q) => { confirms.push(q); return over.confirm !== false; };
   const sources = [];   // every sound the fake speakers were given: { started, stopped }
-  if (!over.noAudio) win.AudioContext = class { constructor() { this.state = 'running'; this.destination = {}; } async resume() { this.state = 'running'; } async decodeAudioData(b) { return { bytes: b.byteLength }; }
+  if (!over.noAudio) win.AudioContext = class { constructor() { this.state = 'running'; this.destination = {}; } async resume() { this.state = 'running'; } async decodeAudioData(b) { if (over.decodeGate) await over.decodeGate(); return { bytes: b.byteLength }; }
     createBufferSource() { const s = { started: false, stopped: false, buffer: null, onended: null, connect() {}, start() { s.started = true; }, stop() { s.stopped = true; } }; sources.push(s); return s; } };
   const state = { ttsFail: over.ttsFail, ttsHeaders: over.ttsHeaders || {}, agents: agentsFix(), notify: over.notify || { default: { questions: 'on', requested: 'on', other: 'on', security: 'on' }, agents: {} }, fail: {}, models: over.models || MODELS };
   if (over.tweak) over.tweak(state.agents);
@@ -111,6 +111,7 @@ function setup(over = {}) {
     if (url === '/api/models') return resp(200, { models: state.models, billing: {}, health: { 'ninfer/qwen3': { state: 'warn', short: 'slow lately' } } });
     if (url === '/api/faces') return resp(200, { packs: [{ id: 'fox', name: 'Fox' }], available: [{ id: 'owl', name: 'Owl', size: 4000000 }] });
     if (url === '/api/voice/tts' && method === 'POST') {
+      if (over.ttsGate) await over.ttsGate();   // a test holds the sample back
       if (state.ttsFail) return { ok: false, status: state.ttsFail.status || 500, headers: { get: () => null }, json: async () => (state.ttsFail.error ? { error: state.ttsFail.error } : Promise.reject(new Error('no body'))) };
       return { ok: true, status: 200, headers: { get: (k) => state.ttsHeaders[k] || null }, arrayBuffer: async () => new ArrayBuffer(16), json: async () => ({}) };
     }
@@ -506,6 +507,38 @@ test('Voice: the sample stops when the card closes, and the select still works b
   await pick(all(rowOf(t2.card.el(), 'OPT-0023'), 'select')[0], 'own');
   assert.strictEqual(all(rowOf(t2.card.el(), 'OPT-0023'), 'select')[0].value, 'own');
   assert.ok(sampleBtn(t2), 'the button is still there after a redraw');
+});
+
+test('Voice r1: closing the card while the sample is still being fetched or decoded plays nothing; an old attempt does not unlock a newer one', async () => {
+  // held in the request
+  let release; const gate = new Promise((r) => { release = r; });
+  const t = await opened({ ttsGate: () => gate });
+  sampleBtn(t).click(); await flush();
+  t.card.close();
+  release(); await flush(); await flush();
+  assert.strictEqual(t.sources.filter((s) => s.started).length, 0, 'no sound after the card closed (request)');
+  // held in decodeAudioData
+  let release2; const gate2 = new Promise((r) => { release2 = r; });
+  const t2 = await opened({ decodeGate: () => gate2 });
+  sampleBtn(t2).click(); await flush();
+  t2.card.close();
+  release2(); await flush(); await flush();
+  assert.strictEqual(t2.sources.filter((s) => s.started).length, 0, 'no sound after the card closed (decode)');
+  // close, reopen, press again: the old attempt finishing late leaves the newer one busy and silent
+  const gates = []; let n = 0;
+  const t3 = await opened({ ttsGate: () => { const g = new Promise((r) => gates.push(r)); n++; return g; } });
+  sampleBtn(t3).click(); await flush();
+  t3.card.close();
+  await t3.card.open('harbor', {}); await flush();
+  sampleBtn(t3).click(); await flush();
+  assert.strictEqual(n, 2, 'two requests');
+  assert.ok(sampleBtn(t3).disabled, 'the newer attempt is busy');
+  gates[0](); await flush(); await flush();
+  assert.ok(sampleBtn(t3).disabled, 'the old attempt did not unlock the newer one');
+  assert.strictEqual(t3.sources.filter((s) => s.started).length, 0, 'and did not start');
+  gates[1](); await flush(); await flush();
+  assert.strictEqual(t3.sources.filter((s) => s.started).length, 1, 'the newer attempt plays');
+  assert.strictEqual(sampleBtn(t3).textContent, 'Stop');
 });
 
 test('Voice: back to "Same as all agents" clears the voice (PATCH {voice:null}); an agent with a stored voice shows as its own', async () => {

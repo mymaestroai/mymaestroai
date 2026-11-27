@@ -47,6 +47,52 @@ test('the Claude sign-in merge works with only two of the three, and with the ol
   assert.deepStrictEqual(none.problems[0].fix, { label: 'Sign in again', kind: 'claude-signin' });
 });
 
+test('r1: the readiness row that mirrors the health id ("ready:health-claude-signedout" / "ready:health-signin-claude") is the same condition: one item, one Sign in again fix, gear count 1', () => {
+  for (const mirrored of ['health-claude-signedout', 'health-signin-claude']) {
+    const r = R.build({
+      readiness: { items: [
+        { id: 'claude-signin', level: 'critical', title: '3 agents use the Claude client but it is not signed in', detail: 'x.' },
+        { id: mirrored, level: 'critical', title: "Claude is signed out on this computer: agents on Claude can't answer", detail: 'y.' },
+      ] },
+      health: { items: [{ id: 'health-claude-signedout', level: 'critical', title: "Claude is signed out on this computer: agents on Claude can't answer", action: 'claude-signin' }] },
+      now: NOW,
+    });
+    assert.strictEqual(R.conditionOf ? R.conditionOf({ id: 'ready:' + mirrored }) : 'claude-signin', 'claude-signin');
+    assert.strictEqual(r.fix.length, 1, JSON.stringify(r.problems.map((p) => p.id)));
+    assert.strictEqual(r.problems.length, 1);
+    assert.deepStrictEqual(r.fix[0].fix, { label: 'Sign in again', kind: 'claude-signin' });
+    assert.strictEqual(r.count, 1);
+    assert.strictEqual(R.gearLabel(r), 'Settings, 1 thing to fix');
+  }
+});
+
+test('r1: the survivor keeps its own fix; only a Claude sign-in group prefers the Sign in again fix', () => {
+  // the earlier-listed (losing) readiness row has a fix of its own; the more severe health row wins and keeps its fix
+  const r = R.build({
+    readiness: { items: [{ id: 'health-disk', level: 'warn', title: 'Disk is filling', action: { label: 'Open A', href: '/a' } }] },
+    health: { items: [{ id: 'health-disk', level: 'critical', title: 'Disk is full', action: { label: 'Open B', href: '/b' } }] },
+    now: NOW,
+  });
+  assert.strictEqual(r.problems.length, 1);
+  assert.strictEqual(r.problems[0].id, 'health:health-disk');
+  assert.deepStrictEqual(r.problems[0].fix, { label: 'Open B', href: '/b' });
+  // a survivor with no fix of its own still borrows one
+  const r2 = R.build({
+    readiness: { items: [{ id: 'health-disk', level: 'warn', title: 'Disk is filling', action: { label: 'Open A', href: '/a' } }] },
+    health: { items: [{ id: 'health-disk', level: 'critical', title: 'Disk is full' }] },
+    now: NOW,
+  });
+  assert.deepStrictEqual(r2.problems[0].fix, { label: 'Open A', href: '/a' });
+  // provider: setup status (first, Welcome fix) and the checklist's own row with another fix
+  const r3 = R.build({
+    setup: { setupNeeded: true },
+    readiness: { items: [{ id: 'provider', level: 'critical', title: 'No AI provider', action: { label: 'Other', href: '/other' } }] },
+    now: NOW,
+  });
+  assert.strictEqual(r3.problems.length, 1);
+  assert.deepStrictEqual(r3.problems[0].fix, { label: 'Open the Welcome page', href: '/welcome' });
+});
+
 test('a stale copy does not beat a fresh read of the same Claude sign-in problem', () => {
   const first = R.build(claudeInputs(3));
   const second = R.build({ ...claudeInputs(3), health: null, failed: ['health'], previous: first, now: NOW + 1000 });
