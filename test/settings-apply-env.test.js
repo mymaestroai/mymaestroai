@@ -405,6 +405,21 @@ test('R9: a provider address is checked only when it differs from the stored one
   assert.equal(run({ openai: { url: '' } }).patch.providers.openai.url, '', 'blank = the provider\'s own');
 });
 
+test('Q3: an address equal to the effective one (an environment address) is not checked, and is stored trimmed; a different odd one still is', () => {
+  const envOdd = 'http://sam:pw@192.0.2.20:11434';
+  const saved = process.env.OLLAMA_URL;
+  process.env.OLLAMA_URL = envOdd;
+  try {
+    const getSetting = (k) => (k === 'providers' ? {} : undefined);
+    const run = (url) => apply.cleanSettingsPatch({ providers: { ollama: { url } }, filesMaxUploadMb: 10 }, { getSetting });
+    const same = run(` ${envOdd} `);
+    assert.deepEqual(same.errors, []); assert.equal(same.patch.providers.ollama.url, envOdd, 'trimmed');
+    assert.match(run('http://sam:pw@192.0.2.21:11434').errors[0], /must not hold a user name or password/);
+    const st = apply.cleanSettingsPatch({ providers: { ollama: { url: ' http://u:p@h:1 ' } } }, { getSetting: (k) => (k === 'providers' ? { ollama: { url: 'http://u:p@h:1' } } : undefined) });
+    assert.deepEqual(st.errors, []); assert.equal(st.patch.providers.ollama.url, 'http://u:p@h:1');
+  } finally { if (saved === undefined) delete process.env.OLLAMA_URL; else process.env.OLLAMA_URL = saved; }
+});
+
 test('R10: POST /api/settings/env needs a "value" property (null or empty goes back to the default)', () => {
   const server = fs.readFileSync(path.join(REAL, 'server.js'), 'utf8');
   const at = server.indexOf("pathname === '/api/settings/env'");

@@ -6083,24 +6083,18 @@
       if (!el) return;
       const set = STG.p5cValue(r, p5cData);
       const byId = (s) => document.getElementById(`${r.id}-${s}`);
-      const k = r.kind;
-      if (k === 'num' || k === 'text' || k === 'url') el.value = set === undefined ? '' : String(set);
-      else if (k === 'switch') el.checked = set === undefined ? r.on : (r.on ? set !== false : !!set);
-      else if (k === 'select' || k === 'model') {
-        const want = set === undefined ? (k === 'select' ? r.dflt : '') : String(set);
-        if (![...el.options].some(o => o.value === want)) el.add(new Option(want, want));
-        el.value = want;
-      } else if (k === 'models') { const have = new Set(Array.isArray(set) ? set : []); for (const c of el.querySelectorAll('input')) c.checked = have.has(c.value); }
-      else if (k === 'map') for (const [f] of r.families) { const s = byId(f); if (!s) continue; const want = (set && set[f]) || ''; if (![...s.options].some(o => o.value === want)) s.add(new Option(want, want)); s.value = want; }
-      else if (k === 'images') for (const [p] of r.providers) for (const w of ['fast', 'best']) { const i = byId(`${p}-${w}`); if (i) i.value = (set && set[p] && set[p][w]) || ''; }
-      else if (k === 'cache') { byId('on').checked = !set || set.enabled !== false; byId('ttl').value = (set && set.ttl) || '5m'; }
+      // a repaint never touches an input that has focus or holds a draft not yet committed (STG.p5cFill, lib/ui-settings-groups.js)
+      STG.p5cFill(r, set, (s) => (s ? byId(s) : el), (c) => c !== document.activeElement && !STG.p5cIsDirty(c.id), (v) => new Option(v, v));
       const unset = set === undefined;
       const def = byId('def'), use = byId('use');
       if (def) def.hidden = !unset;
       if (use) use.hidden = unset;
     }
     // The model lists (member models, plan switch targets) come from the list the pickers use; then every row is painted.
+    // A draft is dirty from the first 'input' event until its change is committed (p5cSave reads the row and clears it).
+    let p5cInputWatch = false;
     async function p5cAfterDraw() {
+      if (!p5cInputWatch) { p5cInputWatch = true; document.addEventListener('input', (e) => { const t = e.target; if (t && typeof t.id === 'string' && t.id.indexOf('st-p5c-') === 0) STG.p5cMarkDirty(t.id); }, true); }
       let ml = null;
       try { ml = await modelList(); } catch { /* the rows still show what is saved */ }
       const models = ml ? ml.models : [], billing = ml ? (ml.billing || {}) : {};
@@ -6134,9 +6128,10 @@
     // STG.p5cSaver (lib/ui-settings-groups.js) so a test can run it; here only the page's hands are given to it.
     let p5cRunner = null;
     function p5cSave(opt, useDefault = false) {
+      if (useDefault) { const pr = STG.p5cByOpt(opt); if (pr) STG.p5cClearDirty(pr.id); }   // Use default drops any draft in the row
       if (!p5cRunner) p5cRunner = STG.p5cSaver({
         data: () => p5cData,
-        readRaw: p5cRaw,
+        readRaw: (r) => { const v = p5cRaw(r); STG.p5cClearDirty(r.id); return v; },   // what is typed is now being saved: no longer a draft
         post: async (body) => {
           const resp = await stSaveFetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) });
           if (resp.ok) return { ok: true };

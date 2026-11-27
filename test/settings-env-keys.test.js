@@ -134,6 +134,20 @@ test('keySource and the masked view say where a key comes from', () => {
   } finally { if (saved === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = saved; }
 });
 
+test('Q1: getForUI gives each provider a fallbackUrl: the environment address when set, else the built-in one; a stored override does not change it', () => {
+  const { s } = hub({ settings: { providers: { ninfer: { url: 'http://stored.example:1/v1' }, openai: { url: 'https://stored.example/v1' } } } });
+  const saved = process.env.NINFER_URL;
+  process.env.NINFER_URL = 'http://env-ninfer.example:9000/v1';
+  try {
+    const ui = s.getForUI();
+    assert.strictEqual(ui.providers.ninfer.url, 'http://stored.example:1/v1');
+    assert.strictEqual(ui.providers.ninfer.fallbackUrl, 'http://env-ninfer.example:9000/v1', 'a reset goes to the environment address');
+    assert.strictEqual(ui.providers.openai.fallbackUrl, 'https://api.openai.com/v1', 'no environment variable: the built-in address');
+    delete process.env.NINFER_URL;
+    assert.strictEqual(s.getForUI().providers.ninfer.fallbackUrl, s.PROVIDER_DEFAULTS.ninfer?.url || '');
+  } finally { if (saved === undefined) delete process.env.NINFER_URL; else process.env.NINFER_URL = saved; }
+});
+
 test('the web-search names match the ones lib/web-search.js reads', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'web-search.js'), 'utf8');
   const { s } = hub({ settings: {} });

@@ -136,15 +136,47 @@ test("write(): '' removes the key's line (the default again) and nothing else", 
   assert.equal(txt(h), 'A=1\n');
 });
 
-test('write(): CRLF files keep CRLF on the changed, the added and every other line', () => {
+test('write(): in a CRLF file the changed and the added line are plain LF (the loader reads no \\r line); every other line keeps its bytes (Q6)', () => {
   const crlf = 'PORT=8888\r\n# note\r\nHUB_TZ=UTC\r\n\r\nHUB_HOME=/srv\r\n';
   const f = envAt(crlf);
   ef.write('HUB_TZ', 'Europe/Paris', { file: f });
-  assert.equal(txt(f), crlf.replace('HUB_TZ=UTC', 'HUB_TZ=Europe/Paris'));
+  const one = 'PORT=8888\r\n# note\r\nHUB_TZ=Europe/Paris\n\r\nHUB_HOME=/srv\r\n';
+  assert.equal(txt(f), one);
   ef.write('HUB_MEMORY_HEALTH', 'off', { file: f });
-  assert.equal(txt(f), crlf.replace('HUB_TZ=UTC', 'HUB_TZ=Europe/Paris') + 'HUB_MEMORY_HEALTH=off\r\n');
+  assert.equal(txt(f), one + 'HUB_MEMORY_HEALTH=off\n');
   ef.write('HUB_TZ', '', { file: f });
-  assert.equal(txt(f), 'PORT=8888\r\n# note\r\n\r\nHUB_HOME=/srv\r\nHUB_MEMORY_HEALTH=off\r\n');
+  assert.equal(txt(f), 'PORT=8888\r\n# note\r\n\r\nHUB_HOME=/srv\r\nHUB_MEMORY_HEALTH=off\n');
+  // what the real loader reads from the written file
+  const g = envAt(crlf); ef.write('HUB_TZ', 'Europe/Paris', { file: g }); ef.write('HUB_MEMORY_HEALTH', 'off', { file: g });
+  const env = {}; require('../lib/hub-secrets').loadEnvFile(g, { env });
+  assert.equal(env.HUB_TZ, 'Europe/Paris'); assert.equal(env.HUB_MEMORY_HEALTH, 'off');
+});
+
+test('read(): a line ending in \\r is not a value, as the real loader sees it; the row says note: crlf (Q6)', () => {
+  const f = envAt('HUB_TZ=UTC\r\nHUB_SELFCHECK=off\r\nHUB_SELFCHECK=off\nHUB_MEMORY_HEALTH=off\r\nexport HUB_COMMS_DISABLED=1\r\n');
+  const saved = { ...process.env }; const env = {};
+  try {
+    require('../lib/hub-secrets').loadEnvFile(f, { env });
+  } finally { for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]; Object.assign(process.env, saved); }
+  assert.equal(env.HUB_TZ, undefined); assert.equal(env.HUB_MEMORY_HEALTH, undefined); assert.equal(env.HUB_SELFCHECK, 'off');
+  const tz = rowOf(f, 'HUB_TZ');
+  assert.equal(tz.value, null); assert.equal(tz.set, false); assert.equal(tz.note, 'crlf');
+  assert.equal(rowOf(f, 'HUB_MEMORY_HEALTH').note, 'crlf');
+  const sc = rowOf(f, 'HUB_SELFCHECK');
+  assert.equal(sc.value, 'off'); assert.equal(sc.note, undefined, 'one LF line of the key is read');
+  assert.equal(rowOf(f, 'HUB_COMMS_DISABLED').note, 'export');
+});
+
+test('write(): reset removes every line of the key, an export-only or CRLF-only key too, and says changed (Q9)', () => {
+  const f = envAt('A=1\nexport HUB_TZ=UTC\nB=2\n');
+  const r = ef.write('HUB_TZ', '', { file: f });
+  assert.equal(r.ok, true); assert.equal(r.changed, true);
+  assert.equal(txt(f), 'A=1\nB=2\n');
+  const g = envAt('A=1\r\nHUB_TZ=UTC\r\nexport HUB_TZ=Asia/Tokyo\r\nB=2\r\n');
+  assert.equal(ef.write('HUB_TZ', '', { file: g }).changed, true);
+  assert.equal(txt(g), 'A=1\r\nB=2\r\n');
+  assert.equal(ef.write('HUB_TZ', '', { file: g }).changed, false, 'nothing left: no change');
+  assert.equal(txt(g), 'A=1\r\nB=2\r\n');
 });
 
 test('write(): an "export KEY=" line is not read by the hub, so writing the key replaces it with a plain line (R11); a comment is not touched', () => {
@@ -179,7 +211,7 @@ test('write(): a trailing " # comment" of a replaced line moves to its own line 
   assert.equal(txt(f), '# the zone\nHUB_TZ=Europe/Rome\n# quoted\nHUB_SELFCHECK=off\nHUB_MEMORY_HEALTH=off\n');
   const c = envAt('HUB_TZ=UTC # note\r\nA=1\r\n');
   ef.write('HUB_TZ', 'Asia/Tokyo', { file: c });
-  assert.equal(txt(c), '# note\r\nHUB_TZ=Asia/Tokyo\r\nA=1\r\n');
+  assert.equal(txt(c), '# note\nHUB_TZ=Asia/Tokyo\nA=1\r\n');
   const q = envAt('HUB_PUSH_SUBJECT="mailto:a@example.com # x" # keep\n');
   ef.write('HUB_PUSH_SUBJECT', 'https://example.com/c', { file: q });
   assert.equal(txt(q), '# keep\nHUB_PUSH_SUBJECT=https://example.com/c\n');
