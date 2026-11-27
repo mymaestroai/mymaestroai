@@ -200,7 +200,19 @@ const allNodes = (n, out = []) => { out.push(n); n.children.forEach((c) => allNo
 const buttonsIn = (n) => allNodes(n).filter((x) => x.tag === 'button');
 const toggleOf = (n) => buttonsIn(n).find((b) => /\bfc-toggle\b/.test(b.className));
 
-test('(a) a bubble appended after the card folds it to its header button; the card stays last', async () => {
+test('(a) bubbles appended without messageArrived (saved history) never fold the card', async () => {
+  const { FC, D } = load();
+  const list = D.node('div'); list.appendChild(D.node('div'));
+  FC.chatShown('harbor', list); await settle();
+  for (let i = 0; i < 4; i++) { const b = D.node('div'); b.className = 'msg'; list.appendChild(b); await settle(); }
+  const old = D.node('div'); list.insertBefore(old, list.children[0]); await settle();
+  const card = cardIn(list);
+  assert.ok(card && buttonsIn(card).some((b) => b.textContent === 'Turn on'), 'still unfolded');
+  assert.ok(!toggleOf(card), 'a plain header');
+  assert.strictEqual(list.children[list.children.length - 1], card, 'the card stays last');
+});
+
+test('(b) messageArrived(list) folds it to its header button; the card stays last', async () => {
   const { FC, D } = load();
   const list = D.node('div'); list.appendChild(D.node('div'));
   FC.chatShown('harbor', list); await settle();
@@ -208,6 +220,7 @@ test('(a) a bubble appended after the card folds it to its header button; the ca
   assert.ok(card && buttonsIn(card).some((b) => b.textContent === 'Turn on'), 'unfolded to begin with');
   assert.ok(!toggleOf(card), 'a plain header before any fold');
   const bubble = D.node('div'); bubble.className = 'msg'; list.appendChild(bubble);
+  FC.messageArrived(list);
   await settle();
   assert.strictEqual(D.stats().runaway, false);
   assert.strictEqual(list.children[list.children.length - 1], card, 'the card is last');
@@ -225,7 +238,7 @@ test('(a2) folded and a busy card present: the card sits just above the busy car
   const list = D.node('div');
   const busy = desktopBusy(D, list);
   FC.chatShown('harbor', list); await settle();
-  const bubble = D.node('div'); list.appendChild(bubble); await settle();
+  const bubble = D.node('div'); list.appendChild(bubble); FC.messageArrived(list); await settle();
   assert.strictEqual(D.stats().runaway, false);
   assert.ok(toggleOf(cardIn(list)), 'folded');
   assert.deepStrictEqual(order(list, new Map([[busy, 'busy'], [bubble, 'bubble']])), ['bubble', 'card', 'busy']);
@@ -243,11 +256,21 @@ test('(b) adding a busy card or a keep-last element does not fold the card', asy
   assert.ok(buttonsIn(cardIn(list)).some((b) => b.textContent === 'Turn on'));
 });
 
-test('(c) pressing the header unfolds (rows back, aria-expanded true, focus on the first button); pressing again folds', async () => {
+test('(c) messageArrived for another list does nothing', async () => {
+  const { FC, D } = load();
+  const list = D.node('div'); const other = D.node('div');
+  FC.chatShown('harbor', list); await settle();
+  FC.messageArrived(other); await settle();
+  assert.ok(!toggleOf(cardIn(list)), 'not folded');
+  FC.messageArrived(); await settle();   // no list: the card's own list counts
+  assert.ok(toggleOf(cardIn(list)), 'folded when no list is named and the card is in the target');
+});
+
+test('(d) pressing the header unfolds (rows back, aria-expanded true, focus on the first button); pressing again folds', async () => {
   const { FC, D } = load();
   const list = D.node('div'); list.appendChild(D.node('div'));
   FC.chatShown('harbor', list); await settle();
-  list.appendChild(D.node('div')); await settle();
+  list.appendChild(D.node('div')); FC.messageArrived(list); await settle();
   const card = cardIn(list);
   toggleOf(card).click();
   assert.strictEqual(list.children[list.children.length - 1], card);
@@ -270,23 +293,36 @@ test('a chat switch away and back does not unfold; a new message while unfolded 
   const { FC, D } = load();
   const a = D.node('div'); const b = D.node('div');
   FC.chatShown('harbor', a); await settle();
-  a.appendChild(D.node('div')); await settle();
+  a.appendChild(D.node('div')); FC.messageArrived(a); await settle();
   assert.ok(toggleOf(cardIn(a)));
   FC.chatShown('other', b); await settle();
   FC.chatShown('harbor', a); await settle();
   assert.ok(toggleOf(cardIn(a)), 'still folded');
   toggleOf(cardIn(a)).click();
-  a.appendChild(D.node('div')); await settle();
+  a.appendChild(D.node('div')); FC.messageArrived(a); await settle();
   assert.strictEqual(toggleOf(cardIn(a)).getAttribute('aria-expanded'), 'false');
 });
 
-test('(d) the Settings page copy from renderInto never folds', async () => {
+test('(e0) with every row owner-locked, unfolding keeps focus on the toggle', async () => {
+  const { FC, D, card } = load();
+  card.entries[0].canSwitch = false;
+  const list = D.node('div'); list.appendChild(D.node('div'));
+  FC.chatShown('harbor', list); await settle();
+  FC.messageArrived(list); await settle();
+  toggleOf(cardIn(list)).click();
+  const t = toggleOf(cardIn(list));
+  assert.strictEqual(t.getAttribute('aria-expanded'), 'true');
+  assert.deepStrictEqual(buttonsIn(cardIn(list)), [t], 'no row buttons');
+  assert.strictEqual(D.focused.el, t, 'focus stays on the (new) toggle');
+});
+
+test('(e) the Settings page copy from renderInto never folds', async () => {
   const { FC, D } = load();
   const box = D.node('div'); D.node('div');
   const list = D.node('div');
   await FC.renderInto(box);
   FC.chatShown('harbor', list); await settle();
-  list.appendChild(D.node('div')); box.appendChild(D.node('div')); await settle();
+  list.appendChild(D.node('div')); FC.messageArrived(list); box.appendChild(D.node('div')); await settle();
   assert.ok(toggleOf(cardIn(list)), 'the chat copy folded');
   const page = box.children.find(isCard);
   assert.ok(page, 'the page copy is drawn');
@@ -331,42 +367,21 @@ test('(f) second admin: every open entry locked (canSwitch false) says "until th
   assert.strictEqual(await mk(() => {}), 'One new feature is off until you say yes.');
 });
 
-test('the chat drawing its saved messages right after the card is placed does not fold it (quiet window)', async () => {
-  const { FC, D } = load();
-  const list = D.node('div');
-  FC.chatShown('harbor', list);
-  await settle();
-  CLOCK.t -= 2900;   // back to just after the card arrived: the history draw happens now
-  for (let i = 0; i < 3; i++) { const b = D.node('div'); b.className = 'msg'; list.appendChild(b); }
-  await settle();
-  const card = list.children.find((k) => String(k.className).includes('feature-card'));
-  assert.ok(card, 'card present');
-  assert.ok(!card.children.some((k) => String(k.className).includes('fc-toggle')), 'not folded');
-});
-
-test('an older message loaded above the card does not fold it', async () => {
-  const { FC, D } = load();
-  const list = D.node('div'); list.appendChild(D.node('div'));
-  FC.chatShown('harbor', list);
-  await settle();
-  const old = D.node('div'); old.className = 'msg';
-  list.insertBefore(old, list.children[0]);
-  await settle();
-  const card = list.children.find((k) => String(k.className).includes('feature-card'));
-  assert.ok(!card.children.some((k) => String(k.className).includes('fc-toggle')), 'not folded');
-});
-
-test('a late history draw (many messages at once, after the quiet window) does not fold it; one new reply then does', async () => {
-  const { FC, D } = load();
-  const list = D.node('div');
-  FC.chatShown('harbor', list);
-  await settle();
-  for (let i = 0; i < 5; i++) { const b = D.node('div'); b.className = 'msg'; list.appendChild(b); }   // one task, one batch of records
-  await settle();
-  let card = list.children.find((k) => String(k.className).includes('feature-card'));
-  assert.ok(!card.children.some((k) => String(k.className).includes('fc-toggle')), 'not folded by the history');
-  const reply = D.node('div'); reply.className = 'msg'; list.appendChild(reply);
-  await settle();
-  card = list.children.find((k) => String(k.className).includes('feature-card'));
-  assert.ok(card.children.some((k) => String(k.className).includes('fc-toggle')), 'folded by the reply');
+test('(g) messageArrived with focus inside the card moves focus to the toggle; focus elsewhere is left alone', async () => {
+  for (const inside of [true, false]) {
+    const { FC, D, d } = load();
+    const list = D.node('div'); list.appendChild(D.node('div'));
+    FC.chatShown('harbor', list); await settle();
+    const card = cardIn(list);
+    card.contains = (x) => allNodes(card).includes(x);
+    const other = D.node('textarea');
+    const turnOn = buttonsIn(card).find((b) => b.textContent === 'Turn on');
+    d.activeElement = inside ? turnOn : other;
+    D.focused.el = d.activeElement;
+    FC.messageArrived(list);
+    const t = toggleOf(card);
+    assert.ok(t, 'folded');
+    if (inside) assert.strictEqual(D.focused.el, t, 'focus moved to the toggle');
+    else assert.strictEqual(D.focused.el, other, 'focus untouched');
+  }
 });

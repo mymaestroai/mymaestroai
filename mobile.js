@@ -13251,6 +13251,7 @@ async function sendMessage(fallback) {
   const userEl = fallback ? fallback.userEl : addUserBubble(text, images);
   if (!fallback) setBubbleTime(userEl, msgTimeLabel(Date.now()));
   const bubble = addAssistantBubble();
+  try { window.FeatureCard && FeatureCard.messageArrived($('messages')); } catch { /* cosmetic */ }   // a live send: the person's message and the reply bubble just landed
   bubble.body.innerHTML = '<span style="opacity:.6">⏳ Thinking…</span>';
   scrollChat(true);
 
@@ -15112,6 +15113,7 @@ function onTurnStart(ev) {
         if (!card) addNote(`⚡ ${ev.origin?.kind === 'user' ? 'sent from another device' : originLabel(ev.origin)} — ${timeLabel()}`);
         setBubbleTime(addUserBubble(ev.message, savedImageUrls(ev.images)), msgTimeLabel(Date.parse(ev.startedAt) || Date.now()));   // the pictures the line was sent with
       }
+      try { window.FeatureCard && FeatureCard.messageArrived($('messages')); } catch { /* cosmetic */ }   // a live hub-started turn: its reply bubble is about to land
       return addAssistantBubble('…');
     };
     const lastBefore = chatEl().lastElementChild;

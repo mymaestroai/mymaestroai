@@ -12481,6 +12481,7 @@
       }
       if (!card) appendSystemNotice(chat.id, `⚡ ${hubOriginLabel(ev.origin)} — ${hubTurnTime()}`);
       const msgId = appendMessage(chat.id, 'assistant', '…', card && card.body);
+      try { window.FeatureCard && FeatureCard.messageArrived(document.getElementById(`messages-${chat.id}`)); } catch { /* cosmetic */ }   // a live hub-started turn's reply bubble just landed
       hubTurns[ev.turnId] = { chatId: chat.id, msgId, text: '', startedAt: Date.parse(ev.startedAt), card, prompt: ev.message };
       if (card) {
         card.msgId = msgId;
@@ -14432,6 +14433,7 @@
 
       const msgId = chat.lastMsgId || appendMessage(chatId, 'assistant', '⏳ Thinking...');
       chat.lastMsgId = msgId;
+      try { window.FeatureCard && FeatureCard.messageArrived(document.getElementById(`messages-${chatId}`)); } catch { /* cosmetic */ }   // a live send: the person's message and the reply bubble just landed
       const sentAt = Date.now();   // after a lost connection, only history the hub saved since then can be this message
 
       try {
