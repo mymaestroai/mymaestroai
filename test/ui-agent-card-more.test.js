@@ -790,3 +790,23 @@ test('the file has no invisible characters, sets nothing as HTML, names no real 
   assert.ok(!/innerHTML|insertAdjacentHTML|document\.write/.test(src));
   assert.ok(!/#[0-9a-fA-F]{6}\b/.test(src), 'no colour in the script');
 });
+
+test('Memory r3: no server marker before the run (status unreadable, nothing kept) and the first good read finds the agent idle: says the result cannot be confirmed and stops', async () => {
+  const realNow = Date.now;
+  try {
+    const S = realNow();
+    Date.now = () => S + 60000;   // the browser clock runs ahead of the server's
+    const clk = clock();
+    const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout, state: { compaction: { pct: 42, tokens: 1, limit: 2, running: false, lastOk: true, lastRunAt: S + 1000 } } });
+    t.state.compactionGetStatus = [500, 500, 500, 500];   // the reads at opening and just before the run fail: nothing usable is kept
+    await openAt(t, 'OPT-0833');
+    t.state.compactionGetStatus = [500];
+    await pressCompress(t);
+    t.state.compactionGetStatus = [];
+    await clk.tick();   // the first good read: idle, with a result the page cannot place before or after the press
+    const shown = rowOf(t.card.el(), 'OPT-0833').textContent;
+    assert.ok(!/✅ Done/.test(shown), 'never Done by the browser clock');
+    assert.match(shown, /could not be confirmed/, shown);
+    assert.strictEqual(clk.live().length, 0, 'no timer left');
+  } finally { Date.now = realNow; }
+});
