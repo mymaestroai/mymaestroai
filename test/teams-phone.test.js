@@ -809,7 +809,9 @@ test('Simple Teams: the status lines: replying (orange) beats background work be
   assert.strictEqual(wes.parts['.sa-live'].textContent, '· wes is working');
   assert.strictEqual(wes.parts['small'].textContent, '', 'a member has one line');
   assert.match(fnSource('simpleDotsIn'), /simpleTmPaint\(b, simpleTmLine\(b\.dataset\.agent, b\.dataset\.tmRank, b\.dataset\.tmBuild === '1'\)\)/);
-  assert.match(fnSource('simpleAgentRow'), /\.sa-dot\.bg-work, \.sa-sub-bg/, 'the blue line opens the work like the ring does');
+  // the ring and the blue line open the chat like the rest of the row; its Working on panel starts collapsed (no HandOffCard.open)
+  assert.doesNotMatch(fnSource('simpleAgentRow'), /HandOffCard\.open|\.sa-sub-bg/, 'no tap on the row asks the panel to open');
+  assert.match(fnSource('simpleAgentRow'), /navigate\('chat', a\.name\)/, 'the row (ring and blue line included) opens the chat');
   assert.match(fnSource('simpleTeamsSig'), /!!r\.build, !!r\.tm\.pill, !!r\.tm\.open/);
 });
 test('Simple CSS (phone sheet): ranks 60/50/40px, sheet x positions (page 54/101, 103/137, 139/169, 103/133, dot 346), pill hit area >= 36px, sticky headers, 36px+ targets', () => {
