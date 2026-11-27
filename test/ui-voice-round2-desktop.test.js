@@ -33,7 +33,7 @@ test('composer: Talk mode chip and a "Voice settings" button sit next to the mic
 
 test('panel: every control of the spec is there and writes the per-device prefs', () => {
   const h = between('function voicePopHtml(', 'function voicePopClose(');
-  for (const s of ['Talk mode', 'Hands-free', 'Tap to talk', 'Voice speed', "Pause before I'm done", 'Wait for me to go on', 'Mic level', 'Interrupt sensitivity', 'Thinking sound', 'Thinking volume', 'Room check', "id('level')"]) assert.ok(h.includes(s), s);
+  for (const s of ['Talk mode', 'Hands-free', 'Tap to talk', 'Voice speed', 'Pause before it answers', 'Wait when I pause to think', 'Mic level', 'How easily I can interrupt it', 'Thinking sound', 'Thinking volume', 'Room check', "id('level')"]) assert.ok(h.includes(s), s);
   const keys = app.match(/const VOICE_POP_KEYS = (\{[^}]*\})/)[1];
   for (const k of ['micLevel', 'interruptSensitivity', 'voiceSpeed', 'endPause', 'continueWait', 'thinkingSound', 'thinkingVolume', 'mode']) assert.ok(keys.includes(k), k);
   assert.match(app, /VOICE_CONTINUE_WAITS = \[1500, 3000, 5000, 8000\]/);

@@ -71,7 +71,7 @@ test('pickers: desktop header next to the model (disabled for members), phone he
   assert.match(app, /\$\{isHubAdmin\(\) \? '' : ' disabled'\}/);
   assert.match(app, /method: 'PATCH', headers: \{ 'Content-Type': 'application\/json' \}, credentials: 'include', body: JSON\.stringify\(\{ effort: level \}\)/);
   assert.match(idx, /\.chat-actions \.effort-pick \{ max-width: 150px;/);
-  assert.match(mh, /<select id="chat-effort-pick" aria-label="Reasoning effort"><\/select>/);
+  assert.match(mh, /<select id="chat-effort-pick" aria-label="Thinking effort"><\/select>/);
   assert.match(mob, /sel\.disabled = !isAdmin\(\);/);
   assert.match(mob, /\$\('chat-effort-pick'\)\?\.addEventListener\('change', changeEffortFromPick\);/);
 });

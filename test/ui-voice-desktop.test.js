@@ -54,7 +54,7 @@ test('settings: Voices section in the tools group, admin controls and per-device
   assert.match(b, /voiceSavePrefs\(localStorage, prefs\)/);
   assert.match(b, /dialogGuard\.savePoint\(/);
   // the default voice and the play sample are admin only
-  const admin = b.slice(b.indexOf('if (admin) {'), b.indexOf('On this device only'));
+  const admin = b.slice(b.indexOf('if (admin) {'), b.indexOf("row('Mic level'"));
   assert.match(admin, /st-voice-default/);
   assert.match(admin, /st-voice-sample/);
   // the meter moves only while the test mic is open

@@ -2343,6 +2343,18 @@
       .st-modal .st-row > label:has(+ .st-info) { max-width: calc(100% - 44px); }
       .st-modal #st-wao-rows + .st-info { float: left; margin: 0 6px 0 0; }
     }
+    /* Settings phase 7 layout. A narrow desktop window: "Create New Agent" (inline min-width 480px) must not be wider than the window. */
+    @media (max-width: 720px) {
+      .question-modal { min-width: 0 !important; width: calc(100vw - 24px); }
+    }
+    /* The P5C rows (drawn by app.js p5cRowHtml) and the Startup values boxes. A number box shows its placeholder and up to 7 digits. */
+    .st-row input[type="number"][data-setting], .st-row input.st-numbox { box-sizing: content-box; width: 12ch; min-width: calc(9ch + 34px); max-width: 100% !important; }
+    .st-row > span[id^="st-p5c-"][data-setting]:has(> select) { flex-wrap: wrap; row-gap: 6px; min-width: 0; max-width: 100%; }   /* the switch and its "Remember for ..." box wrap instead of running into the text after them */
+    .st-row > span[id^="st-p5c-"][id$="-def"] { flex: 1 0 100%; min-width: 0; }   /* the "Default: ..." words sit on their own line under the controls */
+    /* A row that ends in a toggle: the ⓘ (put after the toggle by the help script) is shown right after the label text. */
+    .st-row:has(> .toggle-switch, > span > .toggle-switch) > label:first-child { order: -2; }
+    .st-row:has(> .toggle-switch, > span > .toggle-switch) > .st-info { order: -1; }
+    html.mm-settings-only .st-row:has(> .toggle-switch, > span > .toggle-switch) > label:first-child { flex: 1 1 calc(100% - 44px) !important; max-width: calc(100% - 44px) !important; }
     .st-help-panel { position: fixed; z-index: 10050; width: 360px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; box-sizing: border-box; padding: 14px 16px; background: var(--bg-card); color: var(--text); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: 0 8px 28px var(--shadow-color-pop); font-size: 0.82rem; line-height: 1.45; }
     .st-help-panel:focus { outline: none; }
     .st-help-head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 4px; }

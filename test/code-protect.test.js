@@ -156,7 +156,7 @@ test('Settings: app.js and mobile.js show the switch for admins and post to the 
     const src = fs.readFileSync(path.join(ROOT_DIR, f), 'utf8');
     assert.match(src, /\/api\/behaviour-changes\/protect-own-code/, f);
     assert.match(src, /decision: want/, f);
-    assert.match(src, /Protect your Maestro\\'s own code/, f);
+    assert.match(src, /Protect Maestro\\'s own code/, f);
     assert.match(src, /Also on the Changes page\./, f);
     assert.match(src, /hubMe\.isAdmin \? '<div class="sec-section" id="sec-code-protect-box">/, f);
   }

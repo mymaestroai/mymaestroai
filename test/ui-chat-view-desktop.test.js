@@ -306,7 +306,7 @@ test('reattachIfIdle: main view skips a running hub-started turn (busy card inst
 // ── the toggle ───────────────────────────────────────────────────────────────────────────────────
 test('the Agent work toggle stores the view, repaints the button (aria-pressed) and reloads the open chat in the new view', () => {
   const store = storage(null);
-  const btn = { textContent: 'Agent work', attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } };
+  const btn = { textContent: 'Show agent work', attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } };
   const reloads = [];
   const chats = { c1: { id: 'c1', agent: 'a', viewLoaded: 'main' }, c2: { id: 'c2', agent: 'b', viewLoaded: 'main' }, g: { id: 'g', isGroup: true } };
   const body = `${extract('soloViewToggle')}\n${extract('soloViewReload')}\n${extract('soloViewPaint')}\nreturn { soloViewToggle };`;
@@ -314,11 +314,11 @@ test('the Agent work toggle stores the view, repaints the button (aria-pressed) 
     V.chatViewGet, V.chatViewSet, store, { querySelectorAll: () => [btn] }, chats, 'c1', (id) => { reloads.push(id); return Promise.resolve(); }, () => {});
   assert.strictEqual(soloViewToggle(), 'all');
   assert.strictEqual(store.v, 'all', 'stored');
-  assert.strictEqual(btn.textContent, 'Agent work ✓');
+  assert.strictEqual(btn.textContent, 'Show agent work ✓');
   assert.strictEqual(btn.attrs['aria-pressed'], 'true');
   assert.deepStrictEqual(reloads, ['c1'], 'the visible chat reloads now; the other when it comes to the front');
   assert.strictEqual(soloViewToggle(), 'main');
-  assert.strictEqual(btn.textContent, 'Agent work');
+  assert.strictEqual(btn.textContent, 'Show agent work');
   assert.strictEqual(btn.attrs['aria-pressed'], 'false');
   // lazy reload of a chat that was behind
   assert.match(src, /opened\.viewLoaded !== undefined\) soloViewReload\(opened\);/);
@@ -326,7 +326,7 @@ test('the Agent work toggle stores the view, repaints the button (aria-pressed) 
 
 test('toolbar markup and CSS: the button sits next to Recall; archived entries are marked; styles exist', () => {
   const tb = src.slice(src.indexOf('id="recall-btn-${chatId}"'));
-  assert.match(tb.slice(0, 700), /id="view-btn-\$\{chatId\}"[^>]*aria-pressed="false"[^>]*title="Show the turns the hub started \(consultations, scheduled tasks, job notices\)">Agent work<\/button>/);
+  assert.match(tb.slice(0, 700), /id="view-btn-\$\{chatId\}"[^>]*aria-pressed="false"[^>]*title="Show the turns the hub started \(consultations, scheduled tasks, job notices\)">Show agent work<\/button>/);
   assert.match(src, /soloViewPaint\(\);\s*\/\/ the "Agent work" toggle/);
   assert.match(src, /\$\{times\[i\]\} · from the archive/);
   assert.match(src, /classList\.add\('msg-archived'\)/);

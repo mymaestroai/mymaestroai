@@ -58,7 +58,7 @@ test('under 350px the theme button moves out of the bar (the settings sheet keep
   const n = R.find((r) => /max-width:\s*349px/.test(r.media) && /simple-theme-btn/.test(r.sel));
   assert.ok(n && hides(n));
   const js = fs.readFileSync(path.join(__dirname, '..', 'mobile.js'), 'utf8');
-  assert.match(js, /<div class="ss-title">Appearance<\/div>/);
+  assert.match(js, /<div class="ss-title">Light or dark<\/div>/);
 });
 
 test('wide Simple (the sidebar layout) is unchanged: pill, mark and avatar hidden from 700px', () => {

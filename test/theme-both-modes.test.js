@@ -178,13 +178,13 @@ test('notice: shows only for normal mode + quiet + resolves dark + not seen', ()
 test('pages: Appearance before Interface style on desktop and phone, notice placed in the banner stack / Agents screen', () => {
   const app = read('app.js'), mob = read('mobile.js');
   const a = app.slice(app.indexOf('function lookSectionPaint'));
-  assert.ok(a.indexOf('themeControl') > 0 && a.indexOf('themeControl') < a.indexOf("'Interface style for new members'"));
+  assert.ok(a.indexOf('themeControl') > 0 && a.indexOf('themeControl') < a.indexOf("'Look of the interface for new members'"));
   assert.match(a, /host\.insertBefore\(ap\.el, picker\)/);
   // The theme line sits in the banner stack before the one review banner (P4-15: the phone-layout bar, the theme line, then the review banner).
   assert.match(app, /\['hub-phone-layout-notice', 'hub-theme-notice', 'hub-review-banner'\]\) \{/);
   assert.match(app, /try \{ themeNoticeShow\(\); \}/);
   const p = mob.slice(mob.indexOf('<div class="sec-section" id="prof-theme-sec" hidden>'));
-  assert.ok(p.indexOf('prof-theme-sec') < p.indexOf('Interface style</div>'));
+  assert.ok(p.indexOf('prof-theme-sec') < p.indexOf('Look of the interface</div>'));
   assert.ok(mob.indexOf("simpleThemeCtl(themeNoticeChosen)") < mob.indexOf("lookPickerPaint($('prof-looks'))"));
   assert.match(mob, /themeNoticeShow\(\); \} catch/);
   // phone: inside #screen-agents next to the health notice, not in the chat screen's composer

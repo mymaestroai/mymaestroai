@@ -86,7 +86,7 @@ test('html: controls per key, escaped, data-setting on each row', () => {
   assert.ok(html.includes('data-setting="OPT-0991"'));
   assert.ok(html.includes('Saved. Restart your Maestro to use it.'));
   assert.ok(html.includes('Takes effect after a restart.'));
-  assert.ok(html.includes('Expert values') && html.includes('Set in the .env file') && html.includes('Protected settings'));
+  assert.ok(html.includes('Startup values') && !html.includes('Expert values') && html.includes('Set in the .env file') && html.includes('Protected settings'));
   assert.ok(html.includes('Change it in the .env file in your Maestro&#39;s folder; takes effect after a restart.'));
   assert.ok(html.includes('<select id="st-env-HUB_MEMORY_HEALTH" data-envin="HUB_MEMORY_HEALTH">'));   // the id is the record's anchor for its help
   const evil = X.expertHtml(X.models([row('HUB_TZ', { writable: true, value: '"><script>x</script>', set: true })], records, null));

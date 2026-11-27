@@ -1,5 +1,5 @@
 {
-  "version": "c64a05ef85559ef605d1936fe2eabad17743b697",
+  "version": "b22da9d0b66cf03f5183b80c86a64dd97458c2a1",
   "records": [
     {
       "id": "OPT-0001",
@@ -899,7 +899,7 @@
     {
       "id": "OPT-0030",
       "kind": "setting",
-      "name": "Wait if I pause",
+      "name": "Wait when I pause to think",
       "labels": [
         "Wait for me to go on"
       ],
@@ -928,7 +928,7 @@
     {
       "id": "OPT-0031",
       "kind": "setting",
-      "name": "How easily it is interrupted",
+      "name": "How easily I can interrupt it",
       "labels": [
         "Interrupt sensitivity"
       ],
@@ -6974,7 +6974,7 @@
     {
       "id": "OPT-0227",
       "kind": "setting",
-      "name": "Voice for everyone",
+      "name": "Voice on or off for everyone",
       "labels": [
         "Voice conversations: On for everyone on this Maestro",
         "Voice conversations",
@@ -14089,7 +14089,7 @@
     {
       "id": "OPT-0447",
       "kind": "setting",
-      "name": "Busy agents at the top",
+      "name": "Show busy agents at the top",
       "labels": [
         "Show active agents at the top of the agent list",
         "⬆ Active agents at the top: On/Off"
@@ -26996,7 +26996,7 @@
     {
       "id": "OPT-0899",
       "kind": "indicator",
-      "name": "Music hint for calls",
+      "name": "Pause music for a clearer call",
       "labels": [
         "Music playing? Pause it for a clearer call"
       ],
@@ -28804,7 +28804,7 @@
     {
       "id": "OPT-0960",
       "kind": "setting",
-      "name": "Hub briefing for the lead",
+      "name": "Briefing for your lead",
       "labels": [
         "hubBrief"
       ],

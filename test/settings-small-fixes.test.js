@@ -257,7 +257,7 @@ function orPage() {
     return reply(JSON.parse(init.body), url);
   };
   const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const src = `${FAST}\nlet __modelListCache = null;\n${app.slice(a, b)}\nreturn { renderOpenRouterBox, saveOpenRouter, loadOpenRouterBox, setView: (v) => { orView = v; } };`;
+  const src = `${FAST}\n${app.match(/function plural\(n, one, many\) \{[^\n]*\}/)[0]}\nlet __modelListCache = null;\n${app.slice(a, b)}\nreturn { renderOpenRouterBox, saveOpenRouter, loadOpenRouterBox, setView: (v) => { orView = v; } };`;
   const api = new Function('document', 'fetch', 'dialogGuard', 'esc', 'hubToast', 'stSum', src)(d.doc, fetch, guard, esc, (m) => toasts.push(m), () => {});
   const models = [{ id: 'vendor/a', name: 'A', tools: true, created: 3 }, { id: 'vendor/b', name: 'B', tools: true, created: 2 }, { id: 'other/c', name: 'C', tools: true, created: 1 }];
   api.setView({ hasKey: true, chosen: ['vendor/a'], custom: true, models });

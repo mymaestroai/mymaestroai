@@ -73,7 +73,7 @@ test('a badly set-up, network-exposed install: every big hole is critical, each 
   assert.match(byId(r, 'root-account').detail, /sudo needs no password/);
   assert.match(byId(r, 'root-account').detail, /docker group/);
   assert.strictEqual(byId(r, 'root-reach').level, 'warn');
-  assert.match(byId(r, 'root-reach').title, /^1 agent\(s\) besides the lead/);
+  assert.match(byId(r, 'root-reach').title, /^1 agent besides the lead has a shell/);
   assert.strictEqual(byId(r, 'tokens-anyhost').level, 'warn');
   assert.strictEqual(byId(r, 'root-grants').level, 'info');
   assert.strictEqual(byId(r, 'lan-services-critical').level, 'critical', 'Ollama on all interfaces of a machine with a public address');
@@ -416,7 +416,7 @@ test('admin two-factor optional: an admin without it is a warning, critical when
   assert.strictEqual(w.level, 'warn');
   assert.strictEqual(w.group, 'accounts');
   assert.strictEqual(w.title, 'Two-factor sign-in is optional for admins');
-  assert.strictEqual(w.detail, '1 admin account(s) can sign in with a password alone.');
+  assert.strictEqual(w.detail, '1 admin account can sign in with a password alone.');
   assert.strictEqual(w.fix, 'Settings, Security: turn on "Require two-factor sign-in for admins".');
   assert.strictEqual(byId(quiet, 'totp'), undefined);
   const open = await adminsCheck([ADMIN_OFF], { requireAdmin2fa: false }, true);
@@ -439,7 +439,7 @@ test('admin two-factor required (default, or anything but false): output is the 
     assert.deepStrictEqual(r.items, base.items);
   }
   assert.strictEqual(byId(base, 'totp').level, 'warn');
-  assert.strictEqual(byId(base, 'totp').title, '1 admin account(s) without two-factor');
+  assert.strictEqual(byId(base, 'totp').title, '1 admin account without two-factor');
   assert.strictEqual(byId(base, 'admin-2fa-optional'), undefined);
   assert.strictEqual(byId(await adminsCheck([ADMIN_OFF], {}, true), 'totp').level, 'critical');
 });

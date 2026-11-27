@@ -118,7 +118,7 @@ test('Settings: a Voice group right after Appearance, not in Tools; heading "Voi
   assert.match(h, /<h4>Voice<\/h4>/);
   assert.doesNotMatch(h, /<h4>Voices<\/h4>/);
   assert.match(h, /<span class="st-search-words" hidden>voice microphone mic talk speak speech call dictation<\/span>/);
-  assert.match(h, /if \(admin\) h \+= row\('Voice conversations', `<label[^\n]*id="st-voice-enabled" onchange="voiceSettingEnable\(this\)"> On for everyone on this Maestro<\/label>`\);/);
+  assert.match(h, /if \(admin\) h \+= row\('Voice on or off for everyone', `<label[^\n]*id="st-voice-enabled" onchange="voiceSettingEnable\(this\)"> On for everyone on this Maestro<\/label>`\);/);
   // the search matches the section's textContent, and hidden words are part of it
   assert.match(src('stSearch'), /text: `\$\{s\.textContent\} \$\{wordHits\(s\)/);   // lower-cased by STG.search
 });
@@ -402,7 +402,7 @@ test('Guide: a Voice item after Agents; help.html and welcome.html mention talki
 
 test('Settings, Voice: the switch row holds only the switch; a Status row under it holds the sentence, the bar, Retry now and the raw error, in that order', () => {
   const h = src('voiceSettingsHtml');
-  const sw = h.slice(h.indexOf("row('Voice conversations'"), h.indexOf("h += row('Status'"));
+  const sw = h.slice(h.indexOf("row('Voice on or off for everyone'"), h.indexOf("h += row('Status'"));
   assert.match(sw, /id="st-voice-enabled"/);
   for (const id of ['st-voice-status', 'st-voice-progress', 'st-voice-retry', 'st-voice-raw']) assert.ok(!sw.includes(id), id + ' is not in the switch row');
   const st = h.slice(h.indexOf("h += row('Status'"), h.indexOf("row('Engines'"));
@@ -415,7 +415,7 @@ test('Settings, Voice: the switch row holds only the switch; a Status row under 
   const member = st.slice(st.indexOf(': `<span id="st-voice-status"'));
   assert.match(member, /id="st-voice-status"/);
   assert.ok(!/id="st-voice-(progress|retry|raw)"/.test(member));
-  assert.match(h, /if \(admin\) h \+= row\('Voice conversations'/, 'the switch row is the admin\'s only');
+  assert.match(h, /if \(admin\) h \+= row\('Voice on or off for everyone'/, 'the switch row is the admin\'s only');
 });
 
 test('hint: its bottom edge is 10 px above the top of the whole composer row, not the mic button', () => {

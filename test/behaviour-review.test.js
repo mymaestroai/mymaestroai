@@ -64,7 +64,7 @@ test('scheduleReview: one task for the lead with the right prompt, and every pen
   }
   assert.match(p, /maestro: primary, model anthropic\/x, owned by a member: no/);
   assert.match(p, /kim_helper: primary, model openai\/y, owned by a member: yes/);
-  assert.match(p, /1 admin\(s\), 1 member\(s\)/); assert.match(p, /openai\/y/); assert.match(p, /Providers connected: anthropic\./); assert.match(p, /sam: 3 requests/);
+  assert.match(p, /1 admin, 1 member/); assert.match(p, /openai\/y/); assert.match(p, /Providers connected: anthropic\./); assert.match(p, /sam: 3 requests/);
   // the message the lead gets names the hub, not the owner
   const msg = t.inst.message(t.inst.tasks.get(task.id), { dueAt: task.nextRunAt }, { late: false });
   assert.match(msg, /set by the hub \(a change to how agents behave is waiting for review\)/);

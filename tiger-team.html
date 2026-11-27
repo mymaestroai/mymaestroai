@@ -764,6 +764,8 @@
   <script src="/ui-file-card.js"></script>
   <script>
     window.dialogGuard = typeof createDialogGuard === 'function' ? createDialogGuard({ trackSaves: false }) : null;
+    // '1 alert' / '3 alerts': real singular and plural words for a count.
+    function plural(n, one, many) { return `${n} ${Number(n) === 1 ? one : (many === undefined ? one + 's' : many)}`; }
     // Every agent- or server-supplied string that goes into markup passes through this.
     function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
     // ── Parse URL params ──
@@ -2239,7 +2241,7 @@
           case 'tt_soft_close':
             // Notify dashboard about soft-closed related alerts
             localStorage.setItem('panther_verdict_update', JSON.stringify({ alert_ids: gw.alert_ids, verdict: 'soft_close', reason: gw.reason, source_alert: gw.source_alert, ts: Date.now() }));
-            addSystemMsg(`↳ Soft-closed ${gw.alert_ids.length} related alert(s): ${gw.alert_ids.join(', ')} — ${gw.reason}`);
+            addSystemMsg(`↳ Soft-closed ${plural(gw.alert_ids.length, 'related alert', 'related alerts')}: ${gw.alert_ids.join(', ')} — ${gw.reason}`);
             break;
 
           case 'tt_complete':

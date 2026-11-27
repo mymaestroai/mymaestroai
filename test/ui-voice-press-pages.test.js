@@ -397,7 +397,7 @@ const HELP_PRESS = 'Tap to talk: a voice call where the agent answers aloud; tap
 const HELP_DICT = 'Dictation: tap the mic to turn what you say into text in the message box.';
 const inOrder = (s, list) => { let at = -1; for (const x of list) { const i = s.indexOf(x, at + 1); assert.ok(i > at, 'in order: ' + x); at = i; } };
 test('desktop pickers: Settings select, the voice panel segment and the chip list Hands-free, Tap to talk, Dictation with values handsfree, press, tap', () => {
-  const sel = between(app, 'id="st-voice-mode"', "h += row('Interrupt sensitivity'");
+  const sel = between(app, 'id="st-voice-mode"', "h += row('How easily I can interrupt it'");
   inOrder(sel, ['value="handsfree"', '>Hands-free<', 'value="press"', '>Tap to talk<', 'value="tap"', '>Dictation<']);
   assert.match(app, /mode: mode\.value === 'tap' \|\| mode\.value === 'press' \? mode\.value : 'handsfree'/, 'the save keeps the three values');
   const pop = between(app, 'function voicePopHtml(', 'function voicePopClose(');
@@ -427,7 +427,7 @@ test('the help texts of both pages name all three modes: Hands-free, Tap to talk
   assert.ok(between(mhtml, 'id="cp-help"', '</p>').includes(SENT), 'mobile.html #cp-help');
   assert.ok(/<div class="vcb-help">\$\{VOICE_CALL_HELP\}<\/div>/.test(app), 'the desktop call bar shows it');
   const label = (src) => ['Hands-free', 'Tap to talk', 'Dictation'].every(t => src.includes(t));
-  assert.ok(label(between(app, 'function voicePopHtml(', 'function voicePopClose(')) && label(between(app, 'id="st-voice-mode"', "h += row('Interrupt sensitivity'")), 'desktop pickers');
+  assert.ok(label(between(app, 'function voicePopHtml(', 'function voicePopClose(')) && label(between(app, 'id="st-voice-mode"', "h += row('How easily I can interrupt it'")), 'desktop pickers');
   assert.ok(label(between(mhtml, 'name="vp-mode" value="handsfree"', 'id="vp-speed"')) && label(between(mob, 'name="vs-mode" value="handsfree"', "'<p class=\"vs-hint vs-help\">")), 'phone pickers');
   // the idle mic of the desktop: label and title by mode
   const idle = between(app, 'function voiceMicIdleLabel()', 'function voiceCallPaintBtn(');
