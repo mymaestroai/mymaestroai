@@ -6089,6 +6089,13 @@
       const def = byId('def'), use = byId('use');
       if (def) def.hidden = !unset;
       if (use) use.hidden = unset;
+      // an address with no override of its own shows the one in effect (an address from the startup environment wins over the built-in one)
+      if (r.kind === 'url' && unset) {
+        const p = (p5cData && p5cData.providers && p5cData.providers[r.provider]) || {};
+        const effective = p.url || p.fallbackUrl || r.dflt;
+        el.placeholder = effective;
+        if (def) def.textContent = effective === r.dflt ? STG.p5cDefaultText(r) : `In use now: ${effective} (from the startup settings).`;
+      }
     }
     // The model lists (member models, plan switch targets) come from the list the pickers use; then every row is painted.
     // Every row is painted first from the saved settings (a row that does not need the model list never waits for it); when the list

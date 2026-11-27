@@ -218,8 +218,15 @@ test('model list: only the controls that list models get options, keeping their 
   assert.deepStrictEqual(one.options.map((x) => x.value), ['', 'claude-sdk/a', 'gpt-x', 'custom-x']);
   assert.strictEqual(one.value, 'custom-x', 'selection kept, even one the list lacks');
   const focused = sel('claude-sdk/a'); focused.focus = true;
+  const on = {}; focused.addEventListener = (ev, fn, opt) => { on[ev] = { fn, opt }; };
   G.p5cFillModels(mr, ['gpt-x'], () => focused, o);
   assert.deepStrictEqual(focused.options.map((x) => x.value), [''], 'a focused control is not touched');
+  // ... and is filled once the person leaves it, keeping what they chose by then (review r5)
+  assert.ok(on.blur && on.blur.opt && on.blur.opt.once === true, 'filled on blur, once');
+  focused.focus = false; focused.value = 'claude-sdk/a';
+  on.blur.fn();
+  assert.deepStrictEqual(focused.options.map((x) => x.value), ['', 'gpt-x', 'claude-sdk/a']);
+  assert.strictEqual(focused.value, 'claude-sdk/a');
   const pm = row('OPT-0946'), fam = { fable: sel('claude-sdk/a'), opus: sel(''), sonnet: sel('') };
   G.p5cFillModels(pm, ['claude-sdk/a', 'gpt-x'], (s) => fam[s], o);
   assert.deepStrictEqual(fam.fable.options.map((x) => x.value), ['', 'claude-sdk/a']);
@@ -242,4 +249,14 @@ test('Q6: a row with note crlf says the line ends in a Windows line break', () =
   const html = X.expertHtml(X.models(rows, records, null));
   assert.ok(html.includes('This line ends in a Windows line break, so it is not read.'), html);
   assert.ok(!html.includes('starts with export'));
+});
+
+test('an address with no override of its own shows the address in effect, also one from the startup settings (review r5)', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'app.js'), 'utf8');
+  const i = src.indexOf('function p5cPaint(r)');
+  const body = src.slice(i, src.indexOf('\n    }\n', i));
+  assert.ok(/r\.kind === 'url' && unset/.test(body), 'url rows handle the inherited state');
+  assert.ok(/p\.url \|\| p\.fallbackUrl \|\| r\.dflt/.test(body), 'the address in effect first, then where a reset leads, then the built-in one');
+  assert.ok(/el\.placeholder = effective/.test(body));
+  assert.ok(body.includes('In use now: ${effective} (from the startup settings).'));
 });
