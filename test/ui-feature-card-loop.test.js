@@ -140,3 +140,36 @@ test('backstop: against an unknown element that also forces itself last, the car
   assert.strictEqual(s.runaway, false, `observer deliveries ran away (${s.deliveries})`);
   assert.ok(s.deliveries < 1000, `bounded, got ${s.deliveries}`);
 });
+
+// The desktop's busy card keeps itself last only when it paints (no observer): a bubble can land after it in between.
+function desktopBusy(D, list) { const el = D.node('div'); el.className = 'chat-busy-card'; list.appendChild(el); return el; }
+const order = (list, names) => list.children.map((k) => names.get(k) || (String(k.className).includes('feature-card') ? 'card' : '?'));
+
+test('desktop busy card without an observer: a bubble after it gives bubble, card, busy card (not busy, bubble, card)', async () => {
+  const { FC, D } = load();
+  const list = D.node('div');
+  const busy = desktopBusy(D, list);
+  FC.chatShown('harbor', list);
+  await settle();
+  const bubble = D.node('div'); bubble.className = 'msg';
+  list.appendChild(bubble);
+  await settle();
+  assert.strictEqual(D.stats().runaway, false);
+  assert.deepStrictEqual(order(list, new Map([[busy, 'busy'], [bubble, 'bubble']])), ['bubble', 'card', 'busy']);
+});
+
+test('the card already last with the busy card higher up: the busy card goes back to the end, the card just above it', async () => {
+  const { FC, D } = load();
+  const list = D.node('div');
+  FC.chatShown('harbor', list);
+  await settle();
+  const busy = desktopBusy(D, list);   // painted after the card ...
+  const bubble = D.node('div');
+  list.insertBefore(busy, list.children[0]);   // ... and moved above it by a redraw
+  list.appendChild(bubble);
+  await settle();
+  assert.strictEqual(D.stats().runaway, false);
+  const o = order(list, new Map([[busy, 'busy'], [bubble, 'bubble']]));
+  assert.deepStrictEqual(o.slice(-2), ['card', 'busy']);
+  assert.ok(o.indexOf('bubble') < o.indexOf('card'), o.join(','));
+});
