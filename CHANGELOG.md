@@ -6,6 +6,11 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **The quick switcher speaks the sidebar's words.** Ctrl+K (⌘K on a Mac) shows each agent's state in exactly the words the sidebar uses, lists agents waiting for your answer first, shows an agent's short name only when that is what you typed, and its waiting marker pulses like the sidebar's.
+- **The Working on summary is never cut off.** On a narrow screen it wraps to a second line instead of ending in "…", and the time of the next check always shows in full.
+- **The call display picker is readable everywhere.** Its closed list keeps readable colours in light and dark on every browser, and it is called Call display wherever you choose it.
+- **The monthly cap message names your agent as you know it.** When the monthly pay-per-use cap stops an agent, the message uses the agent's display name and tells you to raise the monthly cap in Settings.
+- **Plan usage uses the same words everywhere.** The badge, its chooser and the hover say "5-hour" and "Claude plan", the same on the computer and the phone.
 - **One runaway program can no longer take your Maestro down.** Every background job, and every command an agent runs on this computer, now has a memory limit (automatic: a quarter of the computer's memory, between 4 and 64 GB; ask your Maestro to change it). A job or command that goes past it is stopped on its own and says it used too much memory, instead of the computer running out and stopping your Maestro and every agent. Your Maestro is also marked to be the last thing the system stops when memory runs short; this takes effect after the next update or restart.
 
 - **Your main agents split complex work into parallel parts by themselves.** For a complex job they run independent parts at the same time on fitting models and check every part before using it, without you having to ask; work that is better done in one thread, such as one piece of writing or a chain of decisions, stays in one thread. On an existing install it waits for your decision under Settings, For your review.

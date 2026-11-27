@@ -113,5 +113,5 @@ test('mobile: owner query, Security sheet, sign out, member gating, 401 redirect
 });
 
 test('service worker version bumped so phones pick up the new mobile.js', () => {
-  assert.match(sw, /const VERSION = 'hub-mobile-v101';/);
+  assert.match(sw, /const VERSION = 'hub-mobile-v103';/);
 });

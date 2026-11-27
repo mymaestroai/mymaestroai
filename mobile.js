@@ -1609,11 +1609,11 @@ function planBadgeHover(view, levels) {
   const part = (x, main) => {
     const w = x.w, s = planState(w, levels);
     if (x.kind === 'five') return planUsedUp(w) ? `5-hour window: used up until ${planWhenText(w)}` : `5-hour window ${s.pct}%`;
-    const who = x.kind === 'plan' ? 'All models' : w.label;
+    const plan = x.kind === 'plan', who = plan ? 'Claude plan' : w.label;   // the whole plan is "Claude plan" here as on the badge
     if (planUsedUp(w)) return `${who}: used up until ${planWhenText(w)}`;
     return s.extra
-      ? `${who}: the weekly Claude plan is used up until ${planWhenText(w)}; extra usage is paying`
-      : `${who}: ${s.pct}%${main ? " of this week's Claude plan allowance" : ''}`;
+      ? `${who}: ${plan ? 'used up this week' : 'the weekly Claude plan is used up'} until ${planWhenText(w)}; extra usage is paying`
+      : `${who}: ${s.pct}%${main ? (plan ? " of this week's allowance" : " of this week's Claude plan allowance") : ''}`;
   };
   return [view.main, ...view.extras].map((x, i) => part(x, i === 0)).join('; ');
 }

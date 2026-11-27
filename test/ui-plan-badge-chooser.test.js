@@ -197,7 +197,7 @@ for (const kind of KINDS) {
     if (kind === 'desktop') {
       assert.ok(t.startsWith("Your Claude plan has used 80% of this week's allowance (resets WHEN-11-30); Fable has used 95% (resets WHEN-11-30); 5-hour window 62%"), t);
     } else {
-      assert.strictEqual(t, "All models: 80% of this week's Claude plan allowance; Fable: 95%; 5-hour window 62%");
+      assert.strictEqual(t, "Claude plan: 80% of this week's allowance; Fable: 95%; 5-hour window 62%");
     }
     p.data = D([W(null, 80)], 40); p.paint();
     assert.ok(!p.badge.title.includes('5-hour'), 'a window that is not shown is not in the hover: ' + p.badge.title);

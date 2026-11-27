@@ -194,8 +194,8 @@ test('phone header: 5h suffix last; title reads plan, family, 5-hour', () => {
   const el = phoneBadge(data([W(null, 80), W('fable', 95)], 62), FABLE);
   assert.strictEqual(el.textContent, 'Claude plan 80% this week · Fable 95% · 5-hour 62%');
   assert.strictEqual(el.className, 'sub hot');
-  assert.strictEqual(el.title, "All models: 80% of this week's Claude plan allowance; Fable: 95%; 5-hour window 62%");
-  assert.strictEqual(phoneBadge(data([W(null, 80)]), FABLE).title, "All models: 80% of this week's Claude plan allowance");
+  assert.strictEqual(el.title, "Claude plan: 80% of this week's allowance; Fable: 95%; 5-hour window 62%");
+  assert.strictEqual(phoneBadge(data([W(null, 80)]), FABLE).title, "Claude plan: 80% of this week's allowance");
   assert.strictEqual(phoneBadge(data([W('fable', 30)]), FABLE).title, "Fable: 30% of this week's Claude plan allowance");
 });
 // ── a refused window says "used up" in words, in the text and the hover, on both pages ──
@@ -284,14 +284,14 @@ test('phone header: plan on extra usage + Fable refused; plan refused alone; pla
   const a = phoneBadge(data([W(null, 100, { extraUsage: true }), W('fable', 60, { rejected: true })]), FABLE);
   assert.strictEqual(a.textContent, 'Claude plan 100% · extra usage this week · Fable used up');
   assert.strictEqual(a.className, 'sub refused');
-  assert.ok(a.title.includes('All models: the weekly Claude plan is used up until ' + PHONE_WHEN('2026-11-30T20:00:00Z') + '; extra usage is paying; Fable: used up until ' + PHONE_WHEN('2026-11-30T20:00:00Z')), a.title);
+  assert.ok(a.title.includes('Claude plan: used up this week until ' + PHONE_WHEN('2026-11-30T20:00:00Z') + '; extra usage is paying; Fable: used up until ' + PHONE_WHEN('2026-11-30T20:00:00Z')), a.title);
   const b = phoneBadge(data([W(null, 70, { rejected: true }), W('fable', 40)]), FABLE);
   assert.strictEqual(b.textContent, 'Claude plan used up this week');
   assert.strictEqual(b.className, 'sub refused');
-  assert.strictEqual(b.title, 'All models: used up until ' + PHONE_WHEN('2026-11-30T20:00:00Z'));
+  assert.strictEqual(b.title, 'Claude plan: used up until ' + PHONE_WHEN('2026-11-30T20:00:00Z'));
   const c = phoneBadge(data([W(null, 62), W('fable', 60, { rejected: true })]), FABLE);
   assert.strictEqual(c.textContent, 'Claude plan 62% this week · Fable used up');
-  assert.strictEqual(c.title, "All models: 62% of this week's Claude plan allowance; Fable: used up until " + PHONE_WHEN('2026-11-30T20:00:00Z'));
+  assert.strictEqual(c.title, "Claude plan: 62% of this week's allowance; Fable: used up until " + PHONE_WHEN('2026-11-30T20:00:00Z'));
 });
 // changed with the chooser: the hover has one sentence per window SHOWN (it used to carry the raw 5-hour reading whenever there was one)
 test('phone header: the hover covers the windows shown; a 5-hour window that is not shown has no sentence; a used-up one does', () => {

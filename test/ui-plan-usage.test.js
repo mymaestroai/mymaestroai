@@ -66,12 +66,12 @@ test('extra usage paying: warning (not refused) on the chip, the badge, the Sett
   assert.ok(app.includes("d.overage && d.overage.status === 'allowed_warning'") && app.includes('Extra usage is close to its monthly limit') && app.includes('when it is reached, every Claude agent stops.'), 'monthly-limit line');
   assert.ok(/plan_extra_usage', e => \{ const ev = parse\(e\); if \(!ev\) return; refreshPlanChip\(\); if \(document\.getElementById\('st-plan-section'\)\) loadPlanBox\(\); \}\);/.test(app) && !/addEventListener\('plan_extra_usage'[^\n]*hubToast/.test(app), 'desktop listener, no toast');
   assert.ok(mjs.includes("on('plan_extra_usage', () => refreshPlanUsage());"), 'phone listener');
-  assert.ok(mjs.includes("el.className = 'sub' + (view.cls ? ' ' + view.cls : '');") && mjs.includes('the weekly Claude plan is used up until') && mjs.includes('extra usage is paying`'), 'phone class and title');
+  assert.ok(mjs.includes("el.className = 'sub' + (view.cls ? ' ' + view.cls : '');") && mjs.includes("'the weekly Claude plan is used up'} until ${planWhenText(w)}") && mjs.includes('extra usage is paying`'), 'phone class and title');
 });
 
 test('the five-hour row and the phone title follow the extra-usage state too', () => {
   assert.ok(app.includes("rows.push({ label: '5-hour window', utilization: five.utilization, resetsAt: five.resets_at, extraUsage: !!five.extraUsage && !five.rejected });"), 'Settings five-hour row carries extraUsage');
-  assert.ok(mjs.includes("Number.isFinite(Date.parse(w.resetsAt || '')) ?") && mjs.includes(": 'the reset')") && mjs.includes("the weekly Claude plan is used up until ${planWhenText(w)}; extra usage is paying`"), 'phone title says "the reset" when the time is missing');
+  assert.ok(mjs.includes("Number.isFinite(Date.parse(w.resetsAt || '')) ?") && mjs.includes(": 'the reset')") && mjs.includes("'the weekly Claude plan is used up'} until ${planWhenText(w)}; extra usage is paying`"), 'phone title says "the reset" when the time is missing');
 });
 
 test('both chat renderers show a whole line in underscores (the hub\'s notices) in italics', () => {

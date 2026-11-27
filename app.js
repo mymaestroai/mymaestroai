@@ -6887,7 +6887,7 @@
       const rows = [];
       const five = d.windows && d.windows.five_hour;
       if (five && five.utilization != null) rows.push({ label: '5-hour window', utilization: five.utilization, resetsAt: five.resets_at, extraUsage: !!five.extraUsage && !five.rejected });
-      for (const w of (d.weekly || [])) rows.push({ label: w.family ? `${w.label} (weekly)` : 'All models (weekly)', utilization: w.utilization, resetsAt: w.resetsAt, rejected: w.rejected, extraUsage: !!w.extraUsage && !w.rejected, weekly: true });
+      for (const w of (d.weekly || [])) rows.push({ label: w.family ? `${w.label} (weekly)` : 'Claude plan (weekly)', utilization: w.utilization, resetsAt: w.resetsAt, rejected: w.rejected, extraUsage: !!w.extraUsage && !w.rejected, weekly: true });
       const extraRow = rows.find(w => w.extraUsage && w.weekly);   // the hint speaks of the weekly plan
       // The usage bars live in one place: Settings → Subscriptions, above. Only with Subscription usage turned off are
       // they drawn here, as before that section existed.
