@@ -73,6 +73,8 @@
       paintReadinessBanner().catch(() => {});
       paintHealthBanner().catch(() => {});
       paintSecurityBanner().catch(() => {});
+      reviewRefresh().catch(() => {});   // the count on the gear
+      if (!window.__rvTimer) window.__rvTimer = setInterval(() => reviewRefresh().catch(() => {}), 5 * 60 * 1000);
       paintRecoveryBanner().catch(() => {});
       paintUpdateCard().catch(() => {});
       paintVersionLabel().catch(() => {});
@@ -3390,7 +3392,7 @@
     // The eight groups, which section sits in which and which rows move are in lib/ui-settings-groups.js (window.hubSettingsGroups).
     const STG = window.hubSettingsGroups;
     // The section loaders still name their summary by the old group ids; this says which of the eight groups each one belongs to now.
-    const ST_SUM_HOME = { status: { setup: 'review', security: 'review', health: 'review', memory: 'upkeep', selfcheck: 'upkeep', updates: 'upkeep' }, security: 'safety', backups: 'upkeep', models: 'money', notify: 'you', agents: 'agents', tools: 'tools', money: 'money', voice: 'voice' };
+    const ST_SUM_HOME = { status: { setup: 'review-checks', security: 'review-checks', health: 'review-checks', memory: 'upkeep', selfcheck: 'upkeep', updates: 'upkeep' }, security: 'safety', backups: 'upkeep', models: 'money', notify: 'you', agents: 'agents', tools: 'tools', money: 'money', voice: 'voice' };
     const stSumHome = (group, key) => { const h = ST_SUM_HOME[group]; return (h && typeof h === 'object' ? h[key] : h) || group; };
     const stSumParts = {};   // group -> { key: { text, crit } }: the one-line summary on each group's list row
     const stSandboxText = (sbd) => `Sandboxes: members' agents ${sbd.member || 'container'}, admin-side ${sbd.admin || 'off'}`;
@@ -3610,7 +3612,130 @@
         const n = j && Array.isArray(j.changes) ? j.changes.filter((c) => c && c.state === 'pending').length : 0;
         if (n > 0) chLink.textContent = `Changes waiting for your decision (${n})`;
       }).catch(() => {});
+      reviewMount(wrap);
     }
+
+    // ── For your review (lib/ui-review.js): the problems and the new features waiting, the count on the gear ──
+    // reviewRefresh() reads every answer once (each read on its own), builds the list and paints three places: the gear's count,
+    // the top of the "For your review" group and that group's summary line. Admins only (a member's Settings is another part).
+    const RV = window.hubReview;
+    let reviewLast = null, reviewSeq = 0;
+    let reviewDecided = {};   // feature id -> { title, line }: what the owner chose in this Settings window, kept on its row
+    function reviewDismissedKey() { try { return localStorage.getItem(SEC_DISMISS_KEY) || ''; } catch { return ''; } }
+    async function reviewRefresh() {
+      const me = window.hubMe;
+      const seq = ++reviewSeq;
+      if (!RV || !me || !me.isAdmin || !me.user) { reviewLast = null; reviewPaintGear(); return; }
+      let input;
+      try { input = await RV.load((u, o) => fetch(u, o), { accounts: { none: me.accounts === false } }); } catch { return; }
+      if (seq !== reviewSeq) return;   // a newer read is on its way
+      input.securityDismissed = reviewDismissedKey();
+      input.now = Date.now();
+      reviewLast = RV.build(input);
+      reviewPaintGear();
+      reviewPaintGroup();
+    }
+    function reviewPaintGear() {
+      const btn = document.getElementById('settings-btn');
+      if (!btn) return;
+      let b = document.getElementById('settings-count');
+      const r = reviewLast, kind = r && RV ? RV.badgeKind(r) : '';
+      const label = r && RV ? RV.gearLabel(r) : 'Settings';
+      btn.setAttribute('aria-label', label);
+      btn.title = label;
+      if (!kind) { if (b) b.remove(); return; }
+      if (!b) { b = document.createElement('span'); b.id = 'settings-count'; btn.appendChild(b); }
+      b.className = `rv-badge rv-${kind}`;
+      b.setAttribute('aria-hidden', 'true');   // the button's own label says it
+      b.textContent = String(r.count);
+    }
+    function reviewMount(wrap) {
+      reviewDecided = {};
+      const body = wrap.querySelector('#st-group-review .st-group-body');
+      if (!body) return;
+      const top = document.createElement('div');
+      top.id = 'st-review-top';
+      top.addEventListener('click', (e) => {
+        const t = e.target && e.target.closest ? e.target.closest('[data-rv]') : null;
+        if (!t) return;
+        if (t.dataset.rv === 'details') reviewDetails(t.dataset.sec);
+        else if (t.dataset.rv === 'decide') reviewDecide(t.dataset.id, t.dataset.decision, t);
+      });
+      body.insertBefore(top, body.firstChild);
+      stSum('review', 'list', reviewLast && RV ? RV.summaryText(reviewLast) : 'Checking…');
+      reviewPaintGroup();
+      reviewRefresh().catch(() => {});
+    }
+    function reviewDetails(sectionId) {
+      const s = document.getElementById(sectionId);
+      if (!s) return;
+      stReveal(s);   // its group, and its More when it is kept there
+      setTimeout(() => { if (s.scrollIntoView) s.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 50);
+    }
+    function reviewFixHtml(p) {
+      const f = p.fix;
+      if (!f) return '';
+      if (f.kind === 'claude-signin') return `<span class="rv-signin" data-pid="${esc(p.id)}"></span>`;
+      const a = { label: f.label, href: f.href, api: f.api, method: f.method };
+      return p.id.startsWith('sec:') ? securityActionHtml(a) : readinessActionHtml(a);
+    }
+    function reviewPaintGroup() {
+      const top = document.getElementById('st-review-top');
+      const r = reviewLast;
+      stSum('review', 'list', r && RV ? RV.summaryText(r) : 'Checking…', !!r && r.worst === 'critical');
+      const sum = document.getElementById('st-sum-review');
+      if (sum) sum.classList.toggle('st-sum-warn', !!r && r.worst === 'warn');
+      if (!top || !r) return;
+      let h = '';
+      for (const n of r.notes) h += `<div class="rv-note">${esc(n)}</div>`;
+      if (r.problems.length) {
+        h += `<h4>Problems</h4>` + r.problems.map((p) => `<div class="rv-row rv-${p.level}" data-pid="${esc(p.id)}">
+          <div class="rv-main"><div class="rv-title">${esc(p.title)}</div>${p.text ? `<div class="rv-text">${esc(p.text)}</div>` : ''}</div>
+          <div class="rv-acts">${reviewFixHtml(p)} <button type="button" class="st-test-btn" data-rv="details" data-sec="${esc(p.detailsSection)}">Details</button></div></div>`).join('');
+      }
+      const shown = r.features.map((f) => ({ id: f.id, title: f.title, text: f.text, snoozedUntil: f.snoozedUntil }));
+      for (const id of Object.keys(reviewDecided)) if (!shown.some((f) => f.id === id)) shown.push({ id, title: reviewDecided[id].title, text: '' });
+      if (shown.length) {
+        h += `<h4>New features</h4>` + shown.map((f) => {
+          const d = reviewDecided[f.id];
+          return `<div class="rv-row rv-feature" data-fid="${esc(f.id)}">
+            <div class="rv-main"><div class="rv-title">${esc(f.title)}</div>${f.text ? `<div class="rv-text">${esc(f.text)}</div>` : ''}${f.snoozedUntil && !d ? `<div class="rv-text">${esc(RV.askedAgainLine(f.snoozedUntil))}</div>` : ''}
+            <div class="rv-result" role="status" aria-live="polite">${d ? esc(d.line) : ''}</div></div>
+            ${d ? '' : `<div class="rv-acts">${[['on', 'Turn on'], ['off', 'Leave off'], ['later', 'Ask me in a week']].map(([k, l]) => `<button type="button" class="st-test-btn" data-rv="decide" data-id="${esc(f.id)}" data-decision="${k}">${l}</button>`).join('')}</div>`}</div>`;
+        }).join('');
+      }
+      if (!r.problems.length && !shown.length && !r.notes.length) h += `<div class="rv-calm">Nothing needs your review.</div>`;
+      top.innerHTML = h;
+      for (const s of top.querySelectorAll('.rv-signin')) {
+        const b = typeof ClaudeSignin !== 'undefined' ? ClaudeSignin.healthButton({ action: 'claude-signin' }) : null;
+        if (b) s.appendChild(b);
+      }
+      if (r.worst === 'critical') stOpenGroup('review');   // a red problem brings this group forward unless they chose another
+    }
+    // A choice on a new feature: Turn on / Leave off / Ask me in a week. The row then says what happened in one line.
+    async function reviewDecide(id, decision, btn) {
+      const top = document.getElementById('st-review-top');
+      const row = top && [...top.querySelectorAll('.rv-feature')].find((e) => e.dataset.fid === id);
+      const say = (t) => { const el = row && row.querySelector('.rv-result'); if (el) el.textContent = t; };
+      for (const b of row ? row.querySelectorAll('button') : []) b.disabled = true;
+      try {
+        const r = await fetch(`/api/behaviour-changes/${encodeURIComponent(id)}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) {   // a 403 (not their own browser session) shows the server's message
+          say(j.error || j.message || `Not saved (HTTP ${r.status}).`);
+          for (const b of row ? row.querySelectorAll('button') : []) b.disabled = false;
+          return;
+        }
+        const f = reviewLast && reviewLast.features.find((x) => x.id === id);
+        reviewDecided[id] = { title: (f && f.title) || id, line: RV.decisionLine(decision, j.change && j.change.snoozedUntil) };
+        reviewPaintGroup();
+        reviewRefresh().catch(() => {});   // the count follows
+      } catch (e) {
+        say(`Not saved: ${e && e.message ? e.message : 'could not reach the hub'}.`);
+        for (const b of row ? row.querySelectorAll('button') : []) b.disabled = false;
+      }
+    }
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && window.hubMe && window.hubMe.isAdmin) reviewRefresh().catch(() => {}); });
 
     // The ⓘ help (lib/ui-settings-help.js): the records are fetched again each time Settings opens; the ⓘ buttons go in after the
     // dialog is drawn (and again for rows added later), and the search learns each section's other words from the same records.
@@ -4350,6 +4475,7 @@
         const r = await (await fetch(api, { method, headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: method === 'POST' ? '{}' : undefined })).json();
         if (btn) btn.textContent = r.ok ? (r.job ? `Started as job ${r.job}` : 'Done') : (r.error || 'Failed');
         setTimeout(loadReadiness, 4000);
+        setTimeout(() => (typeof reviewRefresh === "function" ? reviewRefresh() : Promise.resolve()).catch(() => {}), 4000);
       } catch (e) { if (btn) btn.textContent = 'Failed: ' + e.message; }
     }
     // Banner for admins while anything is critical (no accounts, no provider, members without Docker...).
@@ -4881,6 +5007,7 @@
         const r = await (await fetch(api, { method, headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: method === 'POST' ? '{}' : undefined })).json();
         if (btn) btn.textContent = r.ok ? (r.fixed ? `Done: ${r.fixed.length} file(s)` : 'Done') : (r.error || 'Failed');
         setTimeout(() => loadSecurityCheck(true), 800);
+        setTimeout(() => (typeof reviewRefresh === "function" ? reviewRefresh() : Promise.resolve()).catch(() => {}), 2500);
       } catch (e) { if (btn) btn.textContent = 'Failed: ' + e.message; }
     }
     // Banner for admins from the last security check (below the setup banner when both show).
@@ -4896,6 +5023,7 @@
       try { localStorage.setItem(SEC_DISMISS_KEY, bar.dataset.key || ''); } catch {}
       bar.remove();
       layoutBanners();
+      (typeof reviewRefresh === "function" ? reviewRefresh() : Promise.resolve()).catch(() => {});   // a dismissed warning stops counting
     }
     async function paintSecurityBanner() {
       const seq = ++secPaintSeq;
@@ -13007,7 +13135,7 @@
         paintNotifyBtns(ev.agent);
       });
       source.addEventListener('research_progress', e => { const ev = parse(e); if (ev) researchLineApply(ev); });
-      source.addEventListener('settings_changed', e => { const ev = parse(e); if (ev) changeStripRefresh(); });   // the lead changed a setting: its chat's strip follows
+      source.addEventListener('settings_changed', e => { const ev = parse(e); if (ev) { changeStripRefresh(); reviewRefresh().catch(() => {}); } });   // the lead changed a setting: its chat's strip follows, and so does the count on the gear
       source.addEventListener('ask_user', e => {
         const ev = parse(e); if (!ev) return;
         setAgentLive(ev.agent, { busy: true, pendingQuestion: true });

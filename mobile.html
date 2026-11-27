@@ -750,6 +750,13 @@
     #menu a, #menu button { display: flex; align-items: center; width: 100%; min-height: 48px; padding: 0 16px; text-align: left; color: var(--text); text-decoration: none; font-size: 15px; }
     #menu a:active, #menu button:active { background: var(--border); }
     #menu .menu-sub { font-size: 12px; color: var(--text-tertiary); }
+    /* The count of things for the owner's review (lib/ui-review.js): a number on Settings in this menu, a dot on the ⋮ button. Only problems take a warning colour. */
+    #menu .rv-count { margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; border-radius: 10px; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+    .rv-count.rv-critical, .iconbtn.rv-has.rv-critical::after { background: var(--error); color: var(--on-error); }
+    .rv-count.rv-warn, .iconbtn.rv-has.rv-warn::after { background: var(--warning); color: var(--on-warning); }
+    .rv-count.rv-info, .iconbtn.rv-has.rv-info::after { background: var(--accent); color: var(--on-accent); }
+    .iconbtn.rv-has { position: relative; }
+    .iconbtn.rv-has::after { content: ''; position: absolute; top: 8px; right: 8px; width: 9px; height: 9px; border-radius: 50%; }
     #menu .danger { color: var(--error); }
     #toast { position: fixed; left: 50%; bottom: calc(80px + var(--sab)); transform: translateX(-50%); background: var(--border-strong); color: var(--text); padding: 10px 16px; border-radius: 20px; font-size: 14px; z-index: 30; display: none; max-width: 90%; text-align: center; }
     #toast.on { display: block; }
@@ -1857,6 +1864,7 @@ html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, htm
   <script src="/ui-agent-dot.js"></script>
   <script src="/ui-hand-off-card.js"></script>
   <script src="/ui-claude-signin.js"></script>
+  <script src="/ui-review.js"></script>
   <script src="/ui-code-copy.js"></script>
   <script src="/ui-team-card.js"></script>
   <script src="/ui-feature-card.js"></script>

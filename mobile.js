@@ -14535,7 +14535,7 @@ function connectEvents() {
   on('for_owner', onForOwner);
   on('turn_notify', onTurnNotify);
   on('research_progress', researchLineApply);
-  on('settings_changed', () => { changeStripLoad(); });   // the lead changed a setting: the strip in its chat follows
+  on('settings_changed', () => { changeStripLoad(); reviewRefresh().catch(() => {}); });   // the lead changed a setting: the strip in its chat follows
   on('hello', () => { if (screen === 'chat' && current) { researchLineLoad(current); changeStripLoad(); } });   // after a reconnect: the runs as they are now
   on('ask_user', (ev) => {
     setLive(ev.agent, { busy: true, pendingQuestion: true }); paintStatus();
@@ -15723,6 +15723,50 @@ async function paintHealthNotice() {
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) paintHealthNotice().catch(() => {}); });
 // ── system health notice (end) ──
+
+// ── The count of things for the owner's review (lib/ui-review.js): a number on Settings in the ⋮ menu, a dot on the ⋮ buttons ──
+// Admins only. Read when the page loads, every 5 minutes, after a settings_changed event and when the page comes back to the front.
+let reviewSeq = 0;
+async function reviewRefresh() {
+  const RV = window.hubReview, seq = ++reviewSeq;
+  let r = null;
+  if (RV && hubMe && hubMe.isAdmin === true && hubMe.user) {
+    let input;
+    try { input = await RV.load((u, o) => fetch(u, o), { accounts: { none: hubMe.accounts === false } }); } catch { return; }
+    if (seq !== reviewSeq) return;   // a newer read is on its way
+    let dismissed = ''; try { dismissed = localStorage.getItem('hub-security-warn-dismissed') || ''; } catch { /* blocked storage */ }
+    input.securityDismissed = dismissed;
+    input.now = Date.now();
+    r = RV.build(input);
+  }
+  reviewPaint(r);
+}
+function reviewPaint(r) {
+  const RV = window.hubReview;
+  const kind = r && RV ? RV.badgeKind(r) : '';
+  const item = $('menu-settings');
+  if (item) {
+    let c = $('menu-settings-count');
+    if (!kind) { if (c) c.remove(); item.removeAttribute('aria-label'); }
+    else {
+      if (!c) { c = document.createElement('span'); c.id = 'menu-settings-count'; item.appendChild(c); }
+      c.className = `rv-count rv-${kind}`;
+      c.textContent = String(r.count);
+      item.setAttribute('aria-label', RV.gearLabel(r));
+    }
+  }
+  for (const id of ['agents-menu-btn', 'chat-menu-btn']) {
+    const b = $(id);
+    if (!b) continue;
+    for (const k of ['critical', 'warn', 'info']) b.classList.remove(`rv-${k}`);
+    b.classList.toggle('rv-has', !!kind);
+    if (kind) b.classList.add(`rv-${kind}`);
+    b.setAttribute('aria-label', kind ? `Menu, ${r.count} ${r.count === 1 ? 'thing' : 'things'} for your review` : 'Menu');
+  }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) reviewRefresh().catch(() => {}); });
+setInterval(() => reviewRefresh().catch(() => {}), 5 * 60 * 1000);
+// ── review count (end) ──
 
 // ── Multi-user: owner switcher, account menu, Profile and Security sheets ──────
 
@@ -17471,6 +17515,7 @@ async function init() {
   refreshPlanUsage();
   if (hubMe) { presenceStart(); loadNotifyPrefs(); }   // signed in: tell the hub this page is open; the bell shows 🔕 for an agent set to Off
   paintHealthNotice().catch(() => {});
+  reviewRefresh().catch(() => {});
   if (new URLSearchParams(location.search).get('security') === '1') openSecuritySheet();
   await loadAgents();
   activeJobsSync();

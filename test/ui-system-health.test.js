@@ -62,8 +62,8 @@ const view = (items, extra = {}) => ({ settings: SETTINGS, running: false, lastR
 
 // ── the section ──
 test('Health is a Status section placed right after the setup checklist, and is drawn for admins only', () => {
-  const list = require('../lib/ui-settings-groups.js').GROUPS.find((g) => g.id === 'review').sections;   // the first group, For your review
-  assert.strictEqual(list[list.indexOf('st-ready-section') + 1], 'st-health-section');
+  const g = require('../lib/ui-settings-groups.js').GROUPS.find((x) => x.id === 'review');   // the first group, For your review: the full checks sit under its More
+  const list = g.more; assert.strictEqual(list[list.indexOf('st-ready-section') + 1], 'st-health-section');
   const at = app.indexOf('id="st-health-section"');
   assert.ok(at > 0, 'the section is drawn');
   assert.match(app.slice(app.lastIndexOf('\n', at - 300), at), /if \(isHubAdmin\(\)\) \{/, 'drawn only inside an admin check');

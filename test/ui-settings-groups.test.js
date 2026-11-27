@@ -51,7 +51,8 @@ test('every section openSettings draws is in exactly one group (or its More); no
 
 test('where the sections go (P4-3 mapping)', () => {
   const by = Object.fromEntries(G.GROUPS.map((g) => [g.id, g]));
-  assert.deepStrictEqual(by.review.sections, ['st-ready-section', 'st-health-section', 'st-sec-section', 'st-recent-section']);
+  assert.deepStrictEqual(by.review.sections, ['st-recent-section']);
+  assert.deepStrictEqual(by.review.more, ['st-ready-section', 'st-health-section', 'st-sec-section'], 'the full Setup, Health and Security checks sit under More (P4-4B)');
   assert.deepStrictEqual(by.you.sections, ['st-looks-section', 'st-notify-section', 'st-chat-section']);
   assert.deepStrictEqual(by.agents.sections, ['st-workers-section']);
   assert.deepStrictEqual(by.money.sections, ['st-prov-section', 'st-or-section', 'st-subs-section', 'st-plan-section', 'st-local-models-section', 'st-spend-section']);
@@ -203,9 +204,10 @@ test('the panel is grouped right after it is drawn: a list of eight group button
   assert.ok(app.includes('stQuick') || app.includes('id="st-quick-links"'), 'the Go to links stay for now');
   // every summary the loaders set lands in a real group
   const homes = new Set(G.GROUPS.map((g) => g.id));
-  const SUM = { status: { setup: 'review', security: 'review', health: 'review', memory: 'upkeep', selfcheck: 'upkeep', updates: 'upkeep' }, security: 'safety', backups: 'upkeep', models: 'money', notify: 'you', agents: 'agents', tools: 'tools', money: 'money', voice: 'voice' };
-  for (const h of Object.values(SUM).flatMap((v) => (typeof v === 'object' ? Object.values(v) : [v]))) assert.ok(homes.has(h), h);
-  assert.ok(app.includes("const ST_SUM_HOME = { status: { setup: 'review', security: 'review', health: 'review', memory: 'upkeep', selfcheck: 'upkeep', updates: 'upkeep' }, security: 'safety', backups: 'upkeep', models: 'money', notify: 'you', agents: 'agents', tools: 'tools', money: 'money', voice: 'voice' };"));
+  // the Setup/Security/Health summaries no longer sit on the first group's row (P4-4B: it says "2 problems · 1 new feature"); 'review-checks' has no row
+  const SUM = { status: { setup: 'review-checks', security: 'review-checks', health: 'review-checks', memory: 'upkeep', selfcheck: 'upkeep', updates: 'upkeep' }, security: 'safety', backups: 'upkeep', models: 'money', notify: 'you', agents: 'agents', tools: 'tools', money: 'money', voice: 'voice' };
+  for (const h of Object.values(SUM).flatMap((v) => (typeof v === 'object' ? Object.values(v) : [v]))) assert.ok(homes.has(h) || h === 'review-checks', h);
+  assert.ok(app.includes("const ST_SUM_HOME = { status: { setup: 'review-checks', security: 'review-checks', health: 'review-checks', memory: 'upkeep', selfcheck: 'upkeep', updates: 'upkeep' }, security: 'safety', backups: 'upkeep', models: 'money', notify: 'you', agents: 'agents', tools: 'tools', money: 'money', voice: 'voice' };"));
   // summaries still follow changes made inside Settings
   assert.match(app, /stSum\('agents', 'appr', `approval cards \$\{on \? 'on' : 'off'\}`\);/);
   assert.match(app, /if \(r\.ok\) stSum\('notify', 'q', stQuestionsText\(questionAfterMinutes\)\);/);
@@ -223,7 +225,7 @@ test('links into Settings open the group that holds their section', () => {
   assert.deepStrictEqual(G.groupOfSection('st-spend-section'), { group: 'money', more: false });
   assert.deepStrictEqual(G.groupOfSection('st-voice-section'), { group: 'voice', more: false });
   assert.deepStrictEqual(G.groupOfSection('st-modules-section'), { group: 'tools', more: false });
-  assert.deepStrictEqual(G.groupOfSection('st-ready-section'), { group: 'review', more: false });
+  assert.deepStrictEqual(G.groupOfSection('st-ready-section'), { group: 'review', more: true });
 });
 
 test('the module is served and loaded before app.js; the two panes fit 1024 px and the phone frame keeps one column', () => {

@@ -2916,6 +2916,22 @@
     }
     .st-group-sum:empty { display: none; }
     .st-group-sum.st-sum-crit { color: var(--error); font-weight: 600; }
+    .st-group-sum.st-sum-warn { color: var(--warning); font-weight: 600; }
+    /* For your review (lib/ui-review.js): the list at the top of the first group and the count on the gear. Only problems take a warning colour. */
+    #st-review-top h4 { margin: 10px 0 6px; font-size: 0.85rem; color: var(--text-dim); }
+    .rv-row { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; padding: 8px 10px; margin-bottom: 6px; border: 1px solid var(--border); border-left: 4px solid var(--border-strong); border-radius: 6px; }
+    .rv-row.rv-critical { border-left-color: var(--error); }
+    .rv-row.rv-warn { border-left-color: var(--warning); }
+    .rv-main { flex: 1 1 220px; min-width: 0; }
+    .rv-title { color: var(--text); font-weight: 600; font-size: 0.88rem; }
+    .rv-text, .rv-result, .rv-note { color: var(--text-dim); font-size: 0.8rem; line-height: 1.35; margin-top: 2px; }
+    .rv-acts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .rv-calm { color: var(--text-dim); font-size: 0.88rem; padding: 8px 0; }
+    #settings-btn { position: relative; }
+    .rv-badge { position: absolute; top: -6px; right: -6px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 8px; font-size: 10px; line-height: 16px; font-weight: 700; text-align: center; pointer-events: none; }
+    .rv-badge.rv-critical { background: var(--banner-critical-bg); color: var(--on-color-text); }
+    .rv-badge.rv-warn { background: var(--banner-warn-bg); color: var(--on-color-text); }
+    .rv-badge.rv-info { background: var(--accent); color: var(--on-accent); }
     .st-gpane { min-width: 0; }
     .st-group { border: 1px solid var(--border); border-radius: 8px; padding: 4px 14px 12px; margin-bottom: 8px; }
     .st-group[hidden] { display: none; }
@@ -4012,6 +4028,7 @@
   <script src="/ui-simple.js"></script>
   <script src="/ui-settings-help.js"></script>
   <script src="/ui-settings-groups.js"></script>
+  <script src="/ui-review.js"></script>
   <script src="/ui-agent-card.js"></script>
   <script src="/ui-agent-card-basics.js"></script>
   <script src="/ui-agent-card-more.js"></script>
