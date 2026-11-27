@@ -22,7 +22,7 @@ test('no login at all is a Fix now item (id accounts) in the one banner, read af
   assert.deepStrictEqual(r.fix.map((p) => [p.id, p.title, p.fix.label, p.fix.href]), [['accounts', 'This hub has no login yet', 'Create the admin account', '/welcome']]);
   const at = app.indexOf('async function reviewRefresh()');
   const body = app.slice(at, at + 900);
-  assert.match(body, /if \(RV && !me && window\.hubNoAccounts === true\)/);   // no session and no accounts: the banner still says so
+  assert.match(body, /if \(RV && \(\(!me && window\.hubNoAccounts === true\) \|\| \(me && me\.accounts === false && !me\.user\)\)\)/);   // no session and no accounts, or accounts:false with no user: the banner still says so
   assert.match(body, /RV\.build\(\{ accounts: \{ none: true \}/);
   assert.match(app, /accounts: \{ none: me\.accounts === false \}/, 'a signed-in admin: /api/me says accounts is false');
   // /api/me answers 401 on a hub with no accounts, so the page asks the public auth status instead

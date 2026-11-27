@@ -90,8 +90,8 @@ test('wiring: admin route, Settings checklist, admin banner, Users page note, ch
   assert.match(app, /setTimeout\(loadReadiness, 0\);/);
   for (const fn of ['loadReadiness', 'readinessAction']) assert.match(app, new RegExp(`async function ${fn}\\(`), fn);
   assert.doesNotMatch(app, /paintReadinessBanner|hub-readiness-notice/, 'the setup banner is gone: a critical checklist item is a Fix now item in the one banner (P4-15)');
-  const R = require('../lib/ui-review.js').build({ readiness: { items: [{ id: 'claude-signin', level: 'critical', title: 'Claude is not signed in' }, { id: 'accounts', level: 'critical', title: 'No admin' }, { id: 'provider', level: 'critical', title: 'No provider' }] } });
-  assert.deepStrictEqual(R.fix.map((p) => p.id), ['ready:claude-signin'], 'the two states with their own lines (accounts, provider) are not doubled');
+  const R = require('../lib/ui-review.js').build({ readiness: { items: [{ id: 'claude-signin', level: 'critical', title: 'Claude is not signed in' }, { id: 'accounts', level: 'critical', title: 'No admin' }, { id: 'provider', level: 'critical', title: 'No provider' }] }, setup: { setupNeeded: true } });
+  assert.deepStrictEqual(R.fix.map((p) => p.id), ['provider', 'ready:claude-signin'], 'the two states with their own lines (accounts, provider) are not doubled when their own source supplied them');
   const users = read('users.html');
   assert.match(users, /id="invite-readiness"/);
   assert.match(users, /fetch\('\/api\/readiness'/);

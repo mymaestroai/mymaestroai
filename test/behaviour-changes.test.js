@@ -310,7 +310,7 @@ test('changes.html: pending first, then decided; each entry has the change id an
 test('Settings: the "Go to" line and its Changes link are gone (P4-3); the pending changes are the new features in For your review', () => {
   const app = read('app.js');
   assert.ok(!/st-quick-links|st-changes-link|Changes waiting for your decision/.test(app));
-  assert.match(app, /RV\.merge\(RV\.build\(input\), extra\)/);
+  assert.match(app, /RV\.merge\(RV\.build\(input\), extra, before\)/);
   assert.match(read('lib/ui-review.js'), /changes: '\/api\/behaviour-changes'/, 'the review reads the same answer');
 });
 

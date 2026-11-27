@@ -3671,7 +3671,8 @@
     async function reviewRefresh() {
       const me = window.hubMe;
       const seq = ++reviewSeq;
-      if (RV && !me && window.hubNoAccounts === true) {   // a hub with no login at all: /api/me is refused, so the one thing to say is that
+      // a hub with no login at all: /api/me is refused (no answer) or says accounts:false with no user, so the one thing to say is that
+      if (RV && ((!me && window.hubNoAccounts === true) || (me && me.accounts === false && !me.user))) {
         reviewLast = RV.build({ accounts: { none: true }, now: Date.now() });
         reviewPaintGear(); reviewPaintBanner();
         return;
@@ -3685,7 +3686,9 @@
       let extra = [];
       try { extra = await RV.loadSources((u, o) => fetch(u, o)); } catch { extra = []; }   // modules that registered a source
       if (seq !== reviewSeq) return;
-      reviewLast = RV.merge(RV.build(input), extra);
+      const before = reviewLast;   // a read that failed keeps what the last result said about it (marked stale)
+      input.previous = before;
+      reviewLast = RV.merge(RV.build(input), extra, before);
       reviewPaintGear();
       reviewPaintGroup();
       reviewPaintBanner();

@@ -15707,6 +15707,10 @@ let reviewLastResult = null;   // the last answer reviewPaint drew: Simple's For
 async function reviewRefresh() {
   const RV = window.hubReview, seq = ++reviewSeq;
   let r = null;
+  if (RV && hubMe && hubMe.accounts === false && !hubMe.user) {   // a hub with no login at all: the one thing to say, with its Welcome link
+    reviewPaint(RV.build({ accounts: { none: true }, now: Date.now() }));
+    return;
+  }
   if (RV && hubMe && hubMe.isAdmin === true && hubMe.user) {
     let input;
     try { input = await RV.load((u, o) => fetch(u, o), { accounts: { none: hubMe.accounts === false } }); } catch { return; }
@@ -15716,7 +15720,8 @@ async function reviewRefresh() {
     let extra = [];
     try { extra = await RV.loadSources((u, o) => fetch(u, o)); } catch { extra = []; }   // modules that registered a source (same list as the desktop)
     if (seq !== reviewSeq) return;
-    r = RV.merge(RV.build(input), extra);
+    input.previous = reviewLastResult;   // a read that failed keeps what the last result said about it (marked stale)
+    r = RV.merge(RV.build(input), extra, reviewLastResult);
   }
   reviewPaint(r);
 }

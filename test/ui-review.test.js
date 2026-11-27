@@ -25,13 +25,16 @@ test('nothing to review: no problems, no features, count 0, worst none', () => {
 });
 
 test('readiness: critical is Fix now, warn is Worth doing (critical first), ok and info are not listed; items other rules cover are not listed twice', () => {
-  const r = R.build({ readiness: { items: [item('w', 'warn', { action: { label: 'Fix it', api: '/api/x', method: 'POST' } }), item('c', 'critical', { action: { label: 'Open', href: '/somewhere' } }), item('i', 'info'), item('ok', 'ok'), item('accounts', 'critical'), item('provider', 'critical'), item('health-disk', 'critical')] }, now: NOW });
-  assert.deepStrictEqual(r.problems.map((p) => [p.id, p.level, p.tier]), [['ready:c', 'critical', 'fix'], ['ready:w', 'warn', 'worth']]);
-  assert.deepStrictEqual(r.problems[0].fix, { label: 'Open', href: '/somewhere' });
-  assert.deepStrictEqual(r.problems[1].fix, { label: 'Fix it', api: '/api/x', method: 'POST' });
-  assert.strictEqual(r.problems[0].text, 'Detail of c.', 'one plain sentence');
-  assert.strictEqual(r.problems[0].detailsSection, 'st-ready-section');
-  assert.deepStrictEqual([r.count, r.worst], [1, 'critical'], 'only the red item counts');
+  const r = R.build({ readiness: { items: [item('w', 'warn', { action: { label: 'Fix it', api: '/api/x', method: 'POST' } }), item('c', 'critical', { action: { label: 'Open', href: '/somewhere' } }), item('i', 'info'), item('ok', 'ok'), item('accounts', 'critical'), item('provider', 'critical'), item('health-disk', 'critical')] }, setup: { setupNeeded: true }, health: { items: [item('health-disk', 'critical')] }, now: NOW });
+  // the provider and health-disk rows are the setup and health sources' own here (they supplied them), so the checklist does not list them again
+  assert.deepStrictEqual(r.problems.map((p) => p.id).sort(), ['health:health-disk', 'provider', 'ready:c', 'ready:w']);
+  const rd = r.problems.filter((p) => p.id.startsWith('ready:'));
+  assert.deepStrictEqual(rd.map((p) => [p.id, p.level, p.tier]), [['ready:c', 'critical', 'fix'], ['ready:w', 'warn', 'worth']]);
+  assert.deepStrictEqual(rd[0].fix, { label: 'Open', href: '/somewhere' });
+  assert.deepStrictEqual(rd[1].fix, { label: 'Fix it', api: '/api/x', method: 'POST' });
+  assert.strictEqual(rd[0].text, 'Detail of c.', 'one plain sentence');
+  assert.strictEqual(rd[0].detailsSection, 'st-ready-section');
+  assert.deepStrictEqual([r.count, r.worst], [3, 'critical'], 'only the red items count');
 });
 
 test('health: critical is Fix now (the Claude sign-in item gets the sign-in fix), warn is Worth doing', () => {
@@ -548,5 +551,5 @@ test('page: reviewRefresh asks the registered sources and shows what they say; i
     await d.api.reviewRefresh();
     assert.deepStrictEqual(d.api.last.notes, ['Could not check stop-source.']);
   } finally { R.unregister('stop-source'); }
-  assert.match(read('mobile.js'), /RV\.merge\(RV\.build\(input\), extra\)/, 'the phone count reads the same sources');
+  assert.match(read('mobile.js'), /RV\.merge\(RV\.build\(input\), extra, reviewLastResult\)/, 'the phone count reads the same sources');
 });

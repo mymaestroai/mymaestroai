@@ -20,7 +20,10 @@ test('security items: exposure and exposed secrets are Fix now, hardening (two-f
   const fix = ['tunnel', 'tailscale', 'file-modes', 'git-secrets', 'git-history-secrets', 'member-host', 'roots-member', 'lead', 'lan-services-critical', 'bind', 'docker', 'node'];
   for (const id of fix) assert.strictEqual(tierOf({ security: { items: [item(id, 'critical')] } }, `sec:${id}`), 'fix', id);
   for (const id of ['ssh', 'lan-services', 'policy-overrides', 'connectors', 'restart-pending', 'lockfile']) assert.strictEqual(tierOf({ security: { items: [item(id, 'warn')] } }, `sec:${id}`), 'worth', id);
-  for (const lvl of ['warn', 'critical']) for (const id of ['totp', 'admin-2fa-optional', 'member-totp']) assert.strictEqual(tierOf({ security: { items: [item(id, lvl)] } }, `sec:${id}`), 'worth', `${id} ${lvl}: two-factor is hardening`);
+  for (const id of ['totp', 'admin-2fa-optional', 'member-totp']) {
+    assert.strictEqual(tierOf({ security: { items: [item(id, 'warn')] } }, `sec:${id}`), 'worth', `${id} warn: two-factor is hardening`);
+    assert.strictEqual(tierOf({ security: { items: [item(id, 'critical')] } }, `sec:${id}`), 'fix', `${id} critical is always Fix now`);
+  }
   assert.deepStrictEqual(R.build({ security: { items: [item('ssh', 'info'), item('lan-other', 'info'), item('x', 'ok')] }, now: NOW }).problems, []);
 });
 
