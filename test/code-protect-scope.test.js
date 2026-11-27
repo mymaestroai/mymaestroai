@@ -240,3 +240,16 @@ test('a backslash in a file name on Linux is a character, not a separator', { sk
   assert.strictEqual(cp.isProtectedPath(path.join(b, 'workspaces', 'sam', 'a\\..\\..\\notes.md')), false);
   assert.strictEqual(cp.isProtectedPath(path.join(b, 'lib', 'a\\..\\..\\workspaces\\x')), true);
 });
+
+test('a > or < inside $( ), $(( )), ${ }, `…` or <( ) is not split off as a redirection of the outer command', () => {
+  const inLib = path.join(app, 'lib');
+  for (const c of ['echo $(cat x 2>&1)', 'echo $((a>b))', 'echo `ls 2>&1`', 'cat <(grep x 2>&1)', 'echo ${v:-a>b}', 'echo "$(cat <in)"']) {
+    assert.strictEqual(cpOn.commandWritesProtected(c, inLib), false, c);
+  }
+  assert.strictEqual(cpOn.commandWritesProtected('echo $(cat x)>lib/a.js', app), true, 'a redirection after the substitution still counts');
+});
+
+test('~/… keeps its .. for the kernel-style walk (not folded before a symlink is followed)', () => {
+  const t = shellWriteTargets('echo x > ~/l/../x.js', '/');
+  assert.deepStrictEqual(t, [`${os.homedir()}/l/../x.js`]);
+});
