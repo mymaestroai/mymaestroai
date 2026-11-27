@@ -101,9 +101,9 @@ test('phone pages: CSS shows full-width rows of at least 56 px on the list and a
 test('Simple (desktop): four headings, every old control kept, More settings is the last control (for members too: their one group)', () => {
   const src = fnSrc(app, 'function openSimpleSettings() {');
   const heads = [...src.matchAll(/<h3 class="sm-gh"[^>]*>([^<]+)<\/h3>/g)].map((m) => m[1]);
-  assert.deepStrictEqual(heads, ['You and this device', 'Voice and calls', 'Notifications', 'Account']);
+  assert.deepStrictEqual(heads, ['For your review', 'You and this device', 'Voice and calls', 'Models and money', 'More settings']);   // P4-6b: the report's four groups, then More settings
   for (const k of ['sm-seg', 'data-theme="light"', 'data-theme="auto"', 'sm-style', 'sm-name', 'data-act="advanced"', 'Switch to Advanced', 'data-act="signout"', 'Sign out', 'data-act="settings"']) assert.ok(src.includes(k), k);
-  assert.ok(src.indexOf('You and this device') < src.indexOf('sm-seg') && src.indexOf('sm-name') < src.indexOf('Voice and calls'), 'appearance, style and name sit under the first heading');
+  assert.ok(src.indexOf('You and this device') < src.indexOf('sm-seg') && src.indexOf('sm-name') < src.indexOf('data-act="advanced"') && src.indexOf('data-act="signout"') < src.indexOf('Voice and calls'), 'appearance, style, name, Switch to Advanced and Sign out sit under the first heading');
   assert.ok(src.indexOf('data-act="signout"') < src.indexOf('data-act="settings"'), 'More settings is last');
   assert.match(src, /'<div class="sm-set"><button type="button" class="sm-plain" data-act="settings"><div><b>More settings<\/b><span>' \+ \(me\.isAdmin === false \? /);
   assert.ok(!src.includes('All settings'));
@@ -113,7 +113,7 @@ test('Simple (desktop): four headings, every old control kept, More settings is 
 test('Simple (phone): four headings, every old control kept, deep research under Notifications, More settings last (members too)', () => {
   const src = fnSrc(mob, 'function simpleSettingsOpen() {');
   const heads = [...src.matchAll(/<h4 class="ss-gh" id="[^"]+">([^<]+)<\/h4>/g)].map((m) => m[1]);
-  assert.deepStrictEqual(heads, ['You and this device', 'Voice and calls', 'Notifications', 'Account']);
+  assert.deepStrictEqual(heads, ['For your review', 'You and this device', 'Voice and calls', 'Models and money', 'More settings']);   // P4-6b
   for (const k of ['ss-seg', 'ss-style-sec', 'ss-val', 'id="ss-adv"', 'id="ss-out"', 'id="ss-all"', 'Switch to Advanced', 'Sign out', "$('ss-adv')", "$('ss-out')", "$('ss-all')"]) assert.ok(src.includes(k), k);
   assert.ok(src.indexOf('id="ss-out"') < src.indexOf('id="ss-all"') && src.indexOf('id="ss-all"') < src.indexOf('ss-close'), 'More settings is the last row');
   assert.ok(!src.includes('All settings'));

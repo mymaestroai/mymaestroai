@@ -1,5 +1,5 @@
 {
-  "version": "f8bcc7b651ef448a77b9e83e4778ab803cadfac5",
+  "version": "bd24606ceb7519fb7a555f1cc26536f19da69825",
   "records": [
     {
       "id": "OPT-0001",
@@ -30,12 +30,7 @@
       "scope": "per-agent | install",
       "home": "Agent card > Role and team",
       "storedAs": "agents[].name (POST /api/agents/rename) | agents[].name",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#agent-slug"
-        }
-      ],
+      "anchors": [],
       "facts": "Rename route POST /api/agents/rename (inventory); help today says it renames workspace folder, chat file and config key and needs a page reload; a renamed agent's box is made with new folders on its next turn lib/agents.js:1324; blocked while the agent has call recordings lib/agents.js:1089-1093. The team prefix variant (users.html:370) was not re-read. No restart found."
     },
     {
@@ -67,10 +62,6 @@
       "home": "Agent card > Role and team",
       "storedAs": "agents[].display (POST /api/agents/:name/display) | agents[].display",
       "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#display-name"
-        },
         {
           "surface": "desktop",
           "label": "Agent name (in the chat bar)"
@@ -109,10 +100,6 @@
       "storedAs": "agents[].category",
       "anchors": [
         {
-          "surface": "agent-settings",
-          "selector": "#agent-category"
-        },
-        {
           "surface": "desktop",
           "label": "Create New Agent > Category"
         }
@@ -148,12 +135,7 @@
       "scope": "per-agent",
       "home": "Agent card > Role and team",
       "storedAs": "agents[].lead",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#agent-lead"
-        }
-      ],
+      "anchors": [],
       "facts": "default off: lib/agents.js:249 (lead === true); changed per agent lib/agents.js:1747; code wins on 'gets root': not confirmed here, so the sentence says wider reach only. No restart: stored on the agent record, read per use (not traced further)."
     },
     {
@@ -184,12 +166,7 @@
       "scope": "per-agent",
       "home": "Agent card > Role and team",
       "storedAs": "agents[].blurb",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#agent-blurb"
-        }
-      ],
+      "anchors": [],
       "facts": "stored as agents[].blurb, in the allowed patch fields lib/agents.js:1574; shown as a tooltip per audit (agent-settings.html:171); default empty (audit), not otherwise checked"
     },
     {
@@ -220,12 +197,7 @@
       "scope": "per-agent",
       "home": "Agent card > Role and team",
       "storedAs": "agents[].owner",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#agent-owner"
-        }
-      ],
+      "anchors": [],
       "facts": "stored agents[].owner, patchable lib/agents.js:1574; access follows owner and sharedWith lib/access.js:106-107; screen-only per audit; default as recorded on the agent, not otherwise checked"
     },
     {
@@ -256,12 +228,7 @@
       "scope": "per-agent",
       "home": "Agent card > Role and team",
       "storedAs": "agents[].sharedWith",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#agent-shared"
-        }
-      ],
+      "anchors": [],
       "facts": "agents[].sharedWith, empty list is removed lib/agents.js:252, 1728-1730; a member may use an agent they own or that is shared lib/access.js:106-107"
     },
     {
@@ -293,12 +260,7 @@
       "scope": "per-agent",
       "home": "Agent card > Access",
       "storedAs": "agents[].policy.overrides.web",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "[data-setting=\"OPT-0008\"]"
-        }
-      ],
+      "anchors": [],
       "facts": "Role defaults lib/tool-policy.js:54-64 (web allow for worker/head/lead/wallet, deny for member). Overrides at agents[].policy.overrides.web. Under 'ask' with approval cards off, ask is simply allowed lib/policy-gate.js:188-192; approvalsEnabled default false lib/sdk-chat.js:362. Applied per tool call, no restart."
     },
     {
@@ -329,12 +291,7 @@
       "scope": "per-agent",
       "home": "Agent card > Access",
       "storedAs": "agents[].policy.overrides.read_outside",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "[data-setting=\"OPT-0009\"]"
-        }
-      ],
+      "anchors": [],
       "facts": "Role defaults lib/tool-policy.js:54-64 (read_outside allow, member deny). Override agents[].policy.overrides.read_outside. Ask without approval cards = allow lib/policy-gate.js:188-192. No restart."
     },
     {
@@ -365,12 +322,7 @@
       "scope": "per-agent",
       "home": "Agent card > Access",
       "storedAs": "agents[].policy.overrides.write_outside",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "[data-setting=\"OPT-0010\"]"
-        }
-      ],
+      "anchors": [],
       "facts": "Role defaults lib/tool-policy.js:54-64 (write_outside deny worker/member, ask head/lead). Override agents[].policy.overrides.write_outside. Ask without approval cards = allow lib/policy-gate.js:188-192. No restart."
     },
     {
@@ -402,12 +354,7 @@
       "scope": "per-agent",
       "home": "Agent card > Access",
       "storedAs": "agents[].policy.overrides.send",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "[data-setting=\"OPT-0011\"]"
-        }
-      ],
+      "anchors": [],
       "facts": "Role defaults lib/tool-policy.js:54-64 (send deny worker/member, ask head/lead). Override agents[].policy.overrides.send. Ask without approval cards = allow lib/policy-gate.js:188-192. No restart."
     },
     {
@@ -438,12 +385,7 @@
       "scope": "per-agent",
       "home": "Agent card > Access",
       "storedAs": "agents[].policy.overrides.admin",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "[data-setting=\"OPT-0012\"]"
-        }
-      ],
+      "anchors": [],
       "facts": "Role defaults lib/tool-policy.js:54-64 (admin deny worker/member, ask head/lead). Members' agents can never be granted admin: lib/tool-policy.js:108-109 MEMBER_NEVER; whether a per-agent override on a member's agent is honoured is not confirmed. Ask without approval cards = allow lib/policy-gate.js:188-192. No restart."
     },
     {
@@ -475,12 +417,7 @@
       "scope": "per-agent",
       "home": "Agent card > Access",
       "storedAs": "agents[].policy.overrides.destroy",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "[data-setting=\"OPT-0013\"]"
-        }
-      ],
+      "anchors": [],
       "facts": "Role defaults lib/tool-policy.js:54-64 (destroy deny worker/head/member, ask lead). Members never granted: lib/tool-policy.js:108-109; per-agent override on a member's agent not confirmed. Ask without approval cards = allow lib/policy-gate.js:188-192. No restart."
     },
     {
@@ -511,12 +448,7 @@
       "scope": "per-agent",
       "home": "Settings > Tools and connections",
       "storedAs": "none (role default only)",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "[data-setting=\"OPT-0014\"]"
-        }
-      ],
+      "anchors": [],
       "facts": "Indicator only (agent-settings.html:198); no stored value. Wallet tools reach only agents named in settings.walletAgents, default none: lib/wallet/tools.js:6, 16. Policy class 'money' lib/policy-gate.js:180."
     },
     {
@@ -547,12 +479,7 @@
       "scope": "per-agent",
       "home": "Agent card > Access",
       "storedAs": "none (computed)",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#policy-table"
-        }
-      ],
+      "anchors": [],
       "facts": "Computed, not stored: lib/tool-policy.js policyFor layers role default, hub member default (settings.memberPolicy), member grants (user.grants.policy), agent overrides lib/tool-policy.js:100-106. Display code at agent-settings.html:196 not read in detail."
     },
     {
@@ -583,12 +510,7 @@
       "scope": "per-agent",
       "home": "Agent card > Access",
       "storedAs": "root grants store (POST/DELETE /api/root-grants), not agents[]",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#root-grant-status"
-        }
-      ],
+      "anchors": [],
       "facts": "lib/root-grants.js:21-22 default 60 minutes, max 24 h (1..1440 minutes); screen offers 15 min / 1 h / 4 h / 24 h (audit). Not stored on the agent: root grants store, admin only server.js:2230-2248. Every root command logged to data/root-commands.jsonl lib/policy-gate.js:182-188. A card per command appears if 'root commands' is ticked under Always ask for. Expired grant is gone at once lib/root-grants.js:8. No restart."
     },
     {
@@ -619,12 +541,7 @@
       "scope": "per-agent",
       "home": "Agent card > Access",
       "storedAs": "agents[].policy.roots",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#policy-folders"
-        }
-      ],
+      "anchors": [],
       "facts": "Stored agents[].policy.roots; roots add to defaultRoots lib/tool-policy.js defaultRoots; a sandboxed agent sees exactly these plus its own workspace; box is rebuilt on next turn (audit help text, lib/agents.js:1324 for the rename case). Team folders medical/legal are recognised from roots lib/tool-policy.js:68-74. No restart."
     },
     {
@@ -655,12 +572,7 @@
       "scope": "per-agent",
       "home": "Agent card > Access",
       "storedAs": "agents[].policy.roots",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#policy-roots"
-        }
-      ],
+      "anchors": [],
       "facts": "Same store as OPT-0017: agents[].policy.roots; '~' is expanded lib/tool-policy.js:70. 'Without asking' is from the audit text: roots are where write_inside applies; not checked further. No restart."
     },
     {
@@ -713,12 +625,7 @@
       "scope": "per-agent",
       "home": "Agent card > Memory",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#records-total"
-        }
-      ],
+      "anchors": [],
       "facts": "lib/records.js:9-10, 17, 28-33 (cap: the agent's own recordsMaxBytes, else settings.recordsMaxBytes, else 256 KB; 75% warning); the Records are loaded in full every turn; a file that would pass the cap is not loaded and the agent is told; display only."
     },
     {
@@ -749,12 +656,7 @@
       "scope": "per-agent",
       "home": "Agent card > Memory",
       "storedAs": "workspaces/<agent>/records/<name>",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#records-content"
-        }
-      ],
+      "anchors": [],
       "facts": "records live at workspaces/<agent>/records/*.md lib/records.js:3-9, 17-19; loaded in full on each turn so the next turn sees the change, no restart; the screen is agent-settings.html:235."
     },
     {
@@ -785,12 +687,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].voice.stt",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#voice-stt"
-        }
-      ],
+      "anchors": [],
       "facts": "Engines local, openai, google lib/voice/cloud.js:20-22; stored in agent.voice.stt, cleaned by cleanAgentVoice lib/agents.js:1683-1703; a cloud engine on an agent kept on this computer needs the owner's confirmation, else 403 owner_confirmation_required lib/agents.js:1695-1700, keptOnBox lib/voice/cloud.js:303; estimated price per minute openai 0.003, google 0.002 lib/voice/cloud.js:34-36. Needs a key: keys not checked here. No restart (read per call)."
     },
     {
@@ -821,12 +718,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].voice.tts",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#voice-tts"
-        }
-      ],
+      "anchors": [],
       "facts": "Engines local, openai, google, elevenlabs lib/voice/cloud.js:21-22; stored in agent.voice.tts lib/agents.js:1683-1703; owner confirmation for agents kept on this computer lib/agents.js:1695-1700; estimated price per 1,000 characters openai 0.015, google 0.02, elevenlabs 0.05 lib/voice/cloud.js:34-37. No restart (read per reply)."
     },
     {
@@ -857,12 +749,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].voice.cloudVoice",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#voice-cloud-select"
-        }
-      ],
+      "anchors": [],
       "facts": "OpenAI voices alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse; Google Kore, Puck, Charon, Fenrir, Aoede, Leda, Orus, Zephyr; defaults coral and Kore lib/voice/cloud.js:23-26, 108-111; an ElevenLabs voice is an identifier of 10 to 40 letters and digits, a bad one fails lib/voice/cloud.js:24, 286; stored in agent.voice.cloudVoice. No restart."
     },
     {
@@ -884,12 +771,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].voice.cloudVoice",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#voice-cloud-id"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0024"
     },
     {
@@ -918,12 +800,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].voice.voice",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#voice-select"
-        }
-      ],
+      "anchors": [],
       "facts": "Stored in agent.voice.voice; empty means the hub default voice lib/agents.js:1684 and lib/voice/manifest.js; list is the installed voices (voice ids checked against VOICE_IDS lib/voice/manifest.js:146-156). Local voices carry no per-use charge. No restart."
     },
     {
@@ -953,12 +830,7 @@
       "scope": "per-agent",
       "home": "Settings > Models and money",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#voice-keys-line"
-        }
-      ],
+      "anchors": [],
       "facts": "agent-settings.html:268 per audit (a display line, not re-read). Without a key a cloud engine falls back to the local engine (help today for OPT-0022). Restart: not applicable."
     },
     {
@@ -989,12 +861,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].voiceDefaults",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#voice-defaults"
-        }
-      ],
+      "anchors": [],
       "facts": "Patient preset = pause 4000 ms, wait 8000 ms, interrupt 30, speed 0.9 lib/ui-voice.js:70; stored in agent.voiceDefaults lib/agents.js:282, 1664-1667; a device follows it only for settings the person did not set there lib/ui-voice.js:69-95. No restart."
     },
     {
@@ -1024,12 +891,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].voiceDefaults.endPause",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#vd-pause"
-        }
-      ],
+      "anchors": [],
       "facts": "agent.voiceDefaults.endPause; allowed values from VOICE_END_PAUSES (0.8, 1.2, 2, 4 s per audit and lib/ui-voice.js:77); device default 1200 ms lib/ui-voice.js:62. An agent default applies only where the device has not set its own lib/ui-voice.js:94-103. No restart."
     },
     {
@@ -1058,12 +920,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].voiceDefaults.continueWait",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#vd-wait"
-        }
-      ],
+      "anchors": [],
       "facts": "agent.voiceDefaults.continueWait; device default 3000 ms lib/ui-voice.js:62; allowed values VOICE_CONTINUE_WAITS lib/ui-voice.js:77. No restart."
     },
     {
@@ -1093,12 +950,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].voiceDefaults.interruptSensitivity",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#vd-sens"
-        }
-      ],
+      "anchors": [],
       "facts": "agent.voiceDefaults.interruptSensitivity, kept between 0 and 100 lib/ui-voice.js:77-84; device default 50 lib/ui-voice.js:62. No restart."
     },
     {
@@ -1131,10 +983,6 @@
       "home": "Agent card > Basics",
       "storedAs": "agents[].voiceDefaults.voiceSpeed | localStorage:hub-voice.voiceSpeed",
       "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#vd-speed"
-        },
         {
           "surface": "desktop",
           "label": "Voice speed"
@@ -1181,12 +1029,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].recordings.keep",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#rec-keep"
-        }
-      ],
+      "anchors": [],
       "facts": "agent.recordings.keep default false lib/recordings/settings.js:2, 24-31; owner-only change (admin) lib/agents.js:1581-1582; stored under <hub home>/call-recordings and never reachable by agents lib/tool-policy.js:208-212, 1064; each change is written to the audit log lib/agents.js:1589. Encryption wording is from the page text; not checked in code. No restart (read per call)."
     },
     {
@@ -1216,12 +1059,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].recordings.allowed",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#rec-allowed"
-        }
-      ],
+      "anchors": [],
       "facts": "agent.recordings.allowed, a list of up to 20 people lib/recordings/settings.js:11, 17-23; admins get no exception lib/access.js:61; agents refused for every role lib/tool-policy.js:1064; default empty lib/recordings/settings.js:25-31. No restart."
     },
     {
@@ -1251,12 +1089,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].recordings.consentLine",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#rec-consent"
-        }
-      ],
+      "anchors": [],
       "facts": "Default text and a 300 character limit lib/recordings/settings.js:7, 10; an empty value returns the default lib/recordings/settings.js:25-27. No restart."
     },
     {
@@ -1286,12 +1119,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].recordings.announce",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#rec-announce"
-        }
-      ],
+      "anchors": [],
       "facts": "announce values first, every, never; default first lib/recordings/settings.js:3, 12, 24-31. Takes effect on the next call. No restart."
     },
     {
@@ -1320,12 +1148,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].recordings.keepReplies",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#rec-replies"
-        }
-      ],
+      "anchors": [],
       "facts": "agent.recordings.keepReplies default false lib/recordings/settings.js:2, 28. That it needs Keep call recordings on is inferred from the settings shape; not confirmed in the recorder. No restart."
     },
     {
@@ -1355,12 +1178,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].recordings.mic",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#rec-mic"
-        }
-      ],
+      "anchors": [],
       "facts": "agent.recordings.mic values processed or unprocessed, default processed lib/recordings/settings.js:11, 29. Applied when the next call starts (not confirmed whether it applies to a call already running). No restart."
     },
     {
@@ -1390,12 +1208,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#rec-storage"
-        }
-      ],
+      "anchors": [],
       "facts": "agent-settings.html:331 per audit (display only, not re-read). Folder <hub home>/call-recordings/<agent> lib/agents.js:1093. Restart: not applicable."
     },
     {
@@ -1427,12 +1240,7 @@
       "scope": "per-agent",
       "home": "Agent card > Memory",
       "storedAs": "agents[].compaction.mode (PUT /api/agents/:name/compaction)",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#compaction-mode"
-        }
-      ],
+      "anchors": [],
       "facts": "lib/compaction.js:10-27 modes off/dry/on/assisted, DEFAULT_MODE 'dry', LOCAL_MODE 'assisted'; mode resolved per call lib/compaction.js:132-133 (agent value, else hub setting compactionMode, else default); saved by PUT /api/agents/:name/compaction, lib/agents.js:1716-1722, no restart; members may change it server.js:1726; audit duplicate flag: same setting as the sample record 5"
     },
     {
@@ -1462,12 +1270,7 @@
       "scope": "per-agent",
       "home": "Agent card > Memory",
       "storedAs": "agents[].compaction.at",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#compaction-at"
-        }
-      ],
+      "anchors": [],
       "facts": "lib/compaction.js:24-27,134 DEFAULT_AT 0.75, LOCAL_AT 0.6; the page offers 50-90% in steps of 5; the server accepts 0.3-0.95, lib/agents.js:1719-1720; no restart; the hub-wide fallback setting compactionAt also exists, lib/compaction.js:134"
     },
     {
@@ -1497,12 +1300,7 @@
       "scope": "per-agent",
       "home": "Agent card > Memory",
       "storedAs": "agents[].contextWindow (PATCH)",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#compaction-window"
-        }
-      ],
+      "anchors": [],
       "facts": "lib/agents.js:288,1713-1715 contextWindow stored when 2048-4,000,000, else removed (blank = detect); no restart; label says LM Studio reports its loaded window and cloud models use a table (agent-settings.html:366), table itself not read; admin only (not in server.js:1726 member list)"
     },
     {
@@ -1531,12 +1329,7 @@
       "scope": "per-agent",
       "home": "Agent card > Memory",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#compaction-now"
-        }
-      ],
+      "anchors": [],
       "facts": "agent-settings.html:370 (id compaction-now) text 'Context now: ...'; read-only display, no stored value; no restart"
     },
     {
@@ -1565,12 +1358,7 @@
       "scope": "per-agent",
       "home": "Agent card > Memory",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#compaction-last"
-        }
-      ],
+      "anchors": [],
       "facts": "agent-settings.html:371 (id compaction-last) text 'Last compression: ...'; read-only display of compaction history (lib/compaction.js history); no restart"
     },
     {
@@ -1600,12 +1388,7 @@
       "scope": "per-agent",
       "home": "Agent card > Role and team",
       "storedAs": "agents[].icon (POST /api/agents/:name/icon)",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#agent-icon"
-        }
-      ],
+      "anchors": [],
       "facts": "lib/agents.js:246 (icon: a.icon || autoGenerateIcon(name, model)), :96-129 autoGenerateIcon; Auto button agent-settings.html:386-388; validateIcon keeps it to one emoji lib/agents.js:619-622. Robot fallback is from the audit and the placeholder; not re-checked in autoGenerateIcon's last line."
     },
     {
@@ -1627,12 +1410,7 @@
       "scope": "per-device",
       "home": "Agent card > Basics",
       "storedAs": "none (page only)",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#model-filter"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0047"
     },
     {
@@ -1669,10 +1447,6 @@
       "home": "Agent card > Basics",
       "storedAs": "agents[].model (POST /api/agents/:name/model) | agents[].model | agents[].model (also agents[].autoModel for Auto)",
       "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#model-select"
-        },
         {
           "surface": "desktop",
           "label": "Create New Agent > Model"
@@ -1740,12 +1514,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].modelPinned",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#model-pinned"
-        }
-      ],
+      "anchors": [],
       "facts": "agents[].modelPinned lib/agents.js:275,1659-1661 (true or removed); skipped by suggestions lib/model-offers.js:89, lib/model-offer-groups.js:168,224; no restart; admin only"
     },
     {
@@ -1775,12 +1544,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "none (/api/models/health)",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#health-status"
-        }
-      ],
+      "anchors": [],
       "facts": "agent-settings.html:412; reads /api/models/health (per audit; handler not re-read); no stored value; no restart; exact test method and refresh timing not confirmed"
     },
     {
@@ -1810,12 +1574,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].autoModel",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#auto-model"
-        }
-      ],
+      "anchors": [],
       "facts": "agents[].autoModel lib/agents.js:1710-1711 (boolean); six categories per lib/classifier.js (simple, code, math, vision, reasoning, hardest as listed in audit text, category list not re-read); picker behaviour lib/classifier.js:1-26; no restart; admin only"
     },
     {
@@ -1845,12 +1604,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].autoModelAllowedModels",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#auto-model-allowed"
-        }
-      ],
+      "anchors": [],
       "facts": "agents[].autoModelAllowedModels lib/agents.js:267 (null = all); one checkbox per selectable model, Save and All buttons (agent-settings.html:525); only matters when Auto is on; no restart; admin only"
     },
     {
@@ -1881,12 +1635,7 @@
       "scope": "per-agent",
       "home": "Agent card > Access",
       "storedAs": "agents[].sandbox",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#sandbox-mode"
-        }
-      ],
+      "anchors": [],
       "facts": "Values inherit / off / container lib/agents.js:270; defaults member container, admin off lib/sandbox.js:37, resolved lib/sandbox.js:79-90. Turning it off is on the dangerous list (audit). Box made on the agent's next turn, so no restart. Docker and image requirement from the audit help text; not re-checked here."
     },
     {
@@ -1917,12 +1666,7 @@
       "scope": "per-agent",
       "home": "Agent card > Access",
       "storedAs": "agents[].lockbox",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#lockbox-mode"
-        }
-      ],
+      "anchors": [],
       "facts": "Values inherit / off / watch / enforce lib/lockbox/settings.js:7; agent value wins, else settings.lockboxDefault, else off lib/lockbox/index.js:44-46. Mode is read on each command (no cache at start-up) so no restart; audit said 'unknown'. Changes are audited and admins told server.js:3130. Block mode: a command that cannot be wrapped is not run (lib/policy-gate.js:349 per sample 13)."
     },
     {
@@ -1953,12 +1697,7 @@
       "scope": "per-agent",
       "home": "Agent card > Access",
       "storedAs": "agents[].lockboxEnv",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#lockbox-env"
-        }
-      ],
+      "anchors": [],
       "facts": "agents[].lockboxEnv; comma list or array of valid names, max 32, no repeats lib/lockbox/settings.js:10-12 (ENV_NAME_RE, ENV_MAX), cleanEnv lib/lockbox/settings.js:30-37. Applies only when the lockbox is on. No restart (read per command, not fully traced)."
     },
     {
@@ -1988,12 +1727,7 @@
       "scope": "per-agent",
       "home": "Agent card > Access",
       "storedAs": "none (/api/lockbox/watch)",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#lockbox-log-title"
-        }
-      ],
+      "anchors": [],
       "facts": "Read from /api/lockbox/watch, admin only lib/lockbox/settings.js header; not stored on the agent. Number of entries kept not checked. No restart."
     },
     {
@@ -2029,10 +1763,6 @@
       "home": "Agent card > Basics",
       "storedAs": "agents[].effort | agents[].effort (PATCH /api/agents/<a>)",
       "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#effort-mode"
-        },
         {
           "surface": "desktop",
           "label": "Effort picker"
@@ -2073,12 +1803,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].tier",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#tier-mode"
-        }
-      ],
+      "anchors": [],
       "facts": "agents[].tier lib/agents.js:1623-1629 (standard removes the field); TIERS standard, fast, economy lib/tier.js:14; Fast = about twice the price, Codex 2-2.5x plan use lib/tier.js:5-6,42-45; Economy about half price, API routes only lib/tier.js:7,35-36; admin only (comment lib/agents.js:1624); no restart"
     },
     {
@@ -2109,12 +1834,7 @@
       "scope": "per-agent",
       "home": "Agent card > Role and team",
       "storedAs": "agents[].teamGuidance",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#team-guidance-mode"
-        }
-      ],
+      "anchors": [],
       "facts": "per-agent 'on'|'off', undefined = follow hub setting lib/agents.js:273 (lib/team-guidance); no restart: instructions built per turn (not traced further); costs from templates/behaviour-changes.json team-guidance."
     },
     {
@@ -2145,12 +1865,7 @@
       "scope": "per-agent",
       "home": "Agent card > Role and team",
       "storedAs": "agents[].teamRole",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#team-role"
-        }
-      ],
+      "anchors": [],
       "facts": "values 'challenger'|'worker', undefined = none lib/agents.js:276, 628-630; no restart: stored on the agent (not traced further)."
     },
     {
@@ -2181,12 +1896,7 @@
       "scope": "per-agent",
       "home": "Agent card > Role and team",
       "storedAs": "agents[].buildPartner",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#build-partner"
-        }
-      ],
+      "anchors": [],
       "facts": "agents[].buildPartner lib/agents.js:277,632-634,1637-1640 (valid agent name, not itself; empty removes); used by hand_off (lib/hand-offs, per comment); no restart; admin only"
     },
     {
@@ -2217,12 +1927,7 @@
       "scope": "per-agent",
       "home": "Agent card > Role and team",
       "storedAs": "agents[].reportsTo",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#reports-to"
-        }
-      ],
+      "anchors": [],
       "facts": "reportsTo is an agent name, optional lib/agents.js:278, 636-638; checked by lib/ui-teams checkReportsTo lib/agents.js:885; display only is not confirmed beyond the code comment 'Teams view'."
     },
     {
@@ -2253,12 +1958,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].callDisplay",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#call-display"
-        }
-      ],
+      "anchors": [],
       "facts": "agent.callDisplay, none removes the field lib/agents.js:1680-1681; a device choice wins (help today). Download size shown in the list; characters are files served by the hub lib/access.js:62. No restart."
     },
     {
@@ -2290,12 +1990,7 @@
       "scope": "per-agent",
       "home": "Agent card > Access",
       "storedAs": "agents[].tools",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#tools-mode"
-        }
-      ],
+      "anchors": [],
       "facts": "agents[].tools inherit/client/hub lib/agents.js:285,1705-1709; effective mode lib/hub-tools.js:48-54 (non-Claude/Codex models always 'hub'; inherit follows settings.toolsDefault, 'hub' only if set, otherwise 'client' - so the real hub default is client tools); no restart noted in code, takes effect on the next turn (not confirmed); admin only"
     },
     {
@@ -2325,12 +2020,7 @@
       "scope": "per-agent",
       "home": "Agent card > Memory",
       "storedAs": "agents[].maxContextMessages",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#max-context-messages"
-        }
-      ],
+      "anchors": [],
       "facts": "agents[].maxContextMessages lib/agents.js:263; used lib/sdk-chat.js:1296,3285 (agent value, else global.__maxContextMessages, else MAX_CONTEXT_MESSAGES_DEFAULT 40 lib/sdk-chat.js:1050); page range 1-200 (per-agent range check not read); members may change it server.js:1726; no restart"
     },
     {
@@ -2360,12 +2050,7 @@
       "scope": "per-agent",
       "home": "Agent card > Basics",
       "storedAs": "agents[].maxOutputTokens",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#max-output-tokens"
-        }
-      ],
+      "anchors": [],
       "facts": "agents[].maxOutputTokens lib/agents.js:264; used lib/sdk-chat.js:3437 (agent value, else global.__maxCompletionTokens, else 32000); page range 100-128000 (per-agent range check not read); members may change it server.js:1726; no restart; the word estimate is mine, not in the code"
     },
     {
@@ -2397,12 +2082,7 @@
       "scope": "per-agent",
       "home": "Agent card > Memory",
       "storedAs": "agents[].contextBudget",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "#context-budget"
-        }
-      ],
+      "anchors": [],
       "facts": "agents[].contextBudget, null = model's full window lib/agents.js:265; min 125000 and cannot exceed the model window lib/context-window.js:24, 45-46; compaction at 80% of it lib/context-window.js:23; edit is a per-agent field applied per turn, no restart lib/agents.js:1574, 1748-1751. Applies to Claude agents only (help_today); not re-checked."
     },
     {
@@ -2433,12 +2113,7 @@
       "scope": "per-agent",
       "home": "Agent card > Memory",
       "storedAs": "workspaces/<agent>/SOUL.md",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "[data-setting=\"OPT-0068\"]"
-        }
-      ],
+      "anchors": [],
       "facts": "file workspaces/<agent>/SOUL.md, tab at agent-settings.html:556; read when the agent's instructions are built (lib/agents.js:443 notes minimalContext agents load IDENTITY + SOUL only); when edits take effect (next turn vs next session) not confirmed; no restart"
     },
     {
@@ -2469,12 +2144,7 @@
       "scope": "per-agent",
       "home": "Agent card > Memory",
       "storedAs": "workspaces/<agent>/IDENTITY.md",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "[data-setting=\"OPT-0069\"]"
-        }
-      ],
+      "anchors": [],
       "facts": "file workspaces/<agent>/IDENTITY.md, tab at agent-settings.html:556; loaded with SOUL even for minimal-context agents lib/agents.js:443; when edits take effect not confirmed; no restart"
     },
     {
@@ -2505,12 +2175,7 @@
       "scope": "per-agent",
       "home": "Agent card > Memory",
       "storedAs": "workspaces/<agent>/MEMORY.md",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "[data-setting=\"OPT-0070\"]"
-        }
-      ],
+      "anchors": [],
       "facts": "file workspaces/<agent>/MEMORY.md, tab at agent-settings.html:556; skipped for minimal-context agents lib/agents.js:541-542 (as read, section guarded by !opts.minimalContext); when edits take effect not confirmed; no restart"
     },
     {
@@ -2540,12 +2205,7 @@
       "scope": "per-agent",
       "home": "Agent card > Memory",
       "storedAs": "workspaces/<agent>/TOOLS.md",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "[data-setting=\"OPT-0071\"]"
-        }
-      ],
+      "anchors": [],
       "facts": "file workspaces/<agent>/TOOLS.md, tab at agent-settings.html:556; that it grants no permissions is inferred (permissions live in the policy, lib/policy-gate.js), not confirmed from the file loader; no restart"
     },
     {
@@ -2576,12 +2236,7 @@
       "scope": "per-agent",
       "home": "Agent card > Memory",
       "storedAs": "workspaces/<agent>/USER.md",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "[data-setting=\"OPT-0072\"]"
-        }
-      ],
+      "anchors": [],
       "facts": "file workspaces/<agent>/USER.md, tab at agent-settings.html:556; skipped for minimal-context agents lib/agents.js:541-542 (not re-confirmed for USER specifically); no restart"
     },
     {
@@ -2612,12 +2267,7 @@
       "scope": "per-agent",
       "home": "Agent card > Schedule and background work",
       "storedAs": "workspaces/<agent>/TASKS.md",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "selector": "[data-setting=\"OPT-0073\"]"
-        }
-      ],
+      "anchors": [],
       "facts": "file workspaces/<agent>/TASKS.md, tab at agent-settings.html:556; the scheduler page also lists enabled TASKS.md tasks (app.js:2518 SCHED_SECTIONS md), so entries can run on their own; exact parse rules not read; no restart"
     },
     {
@@ -2647,12 +2297,7 @@
       "scope": "per-agent",
       "home": "Agent card > Role and team",
       "storedAs": "DELETE /api/agents/:name",
-      "anchors": [
-        {
-          "surface": "agent-settings",
-          "label": "Delete Agent"
-        }
-      ],
+      "anchors": [],
       "facts": "agent-settings.html:562 confirm text says files, chats and memory are kept with the deleted agents and the name is free again; DELETE /api/agents/:name; lib/agent-archive.js:252, 288 (kept bundle, later removed by Delete permanently)"
     },
     {
@@ -3322,12 +2967,7 @@
       "scope": "per-device",
       "home": "Top bar",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#reload-app-item"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0094"
     },
     {
@@ -3349,12 +2989,7 @@
       "scope": "per-device",
       "home": "Settings > Tools and connections",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#more-modules-item"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0507"
     },
     {
@@ -3376,12 +3011,7 @@
       "scope": "per-device",
       "home": "Settings > Tools and connections",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#more-remote-item"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0576"
     },
     {
@@ -7826,12 +7456,7 @@
       "scope": "install",
       "home": "Settings > Tools and connections",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#st-connectors-link"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0507"
     },
     {
@@ -7853,12 +7478,7 @@
       "scope": "install",
       "home": "Settings > Tools and connections",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#st-remote-link"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0576"
     },
     {
@@ -14806,7 +14426,12 @@
       "scope": "install",
       "home": "Settings > Tools and connections",
       "storedAs": "none",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-door-modules"
+        }
+      ],
       "mergedInto": "OPT-0507"
     },
     {
@@ -14828,7 +14453,12 @@
       "scope": "install",
       "home": "Settings > Tools and connections",
       "storedAs": "none",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-door-remote"
+        }
+      ],
       "mergedInto": "OPT-0576"
     },
     {
@@ -14850,12 +14480,7 @@
       "scope": "install",
       "home": "Settings > For your review",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#st-changes-link"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0241"
     },
     {
@@ -25450,20 +25075,7 @@
       "scope": "per-agent",
       "home": "Agent card > Role and team",
       "storedAs": "behaviour:build-team | behaviour:build-team (POST /api/agents/<name>/build-team)",
-      "anchors": [
-        {
-          "surface": "phone",
-          "label": "Build (team) link on a solo main agent"
-        },
-        {
-          "surface": "phone",
-          "selector": "#menu-build-team"
-        },
-        {
-          "surface": "desktop",
-          "label": "Build team"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0138"
     },
     {
@@ -25663,12 +25275,7 @@
       "scope": "",
       "home": "Agent card > Basics",
       "storedAs": "none",
-      "anchors": [
-        {
-          "surface": "phone",
-          "selector": "#menu-agent-settings"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0137"
     },
     {
@@ -25690,12 +25297,7 @@
       "scope": "",
       "home": "Agent card > Role and team",
       "storedAs": "behaviour:optimize-team",
-      "anchors": [
-        {
-          "surface": "phone",
-          "selector": "#menu-optimize-team"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0139"
     },
     {

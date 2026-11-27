@@ -15727,6 +15727,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) pain
 // ── The count of things for the owner's review (lib/ui-review.js): a number on Settings in the ⋮ menu, a dot on the ⋮ buttons ──
 // Admins only. Read when the page loads, every 5 minutes, after a settings_changed event and when the page comes back to the front.
 let reviewSeq = 0;
+let reviewLastResult = null;   // the last answer reviewPaint drew: Simple's For your review line reads it
 async function reviewRefresh() {
   const RV = window.hubReview, seq = ++reviewSeq;
   let r = null;
@@ -15745,6 +15746,7 @@ async function reviewRefresh() {
   reviewPaint(r);
 }
 function reviewPaint(r) {
+  reviewLastResult = r;
   const RV = window.hubReview;
   const kind = r && RV ? RV.badgeKind(r) : '';
   const item = $('menu-settings');
@@ -16305,9 +16307,10 @@ function lookPickerPaint(host, onChosen) {
 const SETTINGS_SHEET_URL = '/?settings-only=1&desktop=once';
 const SETTINGS_SHEET_WAIT_MS = 20000;
 let settingsSheet = null;   // { el, frame, ready, timer }
-function settingsSheetOpen(doorId) {
+function settingsSheetOpen(doorId, groupId) {
   try { $('menu').classList.remove('open'); } catch { /* no menu */ }
-  if (settingsSheet) { if (doorId) { settingsSheet.door = doorId; settingsSheetLoad(); } return; }
+  if (typeof groupId !== 'string' || !/^(review|money)$/.test(groupId)) groupId = '';   // a group door: /?settings-only=1#settings-group=review (the frame shows that group's page)
+  if (settingsSheet) { if (doorId || groupId) { settingsSheet.door = doorId || ''; settingsSheet.group = groupId; settingsSheetLoad(); } return; }
   const el = document.createElement('div');
   el.id = 'settings-sheet';
   el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Settings');
@@ -16316,7 +16319,7 @@ function settingsSheetOpen(doorId) {
     '<div class="ssh-btns" hidden><button type="button" class="ssh-retry">Try again</button><button type="button" class="ssh-close">Close</button></div>' +
     '<div class="ssh-btns ssh-stuck" hidden><button type="button" class="ssh-wait-more">Keep waiting</button><button type="button" class="ssh-force">Close anyway</button></div></div>';
   document.body.appendChild(el);
-  settingsSheet = { el, frame: el.querySelector('iframe'), ready: false, timer: null, door: doorId || '' };
+  settingsSheet = { el, frame: el.querySelector('iframe'), ready: false, timer: null, door: doorId || '', group: groupId };
   el.__dialogClose = () => settingsSheetRequestClose(true);   // Back: the dialog in the frame decides (a group page goes back to the list first; unsaved changes, a save running)
   el.querySelector('.ssh-retry').addEventListener('click', settingsSheetLoad);
   el.querySelector('.ssh-close').addEventListener('click', settingsSheetClosed);
@@ -16341,7 +16344,7 @@ function settingsSheetLoad() {
   s.timer = setTimeout(settingsSheetFailed, SETTINGS_SHEET_WAIT_MS);
   // the chat this phone has open: Settings → Notifications → "For an agent" starts on it
   // a door (/mobile#settings-for=OPT-xxxx) goes on to the frame as its hash: Settings opens at that record
-  s.frame.src = SETTINGS_SHEET_URL + (typeof current === 'string' && current ? '&agent=' + encodeURIComponent(current) : '') + (s.door ? '#settings-for=' + s.door : '');
+  s.frame.src = SETTINGS_SHEET_URL + (typeof current === 'string' && current ? '&agent=' + encodeURIComponent(current) : '') + (s.door ? '#settings-for=' + s.door : s.group ? '#settings-group=' + s.group : '');
 }
 // /mobile#settings-for=OPT-xxxx: the Settings sheet opens at that record (the frame does the finding); the address goes back to what it was.
 function settingsDoorPhone() {
@@ -18120,18 +18123,23 @@ function simpleSettingsOpen() {
   const name = (hubMe && hubMe.user && (hubMe.user.name || hubMe.user.login)) || '';
   d.setAttribute('aria-label', 'Settings');
   d.innerHTML = '<h3>Settings</h3>' +
+    (hubMe && hubMe.isAdmin === true ? '<h4 class="ss-gh" id="ss-g-review">For your review</h4>' +
+      '<div class="ss-sec ss-rhint" id="ss-review-line" role="status">Checking…</div>' +
+      '<button type="button" class="ss-row" id="ss-review"><b>Review</b></button>' : '') +
     '<h4 class="ss-gh" id="ss-g-you">You and this device</h4>' +
     '<div class="ss-sec"><div class="ss-title">Appearance</div><div class="ss-seg" role="group" aria-label="Appearance">' +
     '<button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div><div class="ss-follow" hidden></div></div>' +
     '<div class="ss-sec" id="ss-style-sec"><div class="ss-title">Interface style</div><div id="ss-style"></div></div>' +
     '<div class="ss-sec"><div class="ss-title">Name</div><div class="ss-val"></div></div>' +
-    '<h4 class="ss-gh" id="ss-g-voice">Voice and calls</h4>' +
-    (hubMe && hubMe.isAdmin === false ? '<div class="ss-sec ss-rhint">An admin turns voice on and picks the voices. Use the microphone in a chat to talk.</div>' : '<button type="button" class="ss-row" id="ss-voice"><b>Voice settings</b><small>Turn voice on or off, the voices and calls</small></button>') +
-    '<h4 class="ss-gh" id="ss-notes-sec">Notifications</h4>' +
-    '<div class="ss-sec ss-rhint">Each agent’s notifications are on its card: tap the agent’s name in its chat.</div>' +
-    '<h4 class="ss-gh" id="ss-g-account">Account</h4>' +
+    '<div class="ss-sec ss-rhint" id="ss-notes-sec">Each agent’s notifications are on its card: tap the agent’s name in its chat.</div>' +   // Deep research (researchSimplePaint) goes under this line
     '<button type="button" class="ss-row" id="ss-adv"><b>Switch to Advanced</b><small>All tools, agents’ work and settings</small></button>' +
     '<button type="button" class="ss-row" id="ss-out"><b>Sign out</b></button>' +
+    '<h4 class="ss-gh" id="ss-g-voice">Voice and calls</h4>' +
+    (hubMe && hubMe.isAdmin === false ? '<div class="ss-sec ss-rhint">An admin turns voice on and picks the voices. Use the microphone in a chat to talk.</div>' : '<button type="button" class="ss-row" id="ss-voice"><b>Voice settings</b><small>Turn voice on or off, the voices and calls</small></button>') +
+    (hubMe && hubMe.isAdmin === true ? '<h4 class="ss-gh" id="ss-g-money">Models and money</h4>' +
+      '<div class="ss-sec ss-rhint" id="ss-money-line">Subscriptions, keys and spending</div>' +
+      '<button type="button" class="ss-row" id="ss-money"><b>Open</b></button>' : '') +
+    '<h4 class="ss-gh" id="ss-g-more">More settings</h4>' +
     '<button type="button" class="ss-row" id="ss-all"><b>More settings</b><small>' + (hubMe && hubMe.isAdmin === false ? 'Notifications, voice, chat and your account' : 'Provider keys, web search, backups and the rest') + '</small></button>' +   // everyone, as on the desktop (a member gets the one group); the last button
     '<button type="button" class="ss-close">Close</button>';
   d.querySelector('.ss-val').textContent = name;
@@ -18168,6 +18176,19 @@ function simpleSettingsOpen() {
   }));
   $('ss-adv').addEventListener('click', async () => { if (await simplePrefsPost({ uiMode: 'advanced' })) simpleReload(); else toast('Could not switch'); });
   $('ss-out').addEventListener('click', () => { signOut(); });
+  const paintReviewLine = () => {
+    const line = $('ss-review-line');
+    if (!line) return;
+    const r = reviewLastResult;
+    line.textContent = !r || !window.hubReview ? 'Checking…' : r.count > 0 ? window.hubReview.summaryText(r) : 'Nothing needs your review.';
+    line.classList.toggle('ss-warn', !!(r && r.problems && r.problems.length));
+  };
+  if ($('ss-review-line')) {
+    paintReviewLine();
+    if (!reviewLastResult) reviewRefresh().then(() => { if (d.isConnected) paintReviewLine(); }).catch(() => {});
+  }
+  $('ss-review')?.addEventListener('click', () => { d.close(); settingsSheetOpen('', 'review'); });   // Settings, at For your review
+  $('ss-money')?.addEventListener('click', () => { d.close(); settingsSheetOpen('', 'money'); });   // Settings, at Models and money
   $('ss-all')?.addEventListener('click', () => { d.close(); settingsSheetOpen(); });
   $('ss-voice')?.addEventListener('click', () => { d.close(); settingsSheetOpen(); });   // Settings opens on its list; Voice and calls is one tap away
   d.querySelector('.ss-close').addEventListener('click', () => d.close());

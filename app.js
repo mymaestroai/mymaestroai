@@ -466,6 +466,16 @@
       simpleLookOnce = true;
       document.addEventListener('mm-look-change', () => { try { simpleThemeBtnVisible(); } catch { /* cosmetic */ } });
     }
+    // Simple's For your review line: "Nothing needs your review." or the summary ("2 problems · 1 new feature"); "Checking…" until the first read
+    function simpleReviewText(r) {
+      if (!r || !window.hubReview) return 'Checking…';
+      return r.count > 0 ? window.hubReview.summaryText(r) : 'Nothing needs your review.';
+    }
+    // Settings with one group in front (review, money); Simple's two buttons and the phone's /#settings-group=review use it
+    async function openSettingsGroup(groupId) {
+      await openSettings();
+      stShowGroup(groupId, false);
+    }
     function simpleCloseSettings() {
       if (simpleLookOff) { simpleLookOff(); simpleLookOff = null; }
       const o = document.getElementById('simple-settings'); if (o) o.remove();
@@ -479,17 +489,20 @@
       overlay.innerHTML =
         '<div class="simple-modal" role="dialog" aria-label="Settings">' +
           '<div class="sm-h"><h2>Settings</h2><button type="button" class="sm-x" aria-label="Close">✕</button></div>' +
+          (me.isAdmin === true ? '<h3 class="sm-gh" id="sm-g-review">For your review</h3>' +
+            '<div class="sm-set sm-review"><span class="sm-lab" id="sm-review-line" role="status">Checking…</span><button type="button" class="sm-plain" data-act="review"><div><b>Review</b></div><span aria-hidden="true">›</span></button></div>' : '') +
           '<h3 class="sm-gh" id="sm-g-you">You and this device</h3>' +
           '<div class="sm-set"><span class="sm-lab">Appearance</span><div class="sm-seg"><button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div><div class="sm-follow" hidden></div></div>' +
           '<div class="sm-set"><span class="sm-lab">Interface style</span><div class="sm-style"></div></div>' +
           '<div class="sm-set"><span class="sm-lab">Name</span><div class="sm-name"></div></div>' +
-          '<h3 class="sm-gh" id="sm-g-voice">Voice and calls</h3>' +
-          (me.isAdmin === false ? '<div class="sm-set"><span class="sm-lab">An admin turns voice on and picks the voices. Use the microphone in a chat to talk.</span></div>' : '<div class="sm-set"><button type="button" class="sm-plain" data-act="voice"><div><b>Voice settings</b><span>Turn voice on or off, the voices and calls</span></div><span aria-hidden="true">›</span></button></div>') +
-          '<h3 class="sm-gh" id="sm-g-notes">Notifications</h3>' +
-          '<div class="sm-set"><span class="sm-lab">Each agent\'s notifications are on its card: press the agent\'s name in its chat.</span></div>' +
-          '<h3 class="sm-gh" id="sm-g-account">Account</h3>' +
+          '<div class="sm-set" id="sm-notes"><span class="sm-lab">Each agent\'s notifications are on its card: press the agent\'s name in its chat.</span></div>' +
           '<div class="sm-set"><button type="button" class="sm-plain" data-act="advanced"><div><b>Switch to Advanced</b><span>All tools, agents\' work and settings</span></div><span aria-hidden="true">›</span></button></div>' +
           '<div class="sm-set"><button type="button" class="sm-plain sm-out" data-act="signout">Sign out</button></div>' +
+          '<h3 class="sm-gh" id="sm-g-voice">Voice and calls</h3>' +
+          (me.isAdmin === false ? '<div class="sm-set"><span class="sm-lab">An admin turns voice on and picks the voices. Use the microphone in a chat to talk.</span></div>' : '<div class="sm-set"><button type="button" class="sm-plain" data-act="voice"><div><b>Voice settings</b><span>Turn voice on or off, the voices and calls</span></div><span aria-hidden="true">›</span></button></div>') +
+          (me.isAdmin === true ? '<h3 class="sm-gh" id="sm-g-money">Models and money</h3>' +
+            '<div class="sm-set sm-money"><span class="sm-lab" id="sm-money-line">Subscriptions, keys and spending</span><button type="button" class="sm-plain" data-act="money"><div><b>Open</b></div><span aria-hidden="true">›</span></button></div>' : '') +
+          '<h3 class="sm-gh" id="sm-g-more">More settings</h3>' +
           '<div class="sm-set"><button type="button" class="sm-plain" data-act="settings"><div><b>More settings</b><span>' + (me.isAdmin === false ? 'Notifications, voice, chat and your account' : 'Provider keys, web search, backups and the rest') + '</span></div><span aria-hidden="true">›</span></button></div>' +   // everyone (as the gear in Advanced: an admin gets all the groups, a member the one); the last button
         '</div>';
       overlay.querySelector('.sm-name').textContent = name;
@@ -509,6 +522,18 @@
       const onLook = () => { if (!overlay.isConnected) { document.removeEventListener('mm-look-change', onLook); return; } paintFollow(); };
       document.addEventListener('mm-look-change', onLook);
       simpleLookOff = () => document.removeEventListener('mm-look-change', onLook);
+      // For your review (admins): the last answer the page has, else one read; the line goes warning-coloured only for problems (as the gear)
+      const paintReview = () => {
+        const line = overlay.querySelector('#sm-review-line');
+        if (!line) return;
+        const r = typeof reviewLast !== 'undefined' ? reviewLast : null;
+        line.textContent = simpleReviewText(r);
+        line.classList.toggle('sm-warn', !!(r && r.problems && r.problems.length));
+      };
+      if (me.isAdmin === true) {
+        paintReview();
+        if (typeof reviewLast === 'undefined' || !reviewLast) { try { reviewRefresh().then(() => { if (overlay.isConnected) paintReview(); }).catch(() => {}); } catch { /* the line stays */ } }
+      }
       overlay.addEventListener('click', async (e) => {
         if (e.target === overlay || e.target.closest('.sm-x')) { simpleCloseSettings(); return; }
         const t = e.target.closest('.sm-seg button');
@@ -523,7 +548,9 @@
         }
         const a = e.target.closest('[data-act]');
         if (!a) return;
-        if (a.dataset.act === 'settings') { simpleCloseSettings(); openSettings(); }   // the full Settings dialog, as in Advanced
+        if (a.dataset.act === 'review') { simpleCloseSettings(); openSettingsGroup('review'); }   // Settings at For your review
+        else if (a.dataset.act === 'money') { simpleCloseSettings(); openSettingsGroup('money'); }   // Settings at Models and money
+        else if (a.dataset.act === 'settings') { simpleCloseSettings(); openSettings(); }   // the full Settings dialog, as in Advanced
         else if (a.dataset.act === 'voice') { simpleCloseSettings(); openVoiceSettings(); }   // Settings at the Voice group
         else if (a.dataset.act === 'advanced') simpleSwitchMode('advanced');
         else if (a.dataset.act === 'signout') signOut();
@@ -25873,6 +25900,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // as the full page has them (sandbox, subscriptions); a hub slow to answer never holds the dialog back more than 5 s
       try { await Promise.race([loadAgents(), new Promise((r) => setTimeout(r, 5000))]); } catch { /* the sections that list agents say so */ }
       await openSettings();
+      { const gm = /^#settings-group=(review|money)$/.exec(location.hash || ''); if (gm && isHubAdmin()) { try { history.replaceState(history.state, '', location.pathname + location.search); } catch { /* the hash stays */ } stShowGroup(gm[1], false); } }   // the phone's Simple buttons: /mobile opens the frame at this group
       if (isHubAdmin() && typeof settingsDoorStart === 'function') settingsDoorStart();   // the phone's /mobile#settings-for=OPT-xxxx arrives here as this frame's hash (admins)
       document.addEventListener('click', settingsOnlyLeaveGuard, true);
       settingsOnlyWatch();

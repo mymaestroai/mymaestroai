@@ -91,9 +91,6 @@ test('every anchor selector id appears literally in its surface\'s files', () =>
   for (const r of records.all()) {
     for (const a of r.anchors) {
       if (a.selector === undefined) continue;   // anchored by label: nothing to look up
-      if (['#menu-agent-settings', '#menu-build-team', '#menu-optimize-team'].includes(a.selector)) continue;   // P4-2: the phone's ⋮ items are gone (their records live on the card's Role and team); the anchors are re-pointed in a later part
-      if (['#reload-app-item', '#more-modules-item', '#more-remote-item', '#st-connectors-link', '#st-remote-link', '#st-changes-link'].includes(a.selector)) continue;   // P4-6a: the top-bar ⋯ menu and the "Go to:" line are gone (Reload is the top-bar button, the connectors are doors in Settings); those records are re-pointed in a later part
-      if (a.surface === 'agent-settings') continue;   // P4-2: agent-settings.html is a redirect page now; these anchors (templates/settings-records.json is generated) are re-pointed at the card in a later part
       const files = FILES_BY_SURFACE[a.surface];
       assert.ok(files, `${r.id}: unknown surface ${a.surface}`);
       let found;
@@ -107,6 +104,9 @@ test('every anchor selector id appears literally in its surface\'s files', () =>
         found = files.some((f) => read(f).includes(`id="${id}"`) || read(f).includes(`id='${id}'`) || read(f).includes(`'${id}'`));
         // the provider inputs are drawn in a loop: id="st-key-${p.id}" for each provider of PROVIDERS ({ id: 'perplexity', … })
         const prov = /^st-(key|url)-([a-z]+)$/.exec(id);
+        // the door rows are drawn by one helper: id="st-door-${name}" for each stDoorHtml('name', ...)
+        const door = /^st-door-([a-z-]+)$/.exec(id);
+        if (!found && door) found = files.some((f) => read(f).includes('id="st-door-${name}"') && read(f).includes(`stDoorHtml('${door[1]}',`));
         if (!found && prov) found = files.some((f) => read(f).includes('id="st-' + prov[1] + '-${p.id}"') && read(f).includes(`{ id: '${prov[2]}',`));
       }
       assert.ok(found, `${r.id}: ${a.selector} is not in ${files.join(' / ')} (renamed?)`);
@@ -228,12 +228,14 @@ test('anchors: no selector belongs to two records on one surface (an alias share
   assert.equal(sel('OPT-0374', 'desktop'), '#st-cl-think');
   assert.equal(sel('OPT-0375', 'desktop'), '#st-cl-floor');
   assert.equal(sel('OPT-0376', 'desktop'), '#st-cl-shadow');
-  const perms = ['OPT-0008', 'OPT-0009', 'OPT-0010', 'OPT-0011', 'OPT-0012', 'OPT-0013', 'OPT-0014'];
-  for (const id of perms) assert.equal(sel(id, 'agent-settings'), `[data-setting="${id}"]`);
-  for (const id of ['OPT-0017', 'OPT-0018']) assert.ok(sel(id, 'agent-settings'), `${id} has its own control`);
-  assert.equal(sel('OPT-0016', 'agent-settings'), '#root-grant-status');
-  assert.equal(sel('OPT-0017', 'agent-settings'), '#policy-folders');
-  assert.equal(sel('OPT-0018', 'agent-settings'), '#policy-roots');
+  // P4-6b: the permission rows are the card's own rows, found by record id: no record keeps an agent-settings anchor
+  for (const r of records.all()) assert.ok(!r.anchors.some((a) => a.surface === 'agent-settings'), `${r.id} still anchors agent-settings`);
+  // the removed top-bar / Go-to-line / phone menu elements are re-pointed at what replaced them
+  const gone = ['#reload-app-item', '#more-modules-item', '#more-remote-item', '#st-connectors-link', '#st-remote-link', '#st-changes-link', '#menu-agent-settings', '#menu-build-team', '#menu-optimize-team'];
+  for (const r of records.all()) for (const a of r.anchors) assert.ok(!gone.includes(a.selector), `${r.id} anchors the removed ${a.selector}`);
+  assert.equal(sel('OPT-0458', 'desktop'), '#st-door-modules');
+  assert.equal(sel('OPT-0459', 'desktop'), '#st-door-remote');
+  assert.equal(sel('OPT-0094', 'desktop'), '#reload-btn');
 });
 
 // removed (P4-2): 'the agent page puts data-setting on every permission row and file tab' pinned the old page's markup; the page is a redirect now

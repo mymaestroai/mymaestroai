@@ -174,14 +174,14 @@ test('Simple: a member\'s settings dialog has "More settings" again, opening the
   const src = fnSrc(app, 'function openSimpleSettings() {');
   const run = (isAdmin) => {
     let html = '';
-    const el = { set innerHTML(h) { html = h; }, get innerHTML() { return html; }, querySelector: () => ({ set textContent(v) {}, style: {}, focus() {}, querySelectorAll: () => [] }), querySelectorAll: () => [], addEventListener() {}, className: '', id: '', isConnected: true };
+    const el = { set innerHTML(h) { html = h; }, get innerHTML() { return html; }, querySelector: () => ({ set textContent(v) {}, style: {}, focus() {}, classList: { toggle() {} }, querySelectorAll: () => [] }), querySelectorAll: () => [], addEventListener() {}, className: '', id: '', isConnected: true };
     const doc = { createElement: () => el, body: { appendChild() {} }, addEventListener() {}, removeEventListener() {} };
-    new Function('document', 'window', 'simpleCloseSettings', 'simpleStyleLabel', 'lookPickerBuild', `let simpleLookOff = null; ${src}; openSimpleSettings();`)(doc, { hubMe: { isAdmin, user: { name: 'Sam' } } }, () => {}, () => '', () => {});
+    new Function('document', 'window', 'simpleCloseSettings', 'simpleStyleLabel', 'lookPickerBuild', 'simpleReviewText', 'reviewRefresh', `let simpleLookOff = null; ${src}; openSimpleSettings();`)(doc, { hubMe: { isAdmin, user: { name: 'Sam' } } }, () => {}, () => '', () => {}, () => '', () => Promise.resolve());
     return html;
   };
   assert.match(run(false), /data-act="settings"><div><b>More settings<\/b><span>Notifications, voice, chat and your account<\/span>/);
   assert.match(run(true), /data-act="settings"><div><b>More settings<\/b><span>Provider keys, web search, backups and the rest<\/span>/);
-  assert.match(src, /if \(a\.dataset\.act === 'settings'\) \{ simpleCloseSettings\(\); openSettings\(\); \}/);
+  assert.match(src, /else if \(a\.dataset\.act === 'settings'\) \{ simpleCloseSettings\(\); openSettings\(\); \}/);
   assert.match(fnSrc(mob, 'function simpleSettingsOpen() {'), /id="ss-all"><b>More settings<\/b>/);
 });
 
