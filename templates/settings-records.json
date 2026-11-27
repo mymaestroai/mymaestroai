@@ -32301,7 +32301,7 @@
       ]
     },
     {
-      "id": "OPT-1083",
+      "id": "OPT-1085",
       "kind": "setting",
       "name": "Monthly spending cap",
       "labels": [
@@ -32340,7 +32340,7 @@
       "facts": "settings.ledger.monthlyUsd lib/ledger.js monthlySpend/monthlyGate/checkSpend; guard lib/gateway-client.js spendGuard (every pay-per-use request), lib/voice/cloud.js; route POST /api/ledger/caps server.js."
     },
     {
-      "id": "OPT-1084",
+      "id": "OPT-1086",
       "kind": "setting",
       "name": "Month starts on day",
       "labels": [
