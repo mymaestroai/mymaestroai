@@ -101,6 +101,7 @@ function setup(over = {}) {
     const body = init.body ? JSON.parse(init.body) : null;
     calls.push({ url, method, body });
     const failKey = method + ' ' + url;
+    if (url === '/api/notify/prefs' && method === 'GET' && state.notifyGate) await state.notifyGate;   // a test holds the notification read back
     if (state.fail[failKey]) return resp(state.fail[failKey].status || 400, { error: state.fail[failKey].error });
     if (url === '/api/agents' && method === 'GET') return resp(200, JSON.parse(JSON.stringify(state.agents)));
     if (url === '/api/models' && state.modelGate) await state.modelGate;   // a test holds the model list back
@@ -222,11 +223,14 @@ test('Notifications: until the preferences are read the row says "Checking…", 
   B.reset();
   const t = setup();
   t.state.fail['GET /api/notify/prefs'] = { status: 503, error: 'busy' };
+  let release; t.state.notifyGate = new Promise((r) => { release = r; });
   await t.card.open('harbor');
+  await flush(); await flush(); await flush();   // every other list has landed and redrawn; the notification read is still out
   const early = rowOf(t.card.el(), 'OPT-0168');
+  assert.match(early.textContent, /Checking…/);
   assert.ok(!/Same as all agents/.test(early.textContent), early.textContent);
-  await flush(); await flush();
-  t.card.refresh(); await flush();
+  release();
+  await flush(); await flush(); await flush();   // no manual refresh: the failed read redraws the card by itself
   const row = rowOf(t.card.el(), 'OPT-0168');
   assert.match(row.textContent, /Not available/);
   assert.strictEqual(all(row, 'select').length, 0, 'no list to choose from');
