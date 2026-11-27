@@ -288,3 +288,29 @@ test('git -C through a symlink and ..: judged by the repository git really enter
     assert.strictEqual(tp.decide({ agent, tool: 'Bash', input: { command: `git -C ${ws}/l/.. checkout -- .` }, cwd: ws }).protectedCode, true);
   } finally { fs.lstatSync = orig; tp.setCodeProtectProvider(null); }
 });
+
+test('cd is followed in order as bash follows it: options, --, two relative steps, a failed cd, cd -, and a cd that cannot be followed', () => {
+  const b = tmp();
+  mk(b, '.git', 'lib/sub', 'workspaces/sam/.git', 'workspaces/sam/a', 'hub-home/share/sam');
+  const ws = path.join(b, 'workspaces', 'sam');
+  fs.symlinkSync(path.join(b, 'lib'), path.join(ws, 'a', 'l'));   // a link inside the first folder
+  const cp = make(b, path.join(b, 'hub-home'));
+  const W = (c, cwd = ws) => cp.commandWritesProtected(c, cwd);
+  // refused: the write or the change lands in the program files
+  for (const [c, cwd] of [
+    ['cd a && cd l && echo x > y.js', ws],
+    ['cd -L lib && echo x > a.js', b], ['cd -- lib && echo x > a.js', b], ['cd -LP lib && echo x > a.js', b],
+    ['cd -- lib && git checkout -- .', b], ['if true; then cd ../../lib; fi; echo x > a.js', ws], ['(cd ../../lib; echo x > a.js)', ws],
+    ['cd lib/sub && cd .. && echo x > a.js', b],
+    [`cd ${b}/lib && cd /tmp && cd - && echo x > a.js`, ws],
+    ['cd missing-folder; git checkout -- .', b],
+    ['cd "$D" && echo x > out.txt', ws], ['CDPATH=/x cd lib && echo x > a.js', ws], ['pushd a; popd; echo x > b.js', ws],
+    ['cd "$D" && git checkout -- .', ws],
+  ]) assert.strictEqual(W(c, cwd), true, c);
+  // free: the workspace's own work
+  for (const c of ['cd a && echo x > notes.md', 'cd /nonexistent-folder; git checkout -- .', 'cd a && cd .. && git checkout -- .',
+    'cd "$D" && echo x > /tmp/abs-out.txt', 'cd "$D" && cat f', `cd ${b}/lib && cd ${ws} && echo x > n.md`.replace(`cd ${b}/lib && `, ''),
+    'cd a b && echo x > notes.md']) {
+    assert.strictEqual(W(c), false, c);
+  }
+});
