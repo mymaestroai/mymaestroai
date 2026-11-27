@@ -696,8 +696,8 @@ test('the ⓘ is at least 32x32 on the phone page and in the phone frame', () =>
   assert.match(idx, /html\.mm-settings-only \.st-info \{[^}]*width: 32px; height: 32px;/);
 });
 
-test('the phone service worker is bumped for the new mobile.html and mobile.js (hub-mobile-v103)', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v103'/);
+test('the phone service worker is bumped for the new mobile.html and mobile.js (hub-mobile-v104)', () => {
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v104'/);
 });
 
 // ---- review round 1 fixes (spec U) -------------------------------------------------------------------------------------
