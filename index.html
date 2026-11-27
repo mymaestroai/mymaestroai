@@ -3111,8 +3111,9 @@
     .handoff-cards .ho-ended .ho-pill, .handoff-cards .ho-ended .ho-status { flex: none; }
     /* the strip: one compact line that expands into the cards */
     .handoff-cards { gap: 4px; }
-    .handoff-cards .ho-strip { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; white-space: nowrap; overflow: hidden; box-sizing: border-box; padding: 6px 10px; font: inherit; font-size: 13px; text-align: left; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: border-color .3s, background-color .3s; }
-    .handoff-cards .ho-sum { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .handoff-cards .ho-strip { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; box-sizing: border-box; padding: 6px 10px; font: inherit; font-size: 13px; text-align: left; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: border-color .3s, background-color .3s; }
+    .handoff-cards .ho-sum { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
+    .handoff-cards .ho-next { white-space: nowrap; overflow-wrap: normal; }
     .handoff-cards .ho-chev { flex: none; width: 7px; height: 7px; border-right: 2px solid var(--text-dim); border-bottom: 2px solid var(--text-dim); transform: rotate(45deg); margin-top: -3px; transition: transform .15s; }
     .handoff-cards .ho-strip[aria-expanded="true"] .ho-chev { transform: rotate(-135deg); margin-top: 3px; }
     .handoff-cards .ho-list { display: flex; flex-direction: column; gap: 4px; }

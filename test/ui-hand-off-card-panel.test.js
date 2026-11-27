@@ -139,6 +139,25 @@ test('renderPanel: no ring in the header once nothing runs (only ended hand-offs
   assert.equal(textOf(find(head, 'ho-sum')[0]), 'Working on: nothing now');
 });
 
+test('renderPanel: the next check is its own .ho-next span (nowrap in CSS) and the summary text is unchanged', () => {
+  const doc = fakeDoc(); const box = doc.createElement('div'); const storage = memStorage();
+  H.renderPanel(box, FULL(), { now: NOW, fmt, storage });
+  const sum = find(find(box, 'ho-strip')[0], 'ho-sum')[0];
+  assert.equal(textOf(sum), 'Working on: 4 things · next check 12:30');
+  const next = find(sum, 'ho-next');
+  assert.equal(next.length, 1);
+  assert.equal(textOf(next[0]), 'next check 12:30');
+  assert.equal(sum.children.length, 2);
+  assert.equal(textOf(sum.children[0]), 'Working on: 4 things · ');
+  // no next check: no span, the plain text
+  const box2 = doc.createElement('div');
+  const ended = ho({ id: 'd', state: 'done', endedAt: iso(2 * MIN), reportedAt: iso(MIN) });
+  H.renderPanel(box2, { handOffs: [ended], jobs: [], jobCount: 0, workers: [] }, { now: NOW, fmt, storage });
+  const sum2 = find(box2, 'ho-sum')[0];
+  assert.equal(find(sum2, 'ho-next').length, 0);
+  assert.equal(textOf(sum2), 'Working on: nothing now');
+});
+
 test('renderPanel: collapsed header with the ring, the summary and the chevron; rows are text nodes only', () => {
   const doc = fakeDoc(); const box = doc.createElement('div'); const storage = memStorage();
   H.renderPanel(box, FULL(), { now: NOW, fmt, storage });
