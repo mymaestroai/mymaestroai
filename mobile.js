@@ -15538,8 +15538,8 @@ function wire() {
   // Esc, Back or a tap outside the approval sheet is Later: hidden until a new request comes, never answered.
   $('approval-sheet').__dialogClose = () => { approvalsHidden = true; paintApprovals(); };
   $('menu-profile')?.addEventListener('click', openProfileSheet);   // ?.: a page cached before Profile existed has no such item
-  $('menu-settings')?.addEventListener('click', settingsSheetOpen);
   try { if (window.FeatureCard) FeatureCard.openSettings = () => settingsSheetOpen(); } catch { /* cosmetic */ }   // the new-features card's "Settings" link
+  $('menu-settings')?.addEventListener('click', () => settingsSheetOpen());   // no arguments: a tap opens the list (the click event is not a door)
   $('menu-security').addEventListener('click', openSecuritySheet);
   $('menu-files').addEventListener('click', openFilesSheet);
   $('menu-recall').addEventListener('click', openRecallSheet);
@@ -16311,6 +16311,7 @@ const SETTINGS_SHEET_WAIT_MS = 20000;
 let settingsSheet = null;   // { el, frame, ready, timer }
 function settingsSheetOpen(doorId, groupId) {
   try { $('menu').classList.remove('open'); } catch { /* no menu */ }
+  if (typeof doorId !== 'string' || !/^OPT-\d{1,6}$/.test(doorId)) doorId = '';   // only a record id is a door (an event or anything else opens the list)
   if (typeof groupId !== 'string' || !/^(review|money)$/.test(groupId)) groupId = '';   // a group door: /?settings-only=1#settings-group=review (the frame shows that group's page)
   if (settingsSheet) { if (doorId || groupId) { settingsSheet.door = doorId || ''; settingsSheet.group = groupId; settingsSheetLoad(); } return; }
   const el = document.createElement('div');

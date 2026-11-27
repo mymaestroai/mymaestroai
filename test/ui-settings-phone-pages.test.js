@@ -121,3 +121,11 @@ test('Simple (phone): four headings, every old control kept, deep research under
   assert.match(mhtml, /html\.mm-simple \.ss-gh \{/);
   assert.match(idx, /html\.mm-simple \.simple-modal \.sm-gh \{/);
 });
+
+test('the phone menu opens Settings with no door: the click event is never passed on as a record id', () => {
+  const mob = require('fs').readFileSync(require('path').join(__dirname, '..', 'mobile.js'), 'utf8');
+  assert.match(mob, /\$\('menu-settings'\)\?\.addEventListener\('click', \(\) => settingsSheetOpen\(\)\)/);
+  const at = mob.indexOf('function settingsSheetOpen(doorId, groupId) {');
+  assert.ok(at > 0);
+  assert.match(mob.slice(at, at + 600), /if \(typeof doorId !== 'string' \|\| !\/\^OPT-\\d\{1,6\}\$\/\.test\(doorId\)\) doorId = '';/);
+});

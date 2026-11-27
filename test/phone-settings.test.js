@@ -290,7 +290,7 @@ test('the phone sheet: a frame that never answers shows a plain message with Try
 
 test('entry points: the phone menu and Simple\'s sheets offer Settings to everyone (a member gets the one group), as the desktop gear', () => {
   assert.match(mhtml, /<button id="menu-profile">&#x1F464; Profile<\/button>\n\s+<button id="menu-settings">&#x2699; Settings<\/button>/);
-  assert.match(mob, /\$\('menu-settings'\)\?\.addEventListener\('click', settingsSheetOpen\);/);
+  assert.match(mob, /\$\('menu-settings'\)\?\.addEventListener\('click', \(\) => settingsSheetOpen\(\)\);/);
   assert.match(mob, /if \(\$\('menu-settings'\)\) \$\('menu-settings'\)\.hidden = false;/);
   const simplePhone = fnSrc(mob, 'function simpleSettingsOpen() {');
   assert.match(simplePhone, /'<button type="button" class="ss-row" id="ss-all"><b>More settings<\/b><small>' \+ \(hubMe && hubMe\.isAdmin === false \? 'Notifications, voice, chat and your account' : /);
