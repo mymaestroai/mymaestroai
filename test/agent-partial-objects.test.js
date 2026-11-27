@@ -258,6 +258,39 @@ test('policyIfMatch alone is ignored (nothing stored, nothing refused)', async (
   assert.ok(!('policyIfMatch' in onDisk('biographer')));
 });
 
+// ---- kept variables compare-and-set (lockboxEnvIfMatch) ----
+const ENV_409 = "This agent's kept variables were changed elsewhere. The card now shows them again; make your change once more.";
+test('lockboxEnvIfMatch: a matching list (any order, cleaned like the stored one) writes and is never stored', async () => {
+  seed([base({ lockboxEnv: ['TOKEN', 'REGION'] })]);
+  assert.deepStrictEqual(await upd({ lockboxEnv: ['TOKEN', 'REGION', 'EXTRA'], lockboxEnvIfMatch: [' REGION ', 'TOKEN', 'TOKEN'] }), { success: true });
+  assert.deepStrictEqual(onDisk('biographer').lockboxEnv, ['TOKEN', 'REGION', 'EXTRA']);
+  assert.ok(!('lockboxEnvIfMatch' in onDisk('biographer')));
+  // a missing stored list is []
+  seed([base()]);
+  assert.deepStrictEqual(await upd({ lockboxEnv: ['TOKEN'], lockboxEnvIfMatch: [] }), { success: true });
+  assert.deepStrictEqual(onDisk('biographer').lockboxEnv, ['TOKEN']);
+});
+
+test('lockboxEnvIfMatch: a different stored list answers 409 with the words, writes nothing and journals nothing', async () => {
+  seed([base({ lockboxEnv: [] })]);
+  const before = fs.readFileSync(AGENTS_FILE, 'utf8');
+  let r;
+  const keys = await changedKeys(async () => { r = await upd({ lockboxEnv: ['TOKEN', 'REGION'], lockboxEnvIfMatch: ['TOKEN'] }); });
+  assert.deepStrictEqual([r.success, r.status, r.error], [false, 409, ENV_409]);
+  assert.strictEqual(fs.readFileSync(AGENTS_FILE, 'utf8'), before, 'the agents file is untouched');
+  assert.deepStrictEqual(keys, [], 'the journal is unchanged');
+  assert.deepStrictEqual(onDisk('biographer').lockboxEnv || [], []);
+  // an unusable sent list does not match either
+  assert.strictEqual((await upd({ lockboxEnv: ['A'], lockboxEnvIfMatch: ['not valid'] })).status, 409);
+});
+
+test('lockboxEnvIfMatch alone is ignored (nothing stored, nothing refused)', async () => {
+  seed([base({ lockboxEnv: ['TOKEN'] })]);
+  assert.deepStrictEqual(await upd({ lockboxEnvIfMatch: ['ZZZ'], blurb: 'hi' }), { success: true });
+  assert.deepStrictEqual(onDisk('biographer').lockboxEnv, ['TOKEN']);
+  assert.ok(!('lockboxEnvIfMatch' in onDisk('biographer')));
+});
+
 test('the route answers a refused policyIfMatch with 409 { ok:false, error }', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.match(src, /result\.status === 409 \? \{ ok: false, error: result\.error \}/);

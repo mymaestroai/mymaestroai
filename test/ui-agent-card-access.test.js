@@ -90,7 +90,9 @@ function setup(over = {}) {
     const method = init.method || 'GET'; let body = init.body ? JSON.parse(init.body) : null;
     const ifMatch = body && 'policyIfMatch' in body ? body.policyIfMatch : undefined;   // kept apart: the checks below read `body` as the change itself
     if (ifMatch !== undefined) { body = { ...body }; delete body.policyIfMatch; }
-    calls.push({ url, method, body, ifMatch });
+    const envIfMatch = body && 'lockboxEnvIfMatch' in body ? body.lockboxEnvIfMatch : undefined;
+    if (envIfMatch !== undefined) { body = { ...body }; delete body.lockboxEnvIfMatch; }
+    calls.push({ url, method, body, ifMatch, envIfMatch });
     for (const [pat, r] of Object.entries(state.failRoutes)) if (url.includes(pat) && (!r.method || r.method === method)) return resp(r.status, r.json);
     if (url === '/api/agents' && method === 'GET') return resp(200, JSON.parse(JSON.stringify(state.agents)));
     const pm = /^\/api\/agents\/([^/]+)$/.exec(url);
@@ -100,6 +102,9 @@ function setup(over = {}) {
       if (state.racing) { const f = state.racing; state.racing = null; f(a); }   // another card's change lands just before this request
       if (ifMatch !== undefined && JSON.stringify(ifMatch) !== JSON.stringify(a.policy || {})) {   // the server's compare-and-set
         return resp(409, { ok: false, error: "This agent's permissions were changed elsewhere. The card now shows them again; make your change once more." });
+      }
+      if (envIfMatch !== undefined && 'lockboxEnv' in body && JSON.stringify([...envIfMatch].sort()) !== JSON.stringify([...(a.lockboxEnv || [])].sort())) {   // the server's compare-and-set for the kept variables
+        return resp(409, { ok: false, error: "This agent's kept variables were changed elsewhere. The card now shows them again; make your change once more." });
       }
       for (const [k, v] of Object.entries(body)) {
         if (k === 'policy') {   // the server replaces the whole policy object
@@ -700,6 +705,31 @@ test('R2-3: a stale add is applied to the fresh list and named in the confirm; t
   await flush();
   assert.strictEqual(t.patches().length, 0);
   assert.match(again(t, 'OPT-0055').textContent, /kept variables were changed elsewhere/);
+});
+
+test('kept variables: a save sends lockboxEnvIfMatch (the list it was built from); a change made elsewhere while the confirm waits is refused and redrawn', async () => {
+  const t = setup();
+  t.state.agents[1].lockboxEnv = ['TOKEN'];
+  const row = await openAt(t, 'OPT-0055');
+  t.calls.length = 0;
+  change(all(row, 'input')[0], 'TOKEN, EXTRA');
+  await flush();
+  assert.deepStrictEqual(t.patches().map((c) => [c.body, c.envIfMatch]), [[{ lockboxEnv: ['TOKEN', 'EXTRA'] }, ['TOKEN']]]);
+  assert.deepStrictEqual(t.state.agents[1].lockboxEnv, ['TOKEN', 'EXTRA']);
+  // card A adds REGION and waits on its confirm; card B removes TOKEN and saves; A confirms
+  t.state.agents[1].lockboxEnv = ['TOKEN'];
+  const a = await openAt(t, 'OPT-0055');
+  t.calls.length = 0;
+  t.yes = true;
+  t.win.confirm = (q) => { t.confirms.push(q); t.state.agents[1].lockboxEnv = []; return true; };   // B's save lands while A's confirm is open
+  change(all(a, 'input')[0], 'TOKEN, REGION');
+  await flush();
+  assert.strictEqual(t.patches().length, 1, 'the request went out');
+  assert.deepStrictEqual(t.patches()[0].envIfMatch, ['TOKEN']);
+  assert.deepStrictEqual(t.state.agents[1].lockboxEnv, [], 'nothing was written over the other change');
+  assert.ok(t.calls.map((c) => c.url).lastIndexOf('/api/agents') > t.calls.findIndex((c) => c.method === 'PATCH'), 'the agent is read again');
+  assert.match(again(t, 'OPT-0055').textContent, /kept variables were changed elsewhere\. The card now shows them again; make your change once more\./);
+  assert.strictEqual(all(again(t, 'OPT-0055'), 'input')[0].value, '', 'the row shows what the hub has');
 });
 
 // ---- 6. members -----------------------------------------------------------------------------------------------------------------------
