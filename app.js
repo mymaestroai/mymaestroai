@@ -12481,7 +12481,7 @@
       }
       if (!card) appendSystemNotice(chat.id, `⚡ ${hubOriginLabel(ev.origin)} — ${hubTurnTime()}`);
       const msgId = appendMessage(chat.id, 'assistant', '…', card && card.body);
-      try { if ((() => { const t = typeof ev.startedAt === 'number' ? ev.startedAt : Date.parse(ev.startedAt || ''); return !Number.isFinite(t) || Date.now() - t < 30000; })() && window.FeatureCard) FeatureCard.messageArrived(document.getElementById(`messages-${chat.id}`)); } catch { /* cosmetic */ }   // a live hub-started turn's reply bubble just landed
+      try { window.FeatureCard && FeatureCard.messageArrived(document.getElementById(`messages-${chat.id}`)); } catch { /* cosmetic */ }   // a live hub-started turn's reply bubble just landed
       hubTurns[ev.turnId] = { chatId: chat.id, msgId, text: '', startedAt: Date.parse(ev.startedAt), card, prompt: ev.message };
       if (card) {
         card.msgId = msgId;
