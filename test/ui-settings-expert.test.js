@@ -207,3 +207,44 @@ test('the module is served to the browser', () => {
   assert.ok(JSON.stringify([...files.PUBLIC_FILES || []]).length >= 0);
   assert.ok(require('fs').readFileSync(require('path').join(__dirname, '../lib/static-files.js'), 'utf8').includes("['ui-settings-expert.js', 'lib/ui-settings-expert.js']"));
 });
+
+test('saving one startup value keeps a draft typed in another row: it is put back after the redraw and is not handed to the guard as saved (review r7)', async () => {
+  // a host whose fields are re-made from the HTML on every draw, like a browser's
+  const host = { handlers: {}, fields: [] };
+  let html = '';
+  Object.defineProperty(host, 'innerHTML', {
+    get: () => html,
+    set: (v) => {
+      html = v;
+      host.fields = [];
+      const re = /<(input|select)\b[^>]*\bdata-envin="([A-Z_]+)"[^>]*?(?:\bvalue="([^"]*)")?[^>]*>/g;
+      let m;
+      while ((m = re.exec(v))) { const key = m[2]; host.fields.push({ kind: m[1], value: m[3] || '', getAttribute: (a) => (a === 'data-envin' ? key : null), key }); }
+    },
+  });
+  host.addEventListener = (t, f) => { host.handlers[t] = f; };
+  host.querySelectorAll = (sel) => (sel === '[data-envin]' || sel === 'input, select, textarea' ? host.fields.slice() : []);
+  host.querySelector = (sel) => { const k = (sel.match(/data-envin="([A-Z_]+)"/) || [])[1]; return host.fields.find((f) => f.key === k) || null; };
+  const rows = [
+    { key: 'HUB_TZ', value: 'UTC', set: true, writable: true, readonly: false, danger: false, running: 'UTC', pending: false },
+    { key: 'HUB_SECURITY_CHECK_HOURS', value: null, set: false, writable: true, readonly: false, danger: false, running: null, pending: false },
+  ];
+  let after = rows;
+  const fetchJson = async (url, opts) => {
+    if (opts && opts.method === 'POST') { const b = JSON.parse(opts.body); after = rows.map((r) => (r.key === b.key ? Object.assign({}, r, { value: b.value || null, pending: true }) : r)); return { ok: true }; }
+    if (url === '/api/settings/env') return { rows: after };
+    return {};
+  };
+  const handed = [];
+  await X.render(host, { records, fetchJson, toast: () => {}, settings: {}, loaded: (h, fields) => handed.push(fields.map((f) => f.key)) });
+  const tz = host.fields.find((f) => f.key === 'HUB_TZ'), hours = host.fields.find((f) => f.key === 'HUB_SECURITY_CHECK_HOURS');
+  assert.ok(tz && hours, 'both rows drawn');
+  hours.value = '12';   // a draft in B
+  tz.value = 'Europe/Rome';   // A, saved now
+  await host.handlers.click({ target: { getAttribute: (a) => (a === 'data-act' ? 'save' : a === 'data-key' ? 'HUB_TZ' : null) } });
+  const hours2 = host.fields.find((f) => f.key === 'HUB_SECURITY_CHECK_HOURS');
+  assert.strictEqual(hours2.value, '12', 'the draft in B is put back after the redraw');
+  const last = handed[handed.length - 1];
+  assert.ok(last.includes('HUB_TZ'), 'A (just saved) is handed to the guard as saved');
+  assert.ok(!last.includes('HUB_SECURITY_CHECK_HOURS'), 'B (a draft) is not');
+});

@@ -3665,7 +3665,7 @@
         const fj = async (u, o) => { const r = await fetch(u, { credentials: 'include', ...(o || {}) }); const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || 'Request failed'); return j; };
         const up = body('upkeep'), exp = document.getElementById('st-expert-section');
         // what the module draws is what the hub holds: the dialog guard takes it as saved (Close asks only about real edits)
-        const guardLoaded = (h) => { try { dialogGuard.markLoaded([...h.querySelectorAll('input, select, textarea')]); } catch { /* no guard */ } };
+        const guardLoaded = (h, fields) => { try { dialogGuard.markLoaded(Array.isArray(fields) ? fields : [...h.querySelectorAll('input, select, textarea')]); } catch { /* no guard */ } };   // fields: what the module drew from the hub (a draft in another row is left out)
         const recsP = window.hubSettingsHelp ? window.hubSettingsHelp.load(false) : fj('/api/settings-records');
         recsP.then((recs) => {
           if (up && !document.getElementById('st-mem-limit')) { const d = document.createElement('div'); d.id = 'st-mem-limit'; d.className = 'st-section'; up.insertBefore(d, up.firstChild); X.renderMemoryLimit(d, { records: recs, fetchJson: fj, toast: hubToast, loaded: guardLoaded }).catch(() => {}); }
