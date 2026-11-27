@@ -38,7 +38,8 @@ const HOME_RENAMES = [[/Needs you/g, 'For your review']];
 const DANGER_RANK = { everyday: 0, care: 1, dangerous: 2 };
 const LEAD_RANK = { apply: 0, confirm: 1, screen: 2, none: 3 };
 const OVERRIDE_KEYS = ['who', 'danger', 'lead', 'leadAgentAccess', 'anchors', 'home', 'scope', 'applyOk', 'name', 'what', 'when', 'risk', 'def', 'facts', 'labels', 'storedAs', 'reason'];
-const TEXT_KEYS = ['name', 'what', 'when', 'risk', 'def', 'facts'];   // name: a record the audit merged into another option has only its key as a name   // corrected help text (a stale sentence); a non-empty string
+// corrected help text (a stale sentence), each a non-empty string; name: a record the audit merged into another option has only its key as a name
+const TEXT_KEYS = ['name', 'what', 'when', 'risk', 'def', 'facts'];
 // Every field a record added by an override must carry (facts and mergedInto are optional).
 const ADD_FIELDS = ['kind', 'name', 'labels', 'what', 'when', 'risk', 'def', 'restart', 'danger', 'who', 'lead', 'words', 'scope', 'home', 'storedAs', 'anchors'];
 // A record whose lead applies the change at once (and offers an undo) may not carry risk words that say it grants access, sends data

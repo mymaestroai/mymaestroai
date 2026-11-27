@@ -1,5 +1,5 @@
 {
-  "version": "e774713b1fc682342b53da16c3b433c30db5df82",
+  "version": "c64a05ef85559ef605d1936fe2eabad17743b697",
   "records": [
     {
       "id": "OPT-0001",
@@ -29685,7 +29685,7 @@
       "labels": [
         "HUB_SELFCHECK"
       ],
-      "what": "Set to off to stop your Maestro checking itself after it starts. The Self-check switch in Upkeep turns the same check on or off.",
+      "what": "Set to off to stop your Maestro checking itself, both a minute after it starts and each night.",
       "when": "",
       "risk": "",
       "def": "Default: not set, so the self-check runs.",
@@ -29783,7 +29783,7 @@
       "labels": [
         "HUB_UPDATE_CHECK_HOURS"
       ],
-      "what": "How many hours pass between looks for a new version, read when your Maestro starts. When set, it is used instead of the update-check hours in Upkeep.",
+      "what": "How many hours pass between looks for a new version, read when your Maestro starts. When set, it is used instead of the update-check hours in Upkeep; 0 turns the scheduled checks off.",
       "when": "",
       "risk": "",
       "def": "Default: not set, so the update-check hours in Upkeep decide (every 24 hours).",
@@ -30295,10 +30295,10 @@
       "labels": [
         "GATEWAY_PROMPT_CACHE"
       ],
-      "what": "Set to 0 to stop every provider reusing the start of a long chat, read when your Maestro starts. Reuse earlier text in Upkeep is the everyday setting.",
+      "what": "No part of your Maestro reads this older startup switch any more: Reuse earlier text in Upkeep decides whether earlier text is reused.",
       "when": "",
       "risk": "",
-      "def": "Default: not set, so reuse stays on.",
+      "def": "Default: not set. Setting it changes nothing.",
       "restart": true,
       "danger": "care",
       "who": "admin",

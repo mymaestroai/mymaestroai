@@ -338,4 +338,16 @@ test('every startup value and protected row shows its record words with records 
     assert.ok(!/^[A-Z_]+$/.test(x.name) && x.name !== x.key, `${x.key}: shown with words, not the key ("${x.name}")`);
   }
   assert.strictEqual(m.expert.find((x) => x.key === 'HUB_SECURITY_CHECK_HOURS').name, 'Hours between security checks');
+  // the matched record is the row's own (it lists the key among its labels), and the five merged records carry their own words
+  const byId = new Map(routeShaped.map((r) => [r.id, r]));
+  for (const x of all) assert.ok((byId.get(x.id).labels || []).includes(x.key), `${x.key}: matched ${x.id}, whose labels list it`);
+  const want = { HUB_UPDATE_CHECK_HOURS: ['OPT-0995', 'Hours between update checks (startup setting)'], HUB_SELFCHECK: ['OPT-0992', 'Self-check at start'],
+    HUB_SDK_AUTO_COMPACT_WINDOW: ['OPT-1001', 'Long-chat point for Claude agents'], GATEWAY_PROMPT_CACHE: ['OPT-1010', 'Reuse earlier text (startup setting)'],
+    HUB_WALLET_OWNER: ['OPT-1000', 'Wallet owner address (startup setting)'] };
+  for (const [k, [id, name]] of Object.entries(want)) {
+    const x = all.find((y) => y.key === k);
+    assert.deepStrictEqual([x.id, x.name], [id, name], k);
+    assert.ok(x.help && x.help.length > 20, `${k}: has help`);
+  }
+  assert.match(all.find((y) => y.key === 'GATEWAY_PROMPT_CACHE').help, /^No part of your Maestro reads this older startup switch/);
 });
