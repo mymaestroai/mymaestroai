@@ -314,3 +314,20 @@ test('cd is followed in order as bash follows it: options, --, two relative step
     assert.strictEqual(W(c), false, c);
   }
 });
+
+test('cd walk: redirections are not operands, a folder without search permission, an inherited OLDPWD, control words, nested code', () => {
+  const b = tmp();
+  mk(b, '.git', 'lib', 'workspaces/sam/.git', 'workspaces/sam/a', 'hub-home/share/sam');
+  const ws = path.join(b, 'workspaces', 'sam');
+  const cp = make(b, path.join(b, 'hub-home'));
+  const W = (c, cwd) => cp.commandWritesProtected(c, cwd);
+  assert.strictEqual(W(`cd ${ws} 2>/dev/null && echo x > notes.md`, b), false, 'cd into the workspace with 2>/dev/null');
+  assert.strictEqual(W('cd ../../lib 2>/dev/null && echo x > a.js', ws), true, 'cd into lib/ with 2>/dev/null');
+  assert.strictEqual(W('cd - && echo x > a.js', ws), true, 'the first cd -: OLDPWD from the environment, unknown');
+  for (const c of ['cd ../../lib; if false; then cd /tmp; fi; echo x > a.js', 'cd ../../lib; while false; do cd /tmp; done; echo x > a.js',
+    'cd ../../lib; { cd /tmp; }; echo x > a.js', 'cd ../../lib; if true; then echo $(echo x > a.js); fi']) assert.strictEqual(W(c, ws), true, c);
+  // a folder that stat says is one, but cd can't search: the cd fails, the shell stays in lib/
+  const orig = fs.accessSync;
+  fs.accessSync = (p, ...r) => { if (String(p) === path.join(ws, 'a')) { const e = new Error('permission denied'); e.code = 'EACCES'; throw e; } return orig(p, ...r); };
+  try { assert.strictEqual(W(`cd ../../lib; cd ${ws}/a; echo x > a.js`, ws), true); } finally { fs.accessSync = orig; }
+});
