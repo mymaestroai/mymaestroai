@@ -351,3 +351,13 @@ test('every startup value and protected row shows its record words with records 
   }
   assert.match(all.find((y) => y.key === 'GATEWAY_PROMPT_CACHE').help, /^No part of your Maestro reads this older startup switch/);
 });
+
+test('the page hands its loaded records as a Map (hubSettingsHelp.load): rows still find their words (proof p5)', () => {
+  const fs = require('fs'), path = require('path');
+  const R = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'templates', 'settings-records.json'), 'utf8'));
+  const map = new Map((Array.isArray(R) ? R : R.records).map((r) => { const c = Object.assign({}, r); delete c.storedAs; delete c.facts; return [c.id, c]; }));
+  const m = X.models([{ key: 'HUB_SECURITY_CHECK_HOURS', value: null, set: false, writable: true, readonly: false, danger: false, running: null, pending: false }], map, { walletAgents: [] });
+  assert.strictEqual(m.expert[0].name, 'Hours between security checks');
+  assert.ok(m.protectedRows.every((x) => x.id && !/^[A-Za-z_]+$/.test(x.name) || x.name.includes(' ')), 'protected rows have words too');
+  assert.strictEqual(X.memoryModel({}, map).id, 'OPT-1095');
+});
