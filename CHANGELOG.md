@@ -6,7 +6,13 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Settings rows line up and say what they mean.** Expert and startup values show one row shape, with the default in the help line and as the box's hint; each Workers at once service has its own ⓘ; the spend caps have one "Save caps" button after all three caps; new features in For your review show their whole description and cost; the security check speaks of your Maestro.
+- **One Claude sign-in problem shows once.** For your review used to list it three times; now it is one item that says how many agents can't answer, with Sign in again, and the count on the gear drops with it. The two-factor warning for admins is no longer listed twice either.
+- **Counts read as words.** "1 agent", "3 files" and "2 admin accounts" replace "agent(s)", "file(s)" and "account(s)" across Settings, For your review and the security check.
+- **Hear an agent's voice and follow a long-chat step from its card.** The agent card has Play sample next to the voice again, and Compress now shows its progress until the brief is written, with Done, read the brief.
+- **Settings say the same thing everywhere.** Several settings now use the same words on every screen, such as Thinking effort, Search this chat and How easily I can interrupt it; Briefing for your lead no longer says "hub"; startup values are headed Startup values; number boxes are wide enough to read; and the help button sits next to a switch's label.
 - **The page no longer jumps when the red "fix now" banner arrives.** Your Maestro remembers the banner on each device and holds its place from the moment the page appears, so the chat and the agent list stay where they are while it loads. A banner your device has not shown before slides in once.
+- **On the phone the red banner's two actions are separate.** "Open For your review" stays a link and the fix itself, such as Open the Welcome page, is a button, as on the computer.
 - **Make a new agent from Settings, also on the phone.** Agents and teams starts with New agent: give it a name and describe its role, and your Maestro sets it up.
 - **The security check is in People and safety.** Run it where the group says it is; For your review still opens it from a problem's Details.
 - **Help buttons stay beside their setting on the phone.** The ⓘ no longer drops onto a line of its own next to switches, share-link times and the worker counts, and the group page header reads "‹ Settings" and the group name without a stray dot.

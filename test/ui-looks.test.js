@@ -239,7 +239,7 @@ test('pickers: app.js and mobile.js choose through HubLooks, build previews from
     }
   }
   assert.match(app, /id="st-looks-section"><h4>Appearance<\/h4>/);
-  assert.match(app, /'Interface style for new members'/);
+  assert.match(app, /'Look of the interface for new members'/);
   assert.match(app, /if \(!isHubAdmin\(\)\) return;\s*const row/);
   assert.match(mob, /id="prof-looks"/);
   assert.match(mob, /lookPickerPaint\(d\.querySelector\('#ss-style'\)\)/);   // the Simple sheet's picker (was an inline section; now markup right after Appearance)
@@ -402,11 +402,11 @@ test('people read "Interface style", never "Look": every label and sentence of t
   ];
   for (const [where, src] of regions) {
     assert.ok(src.length > 40, where);
-    const bad = words(src).filter(t => /\b[Ll]ooks?\b/.test(t) && !/data-look|menu-look|looks-restart|st-look/.test(t));
+    const bad = words(src).filter(t => /\b[Ll]ooks?\b/.test(t.replace(/Look of the interface/g, '')) && !/data-look|menu-look|looks-restart|st-look/.test(t));
     assert.deepStrictEqual(bad, [], `${where} shows the old word`);
   }
   for (const l of L.LOOKS) assert.doesNotMatch(`${l.label} ${l.blurb}`, /\blooks?\b/i, `${l.id}: its name and description in the picker`);
-  assert.match(html, /&#x1F3A8; Interface style<\/span>/);
-  assert.match(mob, /<div class="ss-title">Interface style<\/div>/);
-  assert.match(mob, /<div class="sec-title">Interface style<\/div>/);
+  assert.match(html, /&#x1F3A8; Look of the interface<\/span>/);   // OPT-0284: the one wording is "Look of the interface" (settings records)
+  assert.match(mob, /<div class="ss-title">Look of the interface<\/div>/);
+  assert.match(mob, /<div class="sec-title">Look of the interface<\/div>/);
 });

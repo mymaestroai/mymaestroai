@@ -134,7 +134,7 @@ test('source: simpleSettingsOpen puts the interface style at the top, beside App
   // style the colours follow; both are the first two sections of the sheet.
   const i = js.indexOf('function simpleSettingsOpen()');
   const fn = js.slice(i, i + 3500);
-  const app = fn.indexOf('<div class="ss-title">Appearance</div>'), sty = fn.indexOf('<div class="ss-title">Interface style</div>'), name = fn.indexOf('<div class="ss-title">Name</div>');
+  const app = fn.indexOf('<div class="ss-title">Light or dark</div>'), sty = fn.indexOf('<div class="ss-title">Look of the interface</div>'), name = fn.indexOf('<div class="ss-title">Name</div>');
   assert.ok(app > 0 && sty > app && name > sty, 'Appearance, then Interface style, then the rest');
   assert.ok(!fn.includes("querySelector('.ss-row')"));
   assert.match(js, /lookPickerPaint\(\$\('prof-looks'\)\);/);

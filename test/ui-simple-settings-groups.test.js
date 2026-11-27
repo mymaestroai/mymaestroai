@@ -43,7 +43,7 @@ test('Simple desktop: Switch to Advanced and Sign out end the You group; the Not
   for (const admin of [true, false]) {
     const h = desktopHtml(admin);
     const at = (s) => h.indexOf(s);
-    assert.ok(at('You and this device') < at('Appearance') && at('Appearance') < at('Interface style') && at('Interface style') < at('>Name<'), 'appearance, style, name');
+    assert.ok(at('You and this device') < at('Light or dark') && at('Light or dark') < at('Look of the interface') && at('Look of the interface') < at('>Name<'), 'light or dark, style, name');
     assert.ok(at('>Name<') < at("Each agent's notifications are on its card") && at("Each agent's notifications") < at('data-act="advanced"'), 'the Notifications pointer line is in the You group');
     assert.ok(at('data-act="advanced"') < at('data-act="signout"') && at('data-act="signout"') < at('Voice and calls'), 'Switch to Advanced and Sign out close the You group');
     assert.ok(!/>Notifications</.test(h) && !/>Account</.test(h), 'the old Notifications and Account headings are gone');

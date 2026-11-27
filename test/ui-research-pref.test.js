@@ -59,7 +59,7 @@ test('phone js: the Simple settings sheet gets the section after Appearance, onl
   assert.match(paint, /'Deep research'/);
   assert.match(paint, /if \(!researchPrefOn\) return;/);
   assert.match(paint, /anchor\.after\(sec\)/);
-  const a = open.indexOf('>Appearance<'), s = open.indexOf('>Interface style<');
+  const a = open.indexOf('>Light or dark<'), s = open.indexOf('>Look of the interface<');
   assert.ok(a > 0 && s > a);
 });
 

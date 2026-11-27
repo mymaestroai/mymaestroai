@@ -127,7 +127,7 @@ test('desktop source: the chip hides below half a cent and never prints planValu
   assert.ok(set.includes("'Restart your Maestro to see pay-per-use spend.'"), 'an older hub answer gets a restart line, not a figure');
   assert.ok(set.includes("'less than $0.01'") && set.includes('with no known price'), 'sub-cent and unpriced calls are said, not hidden');
   assert.ok(set.includes('pay-per-use caps:'));
-  assert.ok(app.includes('Daily pay-per-use cap per agent ($)') && app.includes('Daily pay-per-use cap, whole hub ($)'));
+  assert.ok(app.includes('Daily pay-per-use cap per agent ($)') && app.includes('Daily pay-per-use cap, your whole Maestro ($)'));
   assert.ok(app.includes('Caps count pay-per-use spend only (API keys and paid cloud voices), never plan use.'));
   const tag = html.match(/<span id="spend-today"[^>]*>/)[0];
   assert.ok(!/API-equivalent/.test(tag));

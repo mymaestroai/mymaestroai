@@ -93,7 +93,7 @@
         <label class="f-llama">Draft arguments</label><input type="text" id="f-draftArgs" class="f-llama mono" placeholder="optional, e.g. --spec-type draft-dflash --spec-draft-n-max 15">
         <label class="f-llama">GPU layers (-ngl)</label><input type="number" id="f-ngl" class="f-llama" value="99" min="0">
         <label class="f-cmd">Command</label><input type="text" id="f-cmd" class="f-cmd mono" placeholder="my-server --port ${PORT} --model …">
-        <label>Context window (tokens)</label><input type="number" id="f-ctx" min="0" placeholder="e.g. 32768; 0 = engine default">
+        <label>Size of its working memory</label><input type="number" id="f-ctx" min="0" placeholder="in tokens, e.g. 32768; 0 = engine default">
         <label>Max output tokens</label><input type="number" id="f-maxOutput" min="0" placeholder="optional">
         <label>Idle unload (seconds)</label><input type="number" id="f-ttl" min="0" placeholder="blank = global setting; 0 = never">
         <label>Aliases</label><input type="text" id="f-aliases" placeholder="comma separated, optional">
@@ -130,6 +130,7 @@
 (function () {
   'use strict';
   const $ = (id) => document.getElementById(id);
+  const plural = (n, one, many) => `${n} ${Number(n) === 1 ? one : (many === undefined ? one + 's' : many)}`;   // '1 model' / '3 models'
   const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   let status = null; let editing = null;
   function setMsg(id, text, kind) { const el = $(id); el.textContent = text || ''; el.className = 'msg' + (text ? ' ' + (kind || 'info') : ''); if (text && kind === 'ok') setTimeout(() => { if (el.textContent === text) el.className = 'msg'; }, 6000); }
@@ -189,7 +190,7 @@
   $('btn-unload-all').addEventListener('click', (e) => act(e.target, 'engine-msg', () => api('/api/local-models/unload', { method: 'POST', body: {} }), 'Unloaded.'));
   $('btn-install-swap').addEventListener('click', (e) => { if (!confirm('Download the pinned llama-swap release from GitHub (about 25 MB, checksum verified)?')) return; act(e.target, 'engine-msg', () => api('/api/local-models/install/llama-swap', { method: 'POST' }), (r) => `Installed llama-swap v${r.version}.`); });
   $('btn-build-llama').addEventListener('click', (e) => { if (!confirm('Build llama.cpp from source in the background (git, cmake, compiler; 5 to 15 minutes)? On a Mac this runs brew install llama.cpp.')) return; act(e.target, 'engine-msg', () => api('/api/local-models/install/llama-cpp', { method: 'POST' }), (r) => `Build started as job ${r.jobId}; watch the jobs panel or come back in ten minutes and press Refresh.`); });
-  $('btn-discover').addEventListener('click', (e) => act(e.target, 'engine-msg', () => api('/api/local-models/discover', { method: 'POST' }), (r) => `Hub model list refreshed: ${r.count} local model(s) listed.`));
+  $('btn-discover').addEventListener('click', (e) => act(e.target, 'engine-msg', () => api('/api/local-models/discover', { method: 'POST' }), (r) => `Hub model list refreshed: ${plural(r.count, 'local model', 'local models')} listed.`));
   $('btn-logs').addEventListener('click', loadLogs);
 
   // model rows
@@ -205,7 +206,7 @@
 
   // scan
   $('btn-scan').addEventListener('click', async (e) => {
-    const out = await act(e.target, 'models-msg', () => api('/api/local-models/scan', { method: 'POST', body: {} }), (r) => `${r.found.length} file(s) found in ${r.dirs.length} folder(s).`);
+    const out = await act(e.target, 'models-msg', () => api('/api/local-models/scan', { method: 'POST', body: {} }), (r) => `${plural(r.found.length, 'file', 'files')} found in ${plural(r.dirs.length, 'folder', 'folders')}.`);
     if (!out) return;
     $('scan-box').classList.remove('hidden');
     const known = new Set((status.models || []).map(m => m.path));

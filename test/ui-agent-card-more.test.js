@@ -119,6 +119,7 @@ function setup(over = {}) {
     if (url === '/api/agents/harbor/files' && method === 'GET') return state.filesFail ? resp(500, { error: 'files unavailable' }) : resp(200, { files: state.files });
     const fm = /^\/api\/agents\/harbor\/files\/([^/]+)$/.exec(url);
     if (fm && method === 'PUT') { if (state.fileFail) return resp(400, { success: false, error: state.fileFail }); state.files[decodeURIComponent(fm[1])] = body.content; return resp(200, { success: true }); }
+    if (/^\/api\/agents\/harbor\/compaction$/.test(url) && method === 'GET' && state.compactionGetStatus && state.compactionGetStatus.length) return resp(state.compactionGetStatus.shift(), { error: 'no' });
     if (/^\/api\/agents\/harbor\/compaction$/.test(url)) return resp(200, { ok: true, ...state.compaction });
     if (/^\/api\/agents\/harbor\/compaction\/run$/.test(url)) return resp(state.runStatus, state.runStatus === 409 ? { error: 'already running' } : { ok: true, started: true });
     if (/^\/api\/root-grants\?agent=harbor$/.test(url)) return resp(200, { ok: true, ...state.root });
@@ -129,7 +130,7 @@ function setup(over = {}) {
     if (/^\/api\/agents\/harbor\/working-on$/.test(url)) return resp(200, state.work);
     return resp(404, { error: 'no route ' + url });
   };
-  const card = C.createCard({ doc, win, fetch, records: () => over.records || REAL, me: () => ('me' in over ? over.me : ADMIN), agentsList: () => JSON.parse(JSON.stringify(state.agents)), subscribe: () => () => {}, help: null, simple: false, phone: false, setTimeout: () => {} });
+  const card = C.createCard({ doc, win, fetch, records: () => over.records || REAL, me: () => ('me' in over ? over.me : ADMIN), agentsList: () => JSON.parse(JSON.stringify(state.agents)), subscribe: () => () => {}, help: null, simple: false, phone: false, setTimeout: over.setTimeout || (() => {}), clearTimeout: over.clearTimeout || (() => {}) });
   return { card, doc, win, state, calls, opened, confirms, prompts, patches: () => calls.filter((c) => c.method === 'PATCH'), writes: () => calls.filter((c) => c.method !== 'GET') };
 }
 async function openAt(t, id) { await t.card.open('harbor', { row: id }); await flush(); return rowOf(t.card.el(), id); }
@@ -250,7 +251,215 @@ test('Memory: the shortest-background switch saves {minimalContext}; Compress no
   const t3 = setup({ state: { compaction: { pct: 80, tokens: 1, limit: 2, running: true } } });
   const row3 = await openAt(t3, 'OPT-0833');
   assert.match(row3.textContent, /Compressing…/);
-  assert.match(row3.textContent, /This can't be changed right now\./);
+  assert.match(row3.textContent, /Compression running… the agent is writing its working brief\./);
+  assert.ok(all(row3, 'button').find((b) => /Compressing/.test(b.textContent)).getAttribute('disabled') !== null, 'the button is off while it runs');
+});
+
+// ---- Memory: the compression row keeps itself up to date (5 s), only while the card is open and the row is showing ----------
+/** Timers the card asks for 5 seconds out (the polling); everything else the card sets is dropped as before. */
+function clock() {
+  const q = [];
+  return {
+    q, setTimeout: (fn, ms) => { if (ms !== 5000) return undefined; const h = { fn, on: true }; q.push(h); return h; }, clearTimeout: (h) => { if (h) h.on = false; },
+    live: () => q.filter((h) => h.on),
+    async tick() { const h = q.filter((x) => x.on).pop(); assert.ok(h, 'a timer is waiting'); h.on = false; await h.fn(); await flush(); },
+  };
+}
+const compCalls = (t) => t.calls.filter((c) => c.url === '/api/agents/harbor/compaction' && c.method === 'GET').length;
+const pressCompress = async (t) => { all(rowOf(t.card.el(), 'OPT-0833'), 'button').find((b) => /Compress now/.test(b.textContent)).click(); await flush(); };
+
+test('Memory: the local-model hint shows under "When the conversation gets long" only for a local model', async () => {
+  const t = setup({ state: { compaction: { pct: 10, tokens: 1, limit: 2, local: true } } });
+  const row = await openAt(t, 'OPT-0040');
+  assert.match(row.textContent, /Local model: assisted mode at 60% is the default\./);
+  const t2 = setup({ state: { compaction: { pct: 10, tokens: 1, limit: 2, local: false } } });
+  assert.ok(!/Local model/.test((await openAt(t2, 'OPT-0040')).textContent));
+  assert.strictEqual(M.LOCAL_HINT, 'Local model: assisted mode at 60% is the default.');
+});
+
+test('Memory: Compress now asks the old question for the mode, then every 5 s reads the status until it is done, and says how it ended', async () => {
+  const clk = clock();
+  const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout });
+  await openAt(t, 'OPT-0833');
+  assert.strictEqual(clk.live().length, 0, 'nothing runs, nothing is read again');
+  await pressCompress(t);
+  assert.match(t.confirms[0], /^Compress now\?\n\nharbor will write its working brief \(working-brief\.md\), then its session is reset and seeded from Records, recent turns and recall\.\n\nThis takes a turn of the agent \(it can run for minutes\)\.$/);
+  assert.deepStrictEqual(t.calls.filter((c) => c.url.endsWith('/compaction/run')).map((c) => c.method), ['POST']);
+  assert.match(rowOf(t.card.el(), 'OPT-0833').textContent, /Started \(on\)… this card checks every 5 s\./);
+  assert.strictEqual(clk.live().length, 1, 'one re-read is waiting');
+  t.state.compaction = { ...t.state.compaction, running: true };   // the agent is writing the brief
+  const before = compCalls(t);
+  await clk.tick();
+  assert.strictEqual(compCalls(t), before + 1, 'one more read');
+  assert.match(rowOf(t.card.el(), 'OPT-0833').textContent, /Compression running… the agent is writing its working brief\./);
+  assert.strictEqual(clk.live().length, 1, 'still going: the next read is queued');
+  t.state.compaction = { ...t.state.compaction, running: false, requested: false, lastOk: true, lastReset: true, lastRunAt: Date.now() };
+  await clk.tick();
+  const done = rowOf(t.card.el(), 'OPT-0833').textContent;
+  assert.match(done, /✅ Done: brief written, fresh session started/);
+  assert.match(done, /Done, read the brief/);
+  assert.strictEqual(clk.live().length, 0, 'finished: the reads stop');
+});
+
+test('Memory: a failed compression says why; a postponed one says so and stops reading', async () => {
+  for (const [state, want] of [[{ lastOk: false, lastError: 'the model refused', lastRunAt: Date.now() + 1000 }, /❌ Compression failed: the model refused/], [{ lastBusy: true, lastError: 'the agent stayed busy', runs: [{ at: new Date(Date.now() + 1000).toISOString() }] }, /⏸ Postponed: the agent stayed busy/]]) {
+    const clk = clock();
+    const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout });
+    await openAt(t, 'OPT-0833');
+    await pressCompress(t);
+    t.state.compaction = { ...t.state.compaction, running: false, requested: false, ...state };
+    await clk.tick();
+    assert.match(rowOf(t.card.el(), 'OPT-0833').textContent, want);
+    assert.ok(!/Done, read the brief/.test(rowOf(t.card.el(), 'OPT-0833').textContent), 'no brief to read');
+    assert.strictEqual(clk.live().length, 0);
+  }
+});
+
+test('Memory r1: an older result is never shown as this run\'s Done; the reads go on until a result from this run arrives', async () => {
+  const clk = clock();
+  const old = Date.now() - 3600000;
+  const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout, state: { compaction: { pct: 42, tokens: 1, limit: 2, running: false, lastOk: true, lastRunAt: old } } });   // yesterday's run is the server's marker before the press
+  await openAt(t, 'OPT-0833');
+  await pressCompress(t);
+  t.state.compaction = { ...t.state.compaction, running: false, requested: false, lastOk: true, lastReset: true };
+  await clk.tick();
+  assert.ok(!/Done/.test(rowOf(t.card.el(), 'OPT-0833').textContent), 'not this run\'s Done');
+  assert.strictEqual(clk.live().length, 1, 'still reading');
+  t.state.compaction = { ...t.state.compaction, lastRunAt: old + 1000 };
+  await clk.tick();
+  assert.match(rowOf(t.card.el(), 'OPT-0833').textContent, /✅ Done/);
+  assert.strictEqual(clk.live().length, 0);
+});
+
+test('Memory r2: Done compares the server\'s result marker with the one read before the run, not the browser clock (60 s ahead or behind)', async () => {
+  const realNow = Date.now;
+  const S = 1800000000000;   // the server's "now"
+  try {
+    for (const skew of [60000, -60000]) {
+      Date.now = () => S + skew;
+      const clk = clock();
+      const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout, state: { compaction: { pct: 42, tokens: 1, limit: 2, running: false, lastOk: true, lastRunAt: S - 3600000 } } });
+      await openAt(t, 'OPT-0833');
+      await pressCompress(t);
+      assert.strictEqual(clk.live().length, 1, 'reading');
+      t.state.compaction = { ...t.state.compaction, running: false, requested: false, lastOk: true, lastReset: true };
+      await clk.tick();
+      assert.ok(!/Done/.test(rowOf(t.card.el(), 'OPT-0833').textContent), 'the old result is not Done (skew ' + skew + ')');
+      t.state.compaction = { ...t.state.compaction, lastRunAt: S + 2000 };   // the server made a new result 2 s after the press
+      await clk.tick();
+      assert.match(rowOf(t.card.el(), 'OPT-0833').textContent, /✅ Done/, 'finished run is Done with the browser clock off by ' + skew);
+      assert.strictEqual(clk.live().length, 0);
+    }
+    // a different run id counts as a new result too
+    Date.now = () => S + 60000;
+    const clk = clock();
+    const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout, state: { compaction: { pct: 42, tokens: 1, limit: 2, running: false, lastOk: true, runs: [{ id: 'r1', at: new Date(S - 1000).toISOString() }] } } });
+    await openAt(t, 'OPT-0833');
+    await pressCompress(t);
+    t.state.compaction = { ...t.state.compaction, runs: [{ id: 'r2', at: new Date(S - 1000).toISOString() }], lastReset: false };
+    await clk.tick();
+    assert.match(rowOf(t.card.el(), 'OPT-0833').textContent, /✅ Done/);
+  } finally { Date.now = realNow; }
+});
+
+test('Memory r2: a failed progress check stands over a kept "running"; the row redrawn keeps the error and starts no read until a good read or another press', async () => {
+  const clk = clock();
+  const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout, state: { compaction: { pct: 80, tokens: 1, limit: 2, running: true } } });
+  await openAt(t, 'OPT-0833');
+  assert.strictEqual(clk.live().length, 1, 'running (kept answer): reading');
+  t.state.compactionGetStatus = [403];
+  await clk.tick();
+  const shown = () => rowOf(t.card.el(), 'OPT-0833').textContent;
+  assert.match(shown(), /Could not check the progress\./);
+  assert.ok(!/Compression running/.test(shown()), 'the error is not covered by "running"');
+  assert.strictEqual(clk.live().length, 0, 'no timer');
+  // redraw the row from the kept running:true answer
+  const head = () => all(t.card.el(), '.ac-sec-head').find((h) => h.parentNode.getAttribute('data-sec') === 'memory');
+  head().click(); await flush(); head().click(); await flush();
+  assert.match(shown(), /Could not check the progress\./);
+  assert.ok(!/Compression running/.test(shown()));
+  assert.strictEqual(clk.live().length, 0, 'a redraw starts no new poll');
+  // pressing again clears it
+  t.state.compaction = { ...t.state.compaction, running: false };
+  await pressCompress(t);
+  assert.ok(!/Could not check the progress/.test(shown()), 'cleared by the new press');
+  assert.strictEqual(clk.live().length, 1, 'reading again');
+});
+
+test('Memory r1: a refused status read stops the reads at once and says so; three failures in a row do the same', async () => {
+  for (const [codes, reads] of [[[403], 1], [[401], 1], [[500, 500, 500], 3]]) {
+    const clk = clock();
+    const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout });
+    await openAt(t, 'OPT-0833');
+    await pressCompress(t);
+    t.state.compaction = { ...t.state.compaction, running: true };
+    t.state.compactionGetStatus = codes.slice();
+    const before = compCalls(t);
+    for (let i = 0; i < reads; i++) {
+      assert.strictEqual(clk.live().length, 1, 'still reading before read ' + (i + 1));
+      await clk.tick();
+    }
+    assert.strictEqual(compCalls(t), before + reads);
+    assert.match(rowOf(t.card.el(), 'OPT-0833').textContent, /Could not check the progress\./);
+    assert.strictEqual(clk.live().length, 0, 'no more reads');
+  }
+  // two failures then an answer: the count starts again
+  const clk = clock();
+  const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout });
+  await openAt(t, 'OPT-0833');
+  await pressCompress(t);
+  t.state.compaction = { ...t.state.compaction, running: true };
+  t.state.compactionGetStatus = [500, 500];
+  await clk.tick(); await clk.tick(); await clk.tick();
+  assert.strictEqual(clk.live().length, 1, 'two failures then a good read: still going');
+  assert.ok(!/Could not check the progress/.test(rowOf(t.card.el(), 'OPT-0833').textContent));
+});
+
+test('Memory: the 5-second reads stop when the card closes, and when its row is no longer showing', async () => {
+  // closed
+  const clk = clock();
+  const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout, state: { compaction: { pct: 80, tokens: 1, limit: 2, running: true } } });
+  await openAt(t, 'OPT-0833');
+  assert.strictEqual(clk.live().length, 1, 'a card opened on a running compression keeps reading');
+  const at = compCalls(t);
+  t.card.close();
+  assert.strictEqual(clk.live().length, 0, 'closing cancels the waiting read');
+  assert.strictEqual(compCalls(t), at, 'and reads nothing');
+  // the row is not drawn any more: its section is shut, so the reads give up on their own
+  const clk2 = clock();
+  const t2 = setup({ setTimeout: clk2.setTimeout, clearTimeout: clk2.clearTimeout, state: { compaction: { pct: 80, tokens: 1, limit: 2, running: true } } });
+  await openAt(t2, 'OPT-0833');
+  all(t2.card.el(), '.ac-sec-head').find((h) => h.parentNode.getAttribute('data-sec') === 'memory').click();
+  await flush();
+  assert.ok(!rowOf(t2.card.el(), 'OPT-0833'), 'the row is not on screen');
+  await clk2.tick();
+  await (async () => { const h = clk2.live().pop(); if (h) { h.on = false; await h.fn(); await flush(); } })();
+  assert.strictEqual(clk2.live().length, 0, 'no reads are left once the row has been off screen for a round');
+});
+
+test('Memory: "Done, read the brief" chooses working-brief.md in the records picker and opens the editor on it', async () => {
+  const clk = clock();
+  const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout, state: { recordTexts: { 'working-brief.md': 'The brief text' }, records: { records: [{ name: 'BRIEF.md', bytes: 10 }, { name: 'working-brief.md', bytes: 14 }], maxBytes: 65536 } } });
+  await openAt(t, 'OPT-0833');
+  await pressCompress(t);
+  t.state.compaction = { ...t.state.compaction, running: false, requested: false, lastOk: true, lastReset: false, lastRunAt: Date.now() + 1000 };
+  await clk.tick();
+  assert.match(rowOf(t.card.el(), 'OPT-0833').textContent, /✅ Done, read the brief/);
+  all(rowOf(t.card.el(), 'OPT-0833'), 'button').find((b) => b.textContent === 'Done, read the brief').click();
+  await flush();
+  const ed = rowOf(t.card.el(), 'OPT-0021');
+  assert.ok(ed, 'the records row is on screen');
+  assert.strictEqual(sel(ed).value, 'working-brief.md', 'the picker shows it chosen');
+  assert.strictEqual(all(ed, 'textarea')[0].value, 'The brief text', 'its text is in the editor');
+  // no such record: said plainly
+  const t2 = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout });
+  await openAt(t2, 'OPT-0833');
+  await pressCompress(t2);
+  t2.state.compaction = { ...t2.state.compaction, running: false, requested: false, lastOk: true, lastRunAt: Date.now() + 1000 };
+  await clk.tick();
+  all(rowOf(t2.card.el(), 'OPT-0833'), 'button').find((b) => b.textContent === 'Done, read the brief').click();
+  await flush();
+  assert.match(rowOf(t2.card.el(), 'OPT-0833').textContent, /❌ No record working-brief\.md yet\./);
 });
 
 const btn = (row, text) => all(row, 'button').find((b) => b.textContent === text);
@@ -580,4 +789,24 @@ test('the file has no invisible characters, sets nothing as HTML, names no real 
   assert.ok(!new RegExp('[' + String.fromCharCode(0xfe0f, 0x200d) + ']').test(src));
   assert.ok(!/innerHTML|insertAdjacentHTML|document\.write/.test(src));
   assert.ok(!/#[0-9a-fA-F]{6}\b/.test(src), 'no colour in the script');
+});
+
+test('Memory r3: no server marker before the run (status unreadable, nothing kept) and the first good read finds the agent idle: says the result cannot be confirmed and stops', async () => {
+  const realNow = Date.now;
+  try {
+    const S = realNow();
+    Date.now = () => S + 60000;   // the browser clock runs ahead of the server's
+    const clk = clock();
+    const t = setup({ setTimeout: clk.setTimeout, clearTimeout: clk.clearTimeout, state: { compaction: { pct: 42, tokens: 1, limit: 2, running: false, lastOk: true, lastRunAt: S + 1000 } } });
+    t.state.compactionGetStatus = [500, 500, 500, 500];   // the reads at opening and just before the run fail: nothing usable is kept
+    await openAt(t, 'OPT-0833');
+    t.state.compactionGetStatus = [500];
+    await pressCompress(t);
+    t.state.compactionGetStatus = [];
+    await clk.tick();   // the first good read: idle, with a result the page cannot place before or after the press
+    const shown = rowOf(t.card.el(), 'OPT-0833').textContent;
+    assert.ok(!/✅ Done/.test(shown), 'never Done by the browser clock');
+    assert.match(shown, /could not be confirmed/, shown);
+    assert.strictEqual(clk.live().length, 0, 'no timer left');
+  } finally { Date.now = realNow; }
 });

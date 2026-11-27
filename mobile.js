@@ -12425,7 +12425,7 @@ async function voiceRoomRun() {
     voicePrefsSave({ micLevel: r.micLevel, interruptSensitivity: r.interruptSensitivity });
     if (voiceCall) { voiceCall.vad.setMicLevel(r.micLevel); voiceCall.vad.setInterruptSensitivity(r.interruptSensitivity); }
     paintVoiceSheet(); voicePanelPaint();
-    out.textContent = `Done: Mic level ${r.micLevel}, Interrupt sensitivity ${r.interruptSensitivity}.` + (r.interruptSensitivity < 30 ? ' This room is noisy, so cutting in needs a firmer voice.' : '');
+    out.textContent = `Done: Mic level ${r.micLevel}, How easily I can interrupt it ${r.interruptSensitivity}.` + (r.interruptSensitivity < 30 ? ' This room is noisy, so cutting in needs a firmer voice.' : '');
   };
   voiceRoom.tick = setInterval(paint, 200);
   paint();
@@ -12746,12 +12746,12 @@ function voiceSheet() {
     '<label class="vs-opt"><input type="radio" name="vs-mode" value="press"> <span>Tap to talk</span></label>' +
     '<label class="vs-opt"><input type="radio" name="vs-mode" value="tap"> <span>Dictation</span></label></div>' +
     '<p class="vs-hint vs-help"></p>' +
-    '<label class="vs-row" for="vs-sens"><span>Interrupt sensitivity</span><b class="vs-sens-val"></b></label>' +
+    '<label class="vs-row" for="vs-sens"><span>How easily I can interrupt it</span><b class="vs-sens-val"></b></label>' +
     '<input type="range" id="vs-sens" class="vs-level vs-sens" min="0" max="100" step="1">' +
     '<p class="vs-hint">How easily your voice cuts in while the agent is speaking. Lower it in a noisy room.</p>' +
     '<label class="vs-check"><input type="checkbox" id="vs-interrupt"> <span>Show an Interrupt button</span></label>' +
     '<p class="vs-hint">' + VOICE_INTERRUPT_HINT + '</p>' +
-    '<label class="vs-row" for="vs-pause"><span>Pause before I&#39;m done</span></label>' +
+    '<label class="vs-row" for="vs-pause"><span>Pause before it answers</span></label>' +
     '<select id="vs-pause" class="vs-pause vs-btn">' + VOICE_END_PAUSES.map((ms, i) => '<option value="' + ms + '">' + ['Short', 'Normal', 'Long', 'Very long (4 s)'][i] + '</option>').join('') + '</select>' +
     '<p class="vs-hint">How long a quiet moment ends your turn: short 0.8 s, normal 1.2 s, long 2 s, very long 4 s. A short pause can cut you off mid-sentence.</p>' +
     '<label class="vs-row" for="vs-details"><span>Read short extra parts aloud</span></label>' +
@@ -15946,9 +15946,13 @@ function reloadResumeFinish(agent, draft) {
 }
 // The ↻ arrow keeps the typed text but not attached photos (or photos still converting): ask first, and the reloader asks again right
 // before the page reloads when a photo was added while it waited. Only for the arrows (reloadKeepChat); Cancel = no reload.
-const RELOAD_PHOTO_QUESTION = 'Reload and remove the attached photo(s)? The text stays.';
+// Real singular / plural words for a count: plural(1, 'photo', 'photos') -> '1 photo', plural(3, 'photo', 'photos') -> '3 photos'.
+function plural(n, one, many) { return `${n} ${Number(n) === 1 ? one : (many === undefined ? one + 's' : many)}`; }
+const reloadPhotoQuestion = (n) => `Reload and remove the attached ${n === 1 ? 'photo' : 'photos'}? The text stays.`;
 function reloadPhotoQuestions() {
-  return reloadKeepChat && (pendingImages.length > 0 || imagesPreparing.size > 0) ? [RELOAD_PHOTO_QUESTION] : [];
+  if (!reloadKeepChat) return [];
+  const n = pendingImages.length + imagesPreparing.size;
+  return n > 0 ? [reloadPhotoQuestion(n)] : [];
 }
 // The flag stays set for the whole attempt (the reloader's preparation runs on after reload() returned true): it is cleared by
 // the reloader's onBusy(false) (Cancel after preparation), by go (right after the stash), or here when the attempt never started.
@@ -16293,7 +16297,7 @@ function lookPickerPaint(host, onChosen) {
   }
   const cur = L.applied(document);   // the look in force, also when this phone can't store a choice
   const row = document.createElement('div');
-  row.setAttribute('role', 'group'); row.setAttribute('aria-label', 'Interface style for this phone');
+  row.setAttribute('role', 'group'); row.setAttribute('aria-label', 'Look of the interface for this phone');
   row.style.display = 'grid'; row.style.gridTemplateColumns = 'repeat(3, 1fr)'; row.style.gap = '8px';
   for (const look of L.LOOKS) {
     const on = look.id === cur;
@@ -16472,7 +16476,7 @@ function openProfileSheet() {
       <div id="prof-theme"></div>
     </div>
     <div class="sec-section">
-      <div class="sec-title">Interface style</div>
+      <div class="sec-title">Look of the interface</div>
       <div id="prof-looks"></div>
     </div>
     <div class="sec-actions" style="margin-top:10px"><button id="prof-close">Close</button></div>`;
@@ -16532,7 +16536,7 @@ async function chooseTimeZone(sel) {
 // "Protect your Maestro's own code": the switch IS the state of the behaviour change 'protect-own-code' (admin-only route).
 async function mountCodeProtect(el) {
   if (!el) return;
-  el.innerHTML = '<div class="sec-title">Protect your Maestro\'s own code</div><label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="sec-code-protect" style="width:auto" disabled> Protect your Maestro\'s own code</label><div class="sec-hint">Agents can\'t change the program files of your Maestro on this computer, and a refused agent describes the change to you instead. Also on the Changes page.</div><div class="sec-msg" id="sec-code-protect-msg"></div>';
+  el.innerHTML = '<div class="sec-title">Protect Maestro\'s own code</div><label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="sec-code-protect" style="width:auto" disabled> Protect Maestro\'s own code</label><div class="sec-hint">Agents can\'t change the program files of your Maestro on this computer, and a refused agent describes the change to you instead. Also on the Changes page.</div><div class="sec-msg" id="sec-code-protect-msg"></div>';
   const box = el.querySelector('#sec-code-protect'), msg = el.querySelector('#sec-code-protect-msg');
   try {
     const r = await fetch('/api/behaviour-changes', { credentials: 'include' });
@@ -17178,7 +17182,7 @@ function openRecallSheet() {
   const sheet = $('recall-sheet');
   if (!sheet.dataset.ready) {
     sheet.innerHTML = `
-      <h3 id="rc-title">Recall</h3>
+      <h3 id="rc-title">Search this chat</h3>
       <div class="rc-hint">Search everything this agent has said, heard and done.</div>
       <div class="rc-tools">
         <input type="search" id="rc-q" placeholder="Search words…" autocomplete="off" enterkeyhint="search">
@@ -17424,7 +17428,7 @@ function paintTwoFactor() {
     const adminLocked = hubMe.isAdmin && hubMe.admin2faRequired !== false;
     const adminFree = hubMe.isAdmin && !adminLocked;
     box.innerHTML = `
-      <div class="sec-title">Two-factor authentication: on</div>
+      <div class="sec-title">Two-factor sign-in: on</div>
       ${adminLocked ? `<div class="sec-hint">Two-factor sign-in is on. Admins can't remove it while "Require two-factor sign-in for admins" is on in Settings, Security on a computer.</div>` : `
       <input type="password" data-eye id="sec-2fa-password" placeholder="Password (to turn it off)" autocomplete="current-password">
       ${adminFree ? '<input type="text" id="sec-2fa-disable-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or a recovery code">' : ''}
@@ -17433,7 +17437,7 @@ function paintTwoFactor() {
     if (!adminLocked) $('sec-2fa-disable').addEventListener('click', disableTwoFactor);
   } else {
     box.innerHTML = `
-      <div class="sec-title">Two-factor authentication: off</div>
+      <div class="sec-title">Two-factor sign-in: off</div>
       <div class="sec-hint">${hubMe.isAdmin ? 'Required for admins.' : 'Adds a 6-digit code from an authenticator app at sign-in.'}</div>
       <div class="sec-actions"><button id="sec-2fa-begin" class="go">Set up 2FA</button></div>
       <div class="sec-msg" id="sec-2fa-msg"></div>`;
@@ -18153,9 +18157,9 @@ function simpleSettingsOpen() {
       '<div class="ss-sec ss-rhint" id="ss-review-line" role="status">Checking…</div>' +
       '<button type="button" class="ss-row" id="ss-review"><b>Review</b></button>' : '') +
     '<h4 class="ss-gh" id="ss-g-you">You and this device</h4>' +
-    '<div class="ss-sec"><div class="ss-title">Appearance</div><div class="ss-seg" role="group" aria-label="Appearance">' +
+    '<div class="ss-sec"><div class="ss-title">Light or dark</div><div class="ss-seg" role="group" aria-label="Light or dark">' +
     '<button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div><div class="ss-follow" hidden></div></div>' +
-    '<div class="ss-sec" id="ss-style-sec"><div class="ss-title">Interface style</div><div id="ss-style"></div></div>' +
+    '<div class="ss-sec" id="ss-style-sec"><div class="ss-title">Look of the interface</div><div id="ss-style"></div></div>' +
     '<div class="ss-sec"><div class="ss-title">Name</div><div class="ss-val"></div></div>' +
     '<div class="ss-sec ss-rhint" id="ss-notes-sec">Each agent’s notifications are on its card: tap the agent’s name in its chat.</div>' +   // Deep research (researchSimplePaint) goes under this line
     '<button type="button" class="ss-row" id="ss-adv"><b>Switch to Advanced</b><small>All tools, agents’ work and settings</small></button>' +

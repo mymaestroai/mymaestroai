@@ -143,8 +143,8 @@ const sheetOf = (doc) => doc.getElementById('simple-settings');
 
 test('desktop source: the picker section follows Appearance, the line has its class, one listener on the document', () => {
   const src = fnSrc(app, 'openSimpleSettings');
-  const a = src.indexOf('sm-lab">Appearance'), p = src.indexOf('sm-lab">Interface style'), n = src.indexOf('sm-lab">Name');
-  assert.ok(a > 0 && p > a && n > p, 'Appearance, then Interface style, then Name');
+  const a = src.indexOf('sm-lab">Light or dark'), p = src.indexOf('sm-lab">Look of the interface'), n = src.indexOf('sm-lab">Name');
+  assert.ok(a > 0 && p > a && n > p, 'Light or dark, then Look of the interface, then Name');
   assert.match(src, /class="sm-follow"/);
   assert.match(src, /lookPickerBuild\(overlay\.querySelector\('\.sm-style'\)\)/);
   assert.match(src, /'Colours follow your interface style \(' \+ label \+ '\)\.'/);
@@ -250,8 +250,8 @@ function phone(theme) {
 
 test('phone source: the style section sits right after Appearance, with the line', () => {
   const src = fnSrc(mob, 'simpleSettingsOpen');
-  const a = src.indexOf('>Appearance<'), p = src.indexOf('>Interface style<'), n = src.indexOf('>Name<');
-  assert.ok(a > 0 && p > a && n > p, 'Appearance, then Interface style, then Name');
+  const a = src.indexOf('>Light or dark<'), p = src.indexOf('>Look of the interface<'), n = src.indexOf('>Name<');
+  assert.ok(a > 0 && p > a && n > p, 'Light or dark, then Look of the interface, then Name');
   assert.match(src, /class="ss-follow"/);
   assert.match(src, /'Colours follow your interface style \(' \+ label \+ '\)\.'/);
 });

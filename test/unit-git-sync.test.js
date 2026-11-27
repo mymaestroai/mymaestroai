@@ -268,7 +268,7 @@ test('a local commit with no copy upstream next to rewritten ones: listed, needs
   assert.match(st.localOnly[0], /my own local fix$/);
   let r = await s.sync.runRewriteUpdate();
   assert.strictEqual(r.success, false);
-  assert.match(r.error, /1 local commit\(s\) are not on GitHub in any form \(\S+ my own local fix\)/);
+  assert.match(r.error, /1 local commit is not on GitHub in any form \(\S+ my own local fix\)/);
   assert.strictEqual(fs.readFileSync(path.join(s.work, 'mine.txt'), 'utf8'), 'my change\n', 'nothing touched');
   r = await s.sync.runRewriteUpdate({ confirmLocalOnly: 2 });
   assert.strictEqual(r.success, false, 'the confirmation must name the count that was shown');

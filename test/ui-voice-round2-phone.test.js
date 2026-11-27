@@ -55,8 +55,8 @@ test('chat controls: a Voice settings button beside the mode chip, a visible mod
   assert.match(html, /id="voice-mode-chip"/);
   assert.match(html, /id="voice-panel" role="dialog" aria-label="Voice settings" hidden/);
   const panel = html.slice(html.indexOf('id="voice-panel"'), html.indexOf('id="voice-level"'));
-  for (const s of ['name="vp-mode"', 'Hands-free', 'Tap to talk', 'Voice speed', 'id="vp-speed"', 'Pause before I&#39;m done', 'id="vp-pause"', 'Wait for me to go on', 'id="vp-wait"',
-    'Mic level', 'id="vp-level"', 'id="vp-meter"', 'Interrupt sensitivity', 'id="vp-sens"', 'Thinking sound', 'id="vp-think"', 'id="vp-think-vol"', 'Room check', 'vs-room-out']) assert.ok(panel.includes(s), s);
+  for (const s of ['name="vp-mode"', 'Hands-free', 'Tap to talk', 'Voice speed', 'id="vp-speed"', 'Pause before it answers', 'id="vp-pause"', 'Wait when I pause to think', 'id="vp-wait"',
+    'Mic level', 'id="vp-level"', 'id="vp-meter"', 'How easily I can interrupt it', 'id="vp-sens"', 'Thinking sound', 'id="vp-think"', 'id="vp-think-vol"', 'Room check', 'vs-room-out']) assert.ok(panel.includes(s), s);
   assert.ok(html.indexOf('id="voice-panel"') > html.indexOf('id="composer"'), 'the panel lives in the composer, so it is anchored to it');
   assert.match(html, /#composer \{ position: relative; \}/);
   assert.match(html, /#voice-panel \{ position: absolute;[^}]*bottom: 100%/);

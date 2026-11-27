@@ -151,7 +151,7 @@ describe('temporal workers: running', () => {
       { label: 'scan', model: 'google/gemini-2.5-pro', toolScope: 'read', ok: true, secs: 3.21, text: 'found 2 issues' },
       { label: 'review', model: 'codex/gpt-5', toolScope: 'none', ok: false, secs: 1, text: 'FAILED: timeout', note: 'codex/gpt-5 cannot use tools; running text-only', defaulted: false },
     ]);
-    assert.match(out, /^2 temporary worker\(s\) finished: 1 succeeded, 1 failed/);
+    assert.match(out, /^2 temporary workers finished: 1 succeeded, 1 failed/);
     assert.match(out, /===== scan \| google\/gemini-2.5-pro \| tools: read \| ok \| 3.2s =====\nfound 2 issues/);
     assert.match(out, /FAILED \| 1.0s =====\n\[note: codex/);
   });

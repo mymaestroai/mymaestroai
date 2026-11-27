@@ -37,7 +37,16 @@
     const hubEsc = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const OWNER_VIEW_KEY = 'hub-owner-view';
     function ownerView() { return localStorage.getItem(OWNER_VIEW_KEY) || 'mine'; }
-    function isHubAdmin() { return !window.hubMe || window.hubMe.isAdmin !== false; }
+    // Admin-only things are drawn for an admin only. When /api/me failed (window.hubMe missing) the page does not know who this is, so it is NOT an
+    // admin, unless the hub has no accounts at all (window.hubNoAccounts, or /api/me said accounts:false): then the one person is the owner and admin.
+    // The server enforces admin on its own routes either way.
+    function isHubAdmin() {
+      const me = window.hubMe;
+      if (!me) return window.hubNoAccounts === true;
+      return me.isAdmin !== false || me.accounts === false;
+    }
+    // Real singular / plural words for a count: plural(1, 'agent', 'agents') -> '1 agent', plural(3, 'agent', 'agents') -> '3 agents'.
+    function plural(n, one, many) { return `${n} ${Number(n) === 1 ? one : (many === undefined ? one + 's' : many)}`; }
     const agentOwnerCache = new Map();   // agent name -> owner id, kept across owner-view switches so open tabs keep their suffix
     function agentOwnerSuffix(agentName) {
       const me = window.hubMe;
@@ -487,8 +496,8 @@
           (me.isAdmin === true ? '<h3 class="sm-gh" id="sm-g-review">For your review</h3>' +
             '<div class="sm-set sm-review"><span class="sm-lab" id="sm-review-line" role="status">Checking…</span><button type="button" class="sm-plain" data-act="review"><div><b>Review</b></div><span aria-hidden="true">›</span></button></div>' : '') +
           '<h3 class="sm-gh" id="sm-g-you">You and this device</h3>' +
-          '<div class="sm-set"><span class="sm-lab">Appearance</span><div class="sm-seg"><button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div><div class="sm-follow" hidden></div></div>' +
-          '<div class="sm-set"><span class="sm-lab">Interface style</span><div class="sm-style"></div></div>' +
+          '<div class="sm-set"><span class="sm-lab">Light or dark</span><div class="sm-seg"><button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div><div class="sm-follow" hidden></div></div>' +
+          '<div class="sm-set"><span class="sm-lab">Look of the interface</span><div class="sm-style"></div></div>' +
           '<div class="sm-set"><span class="sm-lab">Name</span><div class="sm-name"></div></div>' +
           '<div class="sm-set" id="sm-notes"><span class="sm-lab">Each agent\'s notifications are on its card: press the agent\'s name in its chat.</span></div>' +
           '<div class="sm-set"><button type="button" class="sm-plain" data-act="advanced"><div><b>Switch to Advanced</b><span>All tools, agents\' work and settings</span></div><span aria-hidden="true">›</span></button></div>' +
@@ -850,7 +859,7 @@
         const adminLocked = me.isAdmin && me.admin2faRequired !== false;
         const adminFree = me.isAdmin && !adminLocked;
         box.innerHTML = `
-          <div class="sec-title">Two-factor authentication <span class="sec-badge on">on</span></div>
+          <div class="sec-title">Two-factor sign-in <span class="sec-badge on">on</span></div>
           ${adminLocked ? `<div class="sec-hint">Two-factor sign-in is on. Admins can't remove it while "Require two-factor sign-in for admins" is on in Settings, 🔐 Security.</div>` : `
           <input type="password" data-eye id="sec-2fa-password" placeholder="Password (to turn it off)" autocomplete="current-password">
           ${adminFree ? '<input type="text" id="sec-2fa-disable-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456 or a recovery code">' : ''}
@@ -858,7 +867,7 @@
           <div class="sec-msg" id="sec-2fa-msg"></div>`;
       } else {
         box.innerHTML = `
-          <div class="sec-title">Two-factor authentication <span class="sec-badge">off</span></div>
+          <div class="sec-title">Two-factor sign-in <span class="sec-badge">off</span></div>
           <div class="sec-hint">${me.isAdmin ? 'Required for admins.' : 'Adds a 6-digit code from an authenticator app at sign-in.'}</div>
           <div class="sec-actions"><button class="sec-btn" onclick="beginTwoFactor()">Set up 2FA</button></div>
           <div class="sec-msg" id="sec-2fa-msg"></div>`;
@@ -960,7 +969,7 @@
     // "Protect your Maestro's own code": the switch IS the state of the behaviour change 'protect-own-code' (admin-only route).
     async function mountCodeProtect(el) {
       if (!el) return;
-      el.innerHTML = '<div class="sec-title">Protect your Maestro\'s own code</div><label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="sec-code-protect" style="width:auto" disabled> Protect your Maestro\'s own code</label><div class="sec-hint">Agents can\'t change the program files of your Maestro on this computer, and a refused agent describes the change to you instead. Also on the Changes page.</div><div class="sec-msg" id="sec-code-protect-msg"></div>';
+      el.innerHTML = '<div class="sec-title">Protect Maestro\'s own code</div><label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="sec-code-protect" style="width:auto" disabled> Protect Maestro\'s own code</label><div class="sec-hint">Agents can\'t change the program files of your Maestro on this computer, and a refused agent describes the change to you instead. Also on the Changes page.</div><div class="sec-msg" id="sec-code-protect-msg"></div>';
       const box = el.querySelector('#sec-code-protect'), msg = el.querySelector('#sec-code-protect-msg');
       try {
         const r = await fetch('/api/behaviour-changes', { credentials: 'include' });
@@ -2169,7 +2178,7 @@
       if (!agent) { alert('Open a chat with an agent first: Recall searches that agent\'s history.'); return; }
       if (agent !== recallState.agent) { recallState.hits = []; recallState.stats = null; recallState.q = ''; }
       recallState.agent = agent; recallState.chatId = chat.id || chatId;
-      const dock = { dock: true, title: `🔎 Recall · ${esc(chat.display || capName(agent))}` };
+      const dock = { dock: true, title: `🔎 Search this chat · ${esc(chat.display || capName(agent))}` };
       const kinds = RECALL_KINDS.map(([v, label]) => `<label class="recall-kind"><input type="checkbox" class="recall-kind-box" value="${v}" checked> ${label}</label>`).join('');
       gsModal(`<div id="recall-panel" data-no-dirty>
         <div class="gs-sub" style="margin:0">Search everything this agent has said, heard and done. Words are matched anywhere in the archived transcript.</div>
@@ -2770,7 +2779,7 @@
       if (h) {
         const wopts = s.wallets.filter(w => !/^hl-agent-/.test(w.name)).map(w => `<option value="${esc(w.name)}" ${h.wallet === w.name ? 'selected' : ''}>${esc(w.name)}</option>`).join('');
         const tools = Object.entries(h.tools).map(([k, t]) => `<label style="margin-right:10px;white-space:nowrap"><input type="checkbox" id="h-act-${k}" ${t.enabled ? 'checked' : ''}> ${esc(k)}</label><label style="margin-right:14px;white-space:nowrap"><input type="checkbox" id="h-dry-${k}" ${t.dryRun ? 'checked' : ''}> dry run</label>`).join('');
-        const acct = h.account ? (h.account.error ? `account: ${esc(h.account.error)}` : `account value $${(h.account.accountValueUsd || 0).toFixed(2)} · withdrawable $${(h.account.withdrawableUsd || 0).toFixed(2)} · ${h.account.openPositions} open position(s)`) : 'no wallet selected';
+        const acct = h.account ? (h.account.error ? `account: ${esc(h.account.error)}` : `account value $${(h.account.accountValueUsd || 0).toFixed(2)} · withdrawable $${(h.account.withdrawableUsd || 0).toFixed(2)} · ${plural(h.account.openPositions, 'open position', 'open positions')}`) : 'no wallet selected';
         const recent = (h.recent || []).slice(0, 5).map(r => `<div class="gs-sub">${esc(new Date(r.ts).toLocaleTimeString())} ${esc(r.kind)} $${esc(String(r.usd || 0))} ${r.dryRun ? '(dry run)' : '(REAL)'} ${r.ok ? 'ok' : 'failed'}</div>`).join('');
         html += `<div class="gs-box"><h4>Hyperliquid (perps, HLP vault)</h4>
           <p class="gs-sub">A separate exchange account controlled by the main wallet's key. Orders are signed by an <em>agent key</em> that cannot withdraw; withdrawals go only to the main wallet's own address, on Arbitrum. Isolated margin only. Start on testnet. The trading agent can change these settings by API with the executor token (header <code>X-Executor-Token</code>); the keystore must be unlocked for the agent-key setup either way.</p>
@@ -3214,7 +3223,8 @@
     // lib/ui-settings-groups.js (a list on the left, the open group on the right). Sections are matched by id; one the list doesn't
     // know lands in Upkeep > More, so a new section can't disappear. The open group is kept per browser (localStorage hub-settings-group).
     // Workers at once (settings.workersAtOnce): one number per AI service, admins only. Rows come from /api/hub/status pacing.caps.
-    const WAO_LABELS = { 'claude-sdk': 'Claude subscription', 'codex-cli': 'ChatGPT subscription', anthropic: 'Anthropic API', openai: 'OpenAI API', codex: 'OpenAI Codex API', google: 'Google Gemini', perplexity: 'Perplexity', lmstudio: 'LM Studio', ollama: 'Ollama' };
+    const WAO_LABELS = { 'claude-sdk': 'Claude subscription', 'codex-cli': 'ChatGPT subscription', anthropic: 'Anthropic API', openai: 'OpenAI API', codex: 'OpenAI Codex API', google: 'Google Gemini', perplexity: 'Perplexity', lmstudio: 'LM Studio', ollama: 'Ollama', local: 'Local' };   // labels only: the saved keys and data-provider values stay as they are
+    const WAO_RECORDS = { 'claude-sdk': 'OPT-0412', 'codex-cli': 'OPT-0413', anthropic: 'OPT-0414', openai: 'OPT-0415', codex: 'OPT-0416', google: 'OPT-0417', perplexity: 'OPT-0418', lmstudio: 'OPT-0419', ollama: 'OPT-0420' };
     let waoStored = {};   // the saved map as the page opened; rows for services not listed keep their value
     async function loadWorkersAtOnce() {
       const box = document.getElementById('st-wao-rows');
@@ -3229,6 +3239,7 @@
           row.className = 'st-row';
           const label = document.createElement('label');
           label.textContent = WAO_LABELS[c.provider] || c.provider;
+          if (WAO_RECORDS[c.provider]) label.dataset.setting = WAO_RECORDS[c.provider];   // each service's own ⓘ sits after its label (records anchor [data-setting="OPT-04xx"])
           const input = document.createElement('input');
           input.type = 'number'; input.min = '1'; input.max = '32'; input.step = '1';
           input.className = 'st-wao-input'; input.style.maxWidth = '90px';
@@ -3293,7 +3304,7 @@
       while (host.firstChild) host.removeChild(host.firstChild);
       const cur = L.applied(document);   // the look in force, also when this device can't store a choice
       const list = document.createElement('div');
-      list.setAttribute('role', 'group'); list.setAttribute('aria-label', 'Interface style for this device');
+      list.setAttribute('role', 'group'); list.setAttribute('aria-label', 'Look of the interface for this device');
       list.style.display = 'grid'; list.style.gap = '8px';
       for (const look of L.LOOKS) {
         const on = look.id === cur;
@@ -3353,7 +3364,7 @@
       row.className = 'st-row';
       const lab = document.createElement('label');
       lab.style.flexBasis = '220px'; lab.htmlFor = 'st-look-new';   // 'Interface style for new members' on one line
-      lab.appendChild(document.createTextNode('Interface style for new members'));
+      lab.appendChild(document.createTextNode('Look of the interface for new members'));
       const sel = document.createElement('select');
       sel.id = 'st-look-new';
       for (const look of window.HubLooks.LOOKS) { const o = document.createElement('option'); o.value = look.id; o.appendChild(document.createTextNode(look.label)); sel.appendChild(o); }
@@ -3389,9 +3400,12 @@
       (stSumParts[group] ||= {})[key] = { text: text || '', crit: !!crit };
       const el = document.getElementById(`st-sum-${group}`);
       if (!el) return;
-      const parts = Object.values(stSumParts[group]);
-      el.textContent = parts.map(p => p.text).filter(Boolean).join(' · ');
-      el.classList.toggle('st-sum-crit', parts.some(p => p.crit && p.text));
+      const shown = Object.values(stSumParts[group]).filter(p => p.text);
+      const allCrit = shown.length > 0 && shown.every(p => p.crit);
+      // a part that is not a fault is never drawn red because another part of the same line is: only the red parts are marked
+      if (!allCrit && shown.some(p => p.crit)) el.innerHTML = shown.map(p => (p.crit ? `<span class="st-sum-first">${esc(p.text)}</span>` : esc(p.text))).join(' · ');
+      else el.textContent = shown.map(p => p.text).join(' · ');
+      el.classList.toggle('st-sum-crit', allCrit);
     }
 
     // Show one group in the right pane (the others are hidden). remember = the person chose it: kept in localStorage 'hub-settings-group'
@@ -3852,13 +3866,13 @@
         h += `<div class="rv-block rv-block-suggest" data-tier="suggest"><button type="button" class="rv-fold" data-rv="fold" aria-expanded="${reviewFoldOpen ? 'true' : 'false'}">${reviewFoldOpen ? '▾' : '▸'} Suggestions (${r.suggestions.length})</button>`
           + `<div class="rv-fold-body"${reviewFoldOpen ? '' : ' hidden'}>${r.suggestions.map((p) => rowOf(p, 'suggest')).join('')}${r.snoozedSuggestions.map((p) => rowOf(p, 'suggest')).join('')}</div></div>`;
       }
-      const shown = r.features.map((f) => ({ id: f.id, title: f.title, text: f.text, snoozedUntil: f.snoozedUntil }));
+      const shown = r.features.map((f) => ({ id: f.id, title: f.title, text: f.text, cost: f.cost, snoozedUntil: f.snoozedUntil }));
       for (const id of Object.keys(reviewDecided)) if (!shown.some((f) => f.id === id)) shown.push({ id, title: reviewDecided[id].title, text: '' });
       if (shown.length) {
         h += `<h4>New features</h4>` + shown.map((f) => {
           const d = reviewDecided[f.id];
           return `<div class="rv-row rv-feature" data-fid="${esc(f.id)}">
-            <div class="rv-main"><div class="rv-title">${esc(f.title)}</div>${f.text ? `<div class="rv-text">${esc(f.text)}</div>` : ''}${f.snoozedUntil && !d ? `<div class="rv-text">${esc(RV.askedAgainLine(f.snoozedUntil))}</div>` : ''}
+            <div class="rv-main"><div class="rv-title">${esc(f.title)}</div>${f.text ? `<div class="rv-text">${esc(f.text)}</div>` : ''}${f.cost ? `<div class="rv-text rv-cost">${esc('Cost: ' + f.cost)}</div>` : ''}${f.snoozedUntil && !d ? `<div class="rv-text">${esc(RV.askedAgainLine(f.snoozedUntil))}</div>` : ''}
             <div class="rv-result" role="status" aria-live="polite">${d ? esc(d.line) : ''}</div></div>
             ${d && d.decision !== 'snooze' ? '' : `<div class="rv-acts">${[['on', 'Turn on'], ['off', 'Leave off'], ...(d || f.snoozedUntil ? [] : [['snooze', 'Ask me in a week']])].map(([k, l]) => `<button type="button" class="st-test-btn" data-rv="decide" data-id="${esc(f.id)}" data-decision="${k}">${l}</button>`).join('')}</div>`}</div>`;
         }).join('');
@@ -3964,6 +3978,7 @@
               const keep = STG.searchRows(q, units.map((u) => ({
                 text: `${u.textContent} ${words.filter((e) => { for (let n = e.row; n; n = n.parentNode) if (n === u) return true; return false; }).map((e) => e.text).join(' ')}`,
                 follows: u.classList.contains('st-hint') || u.tagName === 'BUTTON',   // a hint or an ⓘ button belongs to the row above it
+                group: (u.dataset && u.dataset.searchGroup) || '',   // rows that save together (the spend caps and Save caps) are found together
               })));
               units.forEach((u, i) => { if (!keep[i]) u.classList.add('st-row-off'); });
             }
@@ -4103,7 +4118,7 @@
         <div class="st-section" id="st-chat-section"><h4>Chat</h4>
           <div class="st-row"><label style="flex-basis:auto"><input type="checkbox" id="st-fold-auto" ${foldAutoOn() ? 'checked' : ''} onchange="saveFoldAuto(this.checked)"> Fold consultations, scheduled tasks and hub notices into cards</label></div>
           <div class="st-hint">This browser only. Turn it off to show every automatic turn in full.</div>
-          <div class="st-row"><label style="flex-basis:auto"><input type="checkbox" id="st-active-top" ${activeTopOn() ? 'checked' : ''} onchange="saveActiveTop(this.checked)"> Show active agents at the top of the agent list</label></div>
+          <div class="st-row"><label style="flex-basis:auto"><input type="checkbox" id="st-active-top" ${activeTopOn() ? 'checked' : ''} onchange="saveActiveTop(this.checked)"> Show busy agents at the top</label></div>
           <div class="st-hint">This browser only. Agents that are working right now also appear in an Active section at the top of the list; off shows the list exactly as before.</div>
           ${simpleAccountOk(window.hubMe) ? `<div class="st-row"><button type="button" id="st-switch-simple" onclick="simpleSwitchMode('simple')">Switch to Simple</button></div>
           <div class="st-hint">The calm view: just the conversation, with the tools and settings out of sight. You can switch back here.</div>` : ''}
@@ -4217,7 +4232,7 @@
       // New agent (first in Agents and teams): the one way to make an agent on the phone; admins only. The same dialog as the sidebar's "+ New Agent".
       if (isHubAdmin()) {
         html += `<div class="st-section" id="st-newagent-section"><h4>New agent</h4>
-        <div class="st-row"><label style="flex-basis:150px">New agent</label><button type="button" class="st-test-btn" id="st-new-agent-btn" onclick="openCreateAgent(null)">Make a new agent…</button></div>
+        <div class="st-row"><button type="button" class="st-test-btn" id="st-new-agent-btn" onclick="openCreateAgent(null)">Make a new agent…</button></div>
         <div class="st-hint">Give it a name and describe its role; your Maestro sets it up. You can also ask your lead to make one for you.</div>
       </div>`;
       }
@@ -4278,7 +4293,7 @@
         ${stDoorHtml('local-models', 'Local models', 'Run models on this computer through one proxy: add engines and models, see what is loaded. They appear as local/… in the model lists.', "location.href='/local-models'")}
         <div class="st-hint"><span id="st-local-models-status" class="st-dim"></span></div>
       </div>`;
-      setTimeout(async () => { try { const r = await fetch('/api/local-models', { credentials: 'include' }); const j = await r.json(); const el = document.getElementById('st-local-models-status'); if (el && j && j.ok !== false) el.textContent = `· ${j.running ? 'proxy running on ' + j.port : (j.enabled ? 'proxy stopped' : 'off')}, ${(j.models || []).length} model(s)${(j.loaded || []).length ? ', loaded: ' + j.loaded.map(x => x.model || x.id || x).join(', ') : ''}`; if (j && j.ok !== false && j.enabled) stSum('models', 'local', `local models ${j.running ? 'running' : 'stopped'}`); } catch {} }, 0);
+      setTimeout(async () => { try { const r = await fetch('/api/local-models', { credentials: 'include' }); const j = await r.json(); const el = document.getElementById('st-local-models-status'); if (el && j && j.ok !== false) el.textContent = `· ${j.running ? 'proxy running on ' + j.port : (j.enabled ? 'proxy stopped' : 'off')}, ${plural((j.models || []).length, 'model', 'models')}${(j.loaded || []).length ? ', loaded: ' + j.loaded.map(x => x.model || x.id || x).join(', ') : ''}`; if (j && j.ok !== false && j.enabled) stSum('models', 'local', `local models ${j.running ? 'running' : 'stopped'}`); } catch {} }, 0);
 
       html += `<div class="st-section" id="st-prov-section"><h4>LLM Providers</h4>
         <div class="st-hint">Keys are kept in one place: <code>data/settings.json</code>, readable only by this computer's account. A key typed into <code>.env</code> moves here when your Maestro starts.</div>`;
@@ -4364,7 +4379,7 @@
           <input type="number" id="st-hw-minutes" min="0" max="240" step="1" value="${data.handOffWaitMinutes !== undefined && data.handOffWaitMinutes !== null && Number.isFinite(Number(data.handOffWaitMinutes)) ? Number(data.handOffWaitMinutes) : 10}" style="max-width:90px"> <span style="font-size:0.8rem;color:var(--text-dim)">minutes (0 turns it off)</span>
         </div>
         <div class="st-row">
-          <label class="gs-sub"><input type="checkbox" id="st-hw-notice" ${data.buildPartnerNotice !== false ? 'checked' : ''}> Tell the lead when an agent has no build partner</label>
+          <label class="gs-sub" style="flex-basis:auto"><input type="checkbox" id="st-hw-notice" ${data.buildPartnerNotice !== false ? 'checked' : ''}> Tell the lead when an agent has no build partner</label>
         </div>
         <div class="st-hint">An agent that waits a long time on its workers can't talk with you meanwhile. After two such waits in a week, the lead can offer you a build partner. Nothing is created without your yes.</div>
       </div>`;
@@ -4405,7 +4420,7 @@
         </div>
         <div class="st-hint">This browser only. Turn it off to show every automatic turn in full.</div>
         <div class="st-row">
-          <label style="flex-basis:auto"><input type="checkbox" id="st-active-top" ${activeTopOn() ? 'checked' : ''} onchange="saveActiveTop(this.checked)"> Show active agents at the top of the agent list</label>
+          <label style="flex-basis:auto"><input type="checkbox" id="st-active-top" ${activeTopOn() ? 'checked' : ''} onchange="saveActiveTop(this.checked)"> Show busy agents at the top</label>
         </div>
         <div class="st-hint">This browser only. Agents that are working right now also appear in an Active section at the top of the list; off shows the list exactly as before.</div>
         ${simpleAccountOk(window.hubMe) ? `<div class="st-row"><button type="button" id="st-switch-simple" onclick="simpleSwitchMode('simple')">Switch to Simple</button></div>
@@ -4422,7 +4437,7 @@
       // drawn here and moved to their own group by stPlaceRows (lib/ui-settings-groups P5C); each box saves on its own.
       if (isHubAdmin()) {
         p5cData = data;
-        html += `<div class="st-section" id="st-expert-section"><h4>Expert values</h4>
+        html += `<div class="st-section" id="st-expert-section"><h4 class="st-vh">Expert values</h4>
         <div class="st-hint" style="margin-left:0">Numbers that tune your Maestro. Each box saves as you change it; Use default puts the built-in value back.</div>
         ${STG.P5C.map(r => p5cRowHtml(r, data)).join('')}
       </div>`;
@@ -4579,23 +4594,28 @@
           <label style="flex-basis:150px">Spent today</label>
           <div id="st-spend" style="flex:1;font-size:0.8rem;color:var(--text-dim)">Loading…</div>
         </div>
-        <div class="st-row">
+        <div class="st-row" data-search-group="caps">
           <label style="flex-basis:150px">Daily pay-per-use cap per agent ($)</label>
           <input type="text" id="st-cap-agent" placeholder="unlimited" inputmode="decimal" style="max-width:120px" disabled>
         </div>
-        <div class="st-row">
-          <label style="flex-basis:150px">Daily pay-per-use cap, whole hub ($)</label>
+        <div class="st-row" data-search-group="caps">
+          <label style="flex-basis:150px">Daily pay-per-use cap, your whole Maestro ($)</label>
           <input type="text" id="st-cap-hub" placeholder="unlimited" inputmode="decimal" style="max-width:120px" disabled>
-          <button class="st-test-btn" id="st-caps-save" onclick="saveSpendCaps()">Save</button>
         </div>
-        <div class="st-hint" style="margin-left:158px">Caps count pay-per-use spend only (API keys and paid cloud voices), never plan use. Over a cap, an agent's decided actions (sending, writing outside its folders, admin, destructive) switch to ask for the rest of the day; nothing is silently stopped. Blank = unlimited.</div>
-        <div class="st-row">
+        <div class="st-hint" data-search-group="caps" style="margin-left:158px">Caps count pay-per-use spend only (API keys and paid cloud voices), never plan use. Over a cap, an agent's decided actions (sending, writing outside its folders, admin, destructive) switch to ask for the rest of the day; nothing is silently stopped. Blank = unlimited.</div>
+        <div class="st-row" data-search-group="caps">
           <label style="flex-basis:150px" title="A hard stop on pay-per-use spend for the month. Once it is used up, agents on pay-per-use models answer with a short notice until the month starts again or you raise the cap. Plan and local agents keep working.">Monthly cap ($)</label>
           <input type="text" id="st-cap-month" placeholder="no cap" inputmode="decimal" style="max-width:120px" disabled>
-          <span style="font-size:0.78rem;color:var(--text-dim)">month starts on day</span>
+        </div>
+        <div class="st-row" data-search-group="caps">
+          <label style="flex-basis:150px" for="st-cap-month-day">Month starts on day</label>
           <input type="text" id="st-cap-month-day" placeholder="1" inputmode="numeric" style="max-width:44px" title="1 to 28; 1 is the calendar month" disabled>
         </div>
-        <div class="st-row">
+        <div class="st-row" data-search-group="caps">
+          <label style="flex-basis:150px"></label>
+          <button class="st-test-btn" id="st-caps-save" onclick="saveSpendCaps()">Save caps</button>
+        </div>
+        <div class="st-row" data-search-group="caps">
           <label style="flex-basis:150px"></label>
           <div id="st-month-spend" style="flex:1;font-size:0.8rem;color:var(--text-dim)"></div>
         </div>
@@ -4742,7 +4762,7 @@
           <span style="flex:0 0 1.4em">${READY_ICON[i.level] || '•'}</span>
           <div style="flex:1"><div style="color:var(--text);font-weight:${i.level === 'ok' ? 400 : 600}">${esc(i.title)}</div>
             <div>${esc(i.detail || '')}</div>${i.fix ? `<div style="margin-top:2px">${readinessFixHtml(i.fix)}${readinessActionHtml(i.action)}</div>` : readinessActionHtml(i.action)}</div></div>`).join('') || 'Nothing to report.';
-        if (state) state.textContent = `${d.critical ? `${d.critical} to fix` : 'nothing critical'}${d.warnings ? `, ${d.warnings} warning(s)` : ''}; checked ${new Date(d.checkedAt).toLocaleTimeString()} on ${d.mac ? 'macOS' : d.platform}.`;
+        if (state) state.textContent = `${d.critical ? `${d.critical} to fix` : 'nothing critical'}${d.warnings ? `, ${plural(d.warnings, 'warning', 'warnings')}` : ''}; checked ${new Date(d.checkedAt).toLocaleTimeString()} on ${d.mac ? 'macOS' : d.platform}.`;
         stSum('status', 'setup', d.critical ? `Setup: ${d.critical} to fix` : d.warnings ? `Setup: ${d.warnings} warning${d.warnings === 1 ? '' : 's'}` : 'Setup: all good', !!d.critical);
         if (d.critical) stOpenGroup('status');
       } catch (e) { el.textContent = 'Could not run the checks: ' + e.message; stSum('status', 'setup', 'Setup: could not check'); }
@@ -4825,7 +4845,7 @@
           <div style="flex:1"><div style="color:var(--text);font-weight:${i.level === 'ok' ? 400 : 600}">${esc(i.title)} <span style="color:var(--text-dim);font-weight:400;font-size:0.8rem">· ${esc((d.groups || {})[i.group] || i.group)}</span></div>
             <div>${esc(i.detail || '')}</div>${i.fix ? `<div style="margin-top:2px">${readinessFixHtml(i.fix)}${securityActionHtml(i.action)}</div>` : securityActionHtml(i.action)}</div></div>`).join('') || 'Nothing to report.';
         const skipped = (d.skipped || []).length ? ` Not checked here: ${d.skipped.map(s => s.reason).join('; ')}.` : '';
-        if (state) state.textContent = `${d.critical ? `${d.critical} critical` : 'nothing critical'}${d.warnings ? `, ${d.warnings} warning(s)` : ''}${d.infos ? `, ${d.infos} note(s)` : ''}; ${d.cached ? 'last run' : 'checked'} ${new Date(d.checkedAt).toLocaleString()}.${skipped}`;
+        if (state) state.textContent = `${d.critical ? `${d.critical} critical` : 'nothing critical'}${d.warnings ? `, ${plural(d.warnings, 'warning', 'warnings')}` : ''}${d.infos ? `, ${plural(d.infos, 'note', 'notes')}` : ''}; ${d.cached ? 'last run' : 'checked'} ${new Date(d.checkedAt).toLocaleString()}.${skipped}`;
         stSum('status', 'security', d.critical ? `Security: ${d.critical} critical` : d.warnings ? `Security: ${d.warnings} warning${d.warnings === 1 ? '' : 's'}` : 'Security: all good', !!d.critical);
         if (d.critical) stOpenGroup('status');
         reviewRefresh().catch(() => {});   // a Run now that resolves or finds something updates the list, the count and the banner at once
@@ -5257,7 +5277,7 @@
       if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
       try {
         const r = await (await fetch(api, { method, headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: method === 'POST' ? '{}' : undefined })).json();
-        if (btn) btn.textContent = r.ok ? (r.fixed ? `Done: ${r.fixed.length} file(s)` : 'Done') : (r.error || 'Failed');
+        if (btn) btn.textContent = r.ok ? (r.fixed ? `Done: ${plural(r.fixed.length, 'file', 'files')}` : 'Done') : (r.error || 'Failed');
         setTimeout(() => loadSecurityCheck(true), 800);
         setTimeout(() => (typeof reviewRefresh === "function" ? reviewRefresh() : Promise.resolve()).catch(() => {}), 2500);
       } catch (e) { if (btn) btn.textContent = 'Failed: ' + e.message; }
@@ -5557,7 +5577,7 @@
         const r = await (await fetch('/api/websearch/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ query: 'weather forecast tomorrow', maxResults: 10 }) })).json();
         const n = Array.isArray(r.results) ? r.results.length : 0;
         if (r.backend && n) {
-          out.textContent = `Answered by ${WS_LABELS[r.backend] || r.backend}${r.backend === 'duckduckgo' ? ', the free no-key fallback' : ''}: ${n} result(s) in ${((r.ms || 0) / 1000).toFixed(1)} s`;
+          out.textContent = `Answered by ${WS_LABELS[r.backend] || r.backend}${r.backend === 'duckduckgo' ? ', the free no-key fallback' : ''}: ${plural(n, 'result', 'results')} in ${((r.ms || 0) / 1000).toFixed(1)} s`;
         } else {
           // One short reason per search tried, never a raw JSON error body. "The key was refused" only where a key was sent
           // (Brave, Serper, Tavily, Perplexity) and the answer is about the key: a 401, or an explicit bad-credential message.
@@ -5609,7 +5629,7 @@
       try {
         const d = await (await fetch('/api/auto-model/classifier', { credentials: 'include' })).json();
         const by = Object.entries(d.byBackend || {}).map(([k, n]) => `${k} ×${n}`).join(', ') || 'none yet';
-        el.textContent = `Since ${new Date(d.since).toLocaleString()}: ${d.turns} classified turn(s)${d.shadow ? `, ${d.shadow} in shadow` : ''}; agreed with the keyword rule ${d.agree}, disagreed ${d.disagree}; floored ${d.floored}, lifted to a minimum ${d.lifted}. Backends: ${by}. Local server now: ${d.localServer ? `${d.localServer.provider} / ${d.localServer.model}` : 'none reachable'}.`;
+        el.textContent = `Since ${new Date(d.since).toLocaleString()}: ${plural(d.turns, 'classified turn', 'classified turns')}${d.shadow ? `, ${d.shadow} in shadow` : ''}; agreed with the keyword rule ${d.agree}, disagreed ${d.disagree}; floored ${d.floored}, lifted to a minimum ${d.lifted}. Backends: ${by}. Local server now: ${d.localServer ? `${d.localServer.provider} / ${d.localServer.model}` : 'none reachable'}.`;
         // Recent verdicts, newest first: time, agent, what the classifier said (and the keyword rule), the model it
         // would pick, the model that ran, backend and timing. The owner reads this to judge a shadow week.
         const rec = document.getElementById('st-cl-recent');
@@ -5670,7 +5690,7 @@
         cxState.data = await cxApi('/api/connectors');
         cxStatus('');
         const n = ((cxState.data && cxState.data.connectors) || []).length;
-        stSum('tools', 'cx', `${n} data connector${n === 1 ? '' : 's'}`);
+        stSum('tools', 'cx', `${n} data connector${n === 1 ? '' : 's'}`, false);   // none set up is not a fault: never red
       } catch (e) {
         cxState.data = { connectors: [], groups: [] };
         cxStatus('Could not load connectors: ' + e.message, true);
@@ -5778,7 +5798,7 @@
       try {
         const d = await cxApi(`/api/connectors/${encodeURIComponent(id)}/test`, 'POST', {});
         cxState.tests[id] = Array.isArray(d.tools) ? d.tools : [];
-        cxStatus(`${id}: ${cxState.tests[id].length} tool(s) discovered.`);
+        cxStatus(`${id}: ${plural(cxState.tests[id].length, 'tool', 'tools')} discovered.`);
         if (btn) { btn.className = 'st-test-btn ok'; btn.textContent = 'OK'; }
       } catch (e) {
         cxStatus(`Test of ${id} failed: ${e.message}`, true);
@@ -6102,12 +6122,17 @@
     // section and moved to its group by stPlaceRows. Each box saves on its own through POST /api/settings; a failure shows the hub's words and puts
     // the box back. "Use default" sends null for every row so the hub removes the key and falls back to its built-in value.
     let p5cData = {};     // the settings the dialog was drawn with, kept current as rows save
+    // The box's placeholder is the default number itself ("240"); a default that is a word ("on", "off", a name) leaves it empty.
+    function p5cPlaceholder(r) {
+      const m = /^(?:every\s+)?(\d[\d,]*(?:\.\d+)?)(?:\s|$)/.exec(String(r.def || '').trim());
+      return m ? m[1].replace(/,/g, '') : '';
+    }
     function p5cRowHtml(r, data) {
       const di = `id="${r.id}" data-setting="${r.opt}"`;
       const on = `onchange="p5cSave('${r.opt}')"`;
       const dim = 'font-size:0.8rem;color:var(--text-dim)';
       let ctl = '';
-      if (r.kind === 'num') ctl = `<input type="number" ${di} min="${r.min}" max="${r.max}" step="${r.step}" placeholder="default" style="max-width:110px" ${on}> <span style="${dim}">${esc(r.unit)}</span>`;
+      if (r.kind === 'num') ctl = `<input type="number" ${di} min="${r.min}" max="${r.max}" step="${r.step}" placeholder="${esc(p5cPlaceholder(r))}" style="max-width:110px" ${on}> <span style="${dim}">${esc(r.unit)}</span>`;
       else if (r.kind === 'text') ctl = `<input type="text" ${di} placeholder="${esc(r.placeholder)}" autocomplete="off" spellcheck="false" style="max-width:110px" ${on}>`;
       else if (r.kind === 'url') ctl = `<input type="text" ${di} placeholder="${esc(r.dflt)}" autocomplete="off" spellcheck="false" style="flex:1 1 220px;min-width:0;max-width:340px" ${on}>`;
       else if (r.kind === 'switch') ctl = `<label class="toggle-switch"><input type="checkbox" ${di} ${on}><span class="toggle-slider"></span></label>`;
@@ -6117,9 +6142,10 @@
       else if (r.kind === 'map') ctl = `<span ${di} style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${r.families.map(([f, l]) => `<span style="${dim}">${esc(l)} to <select id="${r.id}-${f}" ${on}><option value="">Default</option></select></span>`).join('')}</span>`;
       else if (r.kind === 'images') ctl = `<span ${di} style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${r.providers.map(([p, l]) => ['fast', 'best'].map(w => `<span style="${dim}">${esc(l)} ${w === 'fast' ? 'quick' : 'best'} <input type="text" id="${r.id}-${p}-${w}" placeholder="built-in" autocomplete="off" spellcheck="false" style="max-width:150px" ${on}></span>`).join('')).join('')}</span>`;
       else if (r.kind === 'cache') ctl = `<span ${di} style="display:flex;gap:10px;align-items:center"><label class="toggle-switch"><input type="checkbox" id="${r.id}-on" ${on}><span class="toggle-slider"></span></label><select id="${r.id}-ttl" ${on}><option value="5m">Remember for 5 minutes</option><option value="1h">Remember for 1 hour</option></select></span>`;
-      return `<div class="st-row" style="flex-wrap:wrap;row-gap:6px"><label style="flex-basis:150px"${r.kind === 'num' || r.kind === 'text' || r.kind === 'url' || r.kind === 'select' || r.kind === 'model' ? ` for="${r.id}"` : ''}>${esc(r.name)}</label>${ctl}
-        <span id="${r.id}-def" style="${dim}">${esc(STG.p5cDefaultText(r))}</span><button type="button" class="st-test-btn" id="${r.id}-use" hidden onclick="p5cSave('${r.opt}', true)">Use default</button></div>
-        <div class="st-hint">${esc(r.hint)}</div>`;
+      // One layout for every row (like the agent card rows): on the left the label with its ⓘ right after it and, under it, the help
+      // sentence followed by "Default: ..." in the same dim paragraph; on the right the box (or switch) with its unit and Use default.
+      return `<div class="st-row st-xrow"><div class="st-xl"><label${r.kind === 'num' || r.kind === 'text' || r.kind === 'url' || r.kind === 'select' || r.kind === 'model' ? ` for="${r.id}"` : ''}>${esc(r.name)}</label><div class="st-hint st-xhelp">${esc(r.hint)} <span id="${r.id}-def">${esc(STG.p5cDefaultText(r))}</span></div></div>
+        <div class="st-xr">${ctl}<button type="button" class="st-test-btn" id="${r.id}-use" hidden onclick="p5cSave('${r.opt}', true)">Use default</button></div></div>`;
     }
     // Put one row's controls in line with the saved settings (and show Default: ... only while the key is unset).
     function p5cPaint(r) {
@@ -6484,7 +6510,7 @@
       const keyLine = v.hasKey ? '' : `<div style="color:var(--warning);margin-bottom:6px">No OpenRouter key yet: get one at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener" style="color:var(--accent)">openrouter.ai/keys</a>, paste it in LLM Providers above, press Test, then Save. The models below show up in the pickers once the key is saved.</div>`;
       body.innerHTML = `${keyLine}
         <div class="st-row"><label style="flex-basis:150px">Privacy</label><label style="flex:1;display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="st-or-privacy"${v.privacy ? ' checked' : ''} onchange="saveOpenRouter()"> Only use providers that do not store or train on prompts</label></div>
-        <div class="st-row"><label style="flex-basis:150px">Offered</label><span>${(v.chosen || []).length} model(s)${v.custom ? '' : ' (the default offer)'}${orPending.size ? ` · ${orPending.size} change${orPending.size === 1 ? '' : 's'} not saved yet` : ''} · catalogue ${(v.models || []).length} models${v.fetchedAt ? `, read ${esc(new Date(v.fetchedAt).toLocaleString())}` : ''}</span></div>
+        <div class="st-row"><label style="flex-basis:150px">Offered</label><span>${plural((v.chosen || []).length, 'model', 'models')}${v.custom ? '' : ' (the default offer)'}${orPending.size ? ` · ${orPending.size} change${orPending.size === 1 ? '' : 's'} not saved yet` : ''} · catalogue ${(v.models || []).length} models${v.fetchedAt ? `, read ${esc(new Date(v.fetchedAt).toLocaleString())}` : ''}</span></div>
         <div class="st-row" style="flex-wrap:wrap"><label style="flex-basis:150px">Find</label><input type="text" id="st-or-q" data-no-dirty value="${esc(q)}" placeholder="grok, deepseek, kimi, qwen, llama, claude…" oninput="renderOpenRouterBox()" style="flex:1;min-width:160px">
           <label style="display:flex;gap:4px;align-items:center;margin-left:8px;font-size:0.8rem;white-space:nowrap"><input type="checkbox" id="st-or-all" data-no-dirty${all ? ' checked' : ''} onchange="renderOpenRouterBox()"> show models without tools</label></div>
         <div id="st-or-list" style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px">${rows || '<i>No model matches.</i>'}${hiddenRows}${list.length > 300 ? `<div style="color:var(--text-dim)">… ${list.length - 300} more: narrow the search.</div>` : ''}</div>
@@ -6514,7 +6540,7 @@
       // Start from the saved offer and apply every box: the shown rows and the hidden rows holding ticks a search hides.
       const keep = new Set(orView && orView.chosen || []);
       for (const b of document.querySelectorAll('.st-or-pick')) { if (b.checked) keep.add(b.value); else keep.delete(b.value); }
-      return postOpenRouter({ privacy, models: [...keep] }, (j) => `OpenRouter: ${j.chosen.length} model(s) offered in the pickers.`, opts);
+      return postOpenRouter({ privacy, models: [...keep] }, (j) => `OpenRouter: ${plural(j.chosen.length, 'model', 'models')} offered in the pickers.`, opts);
     }
     function openRouterDefaults() { postOpenRouter({ models: null }, (j) => `OpenRouter: back to the default offer (${j.chosen.length} models).`); }
 
@@ -7613,7 +7639,7 @@
       else box.innerHTML = (paid ? `<b style="color:var(--text)">${amount}</b> pay-per-use over ${t.paidTurns} call${t.paidTurns === 1 ? '' : 's'}${unpriced}${top ? `<div style="margin-top:2px">${top}</div>` : ''}` : 'No pay-per-use spend today.') + plan;
       const caps = t.caps || {};
       stSum('money', 'spend', legacy ? 'restart to see spend' : paid ? `Spent today ${amount}` : 'No pay-per-use spend today');
-      stSum('money', 'caps', caps.perAgentDailyUsd || caps.hubDailyUsd ? `pay-per-use caps: ${[caps.perAgentDailyUsd ? `${usd(caps.perAgentDailyUsd)} per agent` : '', caps.hubDailyUsd ? `${usd(caps.hubDailyUsd)} whole hub` : ''].filter(Boolean).join(', ')}` : 'no daily caps');
+      stSum('money', 'caps', caps.perAgentDailyUsd || caps.hubDailyUsd ? `pay-per-use caps: ${[caps.perAgentDailyUsd ? `${usd(caps.perAgentDailyUsd)} per agent` : '', caps.hubDailyUsd ? `${usd(caps.hubDailyUsd)} for your whole Maestro` : ''].filter(Boolean).join(', ')}` : 'no daily caps');
       const credits = t.credits || [];
       const listEl = document.getElementById('st-credit-list');
       if (listEl) listEl.textContent = credits.length ? credits.map(creditLine).join(' · ') : 'None set. Enter an amount to see it next to today\'s spend.';
@@ -7722,7 +7748,7 @@
         result = e.message;
         if (!opts.quiet) alert(`Could not save caps: ${e.message}`);
       }
-      if (btn) { btn.disabled = false; setTimeout(() => { btn.className = 'st-test-btn'; btn.textContent = 'Save'; }, 3000); }
+      if (btn) { btn.disabled = false; setTimeout(() => { btn.className = 'st-test-btn'; btn.textContent = 'Save caps'; }, 3000); }
       return result;
     }
     setInterval(refreshSpendToday, SPEND_REFRESH_MS);   // the Spend section's data too (a read that failed comes again), so also on the settings-only page
@@ -8554,7 +8580,7 @@
               </select>
             </div>
             <div style="flex:1;">
-              <label style="display:block;font-size:0.8rem;color:var(--text-dim);margin-bottom:4px;">Category</label>
+              <label style="display:block;font-size:0.8rem;color:var(--text-dim);margin-bottom:4px;">Role</label>
               <select id="create-agent-category" style="width:100%;padding:8px 10px;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:5px;font-size:0.85rem;">
                 <option value="primary" title="Primary agents are the ones you talk to (team heads). Lead powers are a separate checkbox in agent settings.">⭐ Primary Agent</option>
                 <option value="specialist" selected>🔬 Domain Specialist</option>
@@ -9375,7 +9401,7 @@
 
       const groupActions = !isHubAdmin() ? '' : `<div style="display:flex;gap:6px;margin-bottom:10px;">
         <span class="group-action-btn" onclick="openCreateAgent(event)" title="Create new agent">+ New Agent</span>
-        <span class="group-action-btn" onclick="openCloneAgent(event)" title="Clone existing agent">Clone</span>
+        <span class="group-action-btn" onclick="openCloneAgent(event)" title="Clone existing agent">Clone an agent</span>
       </div>`;
 
       let html = groupActions + '<div id="agent-active-group" class="agent-group active-group" data-category="active" hidden></div>';
@@ -10809,7 +10835,7 @@
     function effortPickHtml(chat, chatId) {
       const show = effortSupported(chatModelOf(chat)) && !chat.autoModel;
       const opts = effortOptionsHtml(chat);
-      return `<select class="model-pick effort-pick" id="effort-pick-${chatId}" aria-label="Reasoning effort" title="${isHubAdmin() ? 'How hard this agent thinks before answering. Higher = slower and uses more of the plan or API budget. Applies from the next turn.' : 'Reasoning effort, set by an admin.'}"${isHubAdmin() ? '' : ' disabled'}${show ? '' : ' hidden'} onchange="changeChatEffort('${chatId}', this.value)">${opts}</select>`;
+      return `<select class="model-pick effort-pick" id="effort-pick-${chatId}" aria-label="Thinking effort" title="${isHubAdmin() ? 'How hard this agent thinks before answering. Higher = slower and uses more of the plan or API budget. Applies from the next turn.' : 'Thinking effort, set by an admin.'}"${isHubAdmin() ? '' : ' disabled'}${show ? '' : ' hidden'} onchange="changeChatEffort('${chatId}', this.value)">${opts}</select>`;
     }
     function refreshEffortPick(chat) {
       const sel = document.getElementById(`effort-pick-${chat.id}`); if (!sel) return;
@@ -11237,7 +11263,7 @@
     function soloViewPaint() {
       const all = chatViewGet(localStorage) === 'all';
       for (const b of document.querySelectorAll('.chat-view-btn')) {
-        b.textContent = all ? 'Agent work ✓' : 'Agent work';
+        b.textContent = all ? 'Show agent work ✓' : 'Show agent work';
         b.setAttribute('aria-pressed', all ? 'true' : 'false');
       }
     }
@@ -13701,9 +13727,9 @@
           <button type="button" class="notify-bell-btn" id="notify-bell-${chatId}" data-agent="${esc(chat.agent)}" onclick="notifyBellToggle('${chatId}')" aria-label="Notifications for this agent" title="Notifications for this agent" aria-haspopup="dialog" aria-expanded="false">${notifyBellIcon(notifyPrefsCache, chat.agent)}</button>
           <button onclick="newSession('${chatId}')" title="Clear agent memory and start fresh">🔄 New Session</button>
           <button onclick="clearChat('${chatId}')">🗑️ Clear</button>
-          <button onclick="saveChat('${chatId}')">💾 Save</button>
-          <button onclick="openRecallPanel('${chatId}')" id="recall-btn-${chatId}" title="Search this agent's whole history">🔎 Recall</button>
-          <button onclick="soloViewToggle()" id="view-btn-${chatId}" class="chat-view-btn" aria-pressed="false" title="Show the turns the hub started (consultations, scheduled tasks, job notices)">Agent work</button>
+          <button onclick="saveChat('${chatId}')">💾 Save chat</button>
+          <button onclick="openRecallPanel('${chatId}')" id="recall-btn-${chatId}" title="Search this agent's whole history">🔎 Search this chat</button>
+          <button onclick="soloViewToggle()" id="view-btn-${chatId}" class="chat-view-btn" aria-pressed="false" title="Show the turns the hub started (consultations, scheduled tasks, job notices)">Show agent work</button>
           <button onclick="pauseRequest('${chatId}')" id="pause-${chatId}" style="display:none;" title="Pause to provide input, then continue">⏸️ Pause</button>
           <button onclick="cancelRequest('${chatId}')" id="cancel-${chatId}" style="display:none;">⏹️ Cancel</button>
 
@@ -13774,7 +13800,7 @@
         <div class="chat-actions">
           <button onclick="resyncClick()" class="resync-btn" id="resync-btn-${chatId}" title="Re-sync with the hub" aria-label="Re-sync with the hub">↻</button>
           <button onclick="clearChat('${chatId}')">🗑️ Clear</button>
-          <button onclick="saveChat('${chatId}')">💾 Save</button>
+          <button onclick="saveChat('${chatId}')">💾 Save chat</button>
           <button onclick="cancelGroupRequest('${chatId}')" id="cancel-${chatId}" style="display:none;">⏹️ Stop</button>
           <button onclick="resetChat('${chatId}')" style="background:var(--warning); color:var(--on-light-text);">🔄 Reset</button>
 
@@ -20651,7 +20677,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       let h = `<div class="st-section" id="st-voice-section"><h4>Voice</h4><span class="st-search-words" hidden>voice microphone mic talk speak speech call dictation</span>
         <div class="st-hint">Free local voices run on this computer: what you say and what is read aloud never leaves it, and nothing is sent to the internet. Tap the microphone in a chat to start a hands-free call: talk, interrupt the agent any time by speaking, and say "stop" to stop it; tap the speaker on a reply to hear it.</div>`;
       // The switch is its own row; the Status row under it holds the sentence at full width, then the bar, Retry now and the raw error.
-      if (admin) h += row('Voice conversations', `<label style="flex:0 0 auto;display:flex;gap:6px;align-items:center;text-align:left;cursor:pointer;white-space:nowrap"><input type="checkbox" id="st-voice-enabled" onchange="voiceSettingEnable(this)"> On for everyone on this Maestro</label>`);
+      if (admin) h += row('Voice on or off for everyone', `<label style="flex:0 0 auto;display:flex;gap:6px;align-items:center;text-align:left;cursor:pointer;white-space:nowrap"><input type="checkbox" id="st-voice-enabled" onchange="voiceSettingEnable(this)"> On for everyone on this Maestro</label>`);
       h += row('Status', admin
         ? `<div id="st-voice-statusbox" style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:6px"><span id="st-voice-status" class="st-hint" style="margin:0;width:100%;white-space:normal;overflow-wrap:anywhere">Checking…</span><progress id="st-voice-progress" max="1" value="0" style="display:none"></progress><button type="button" id="st-voice-retry" class="btn-small" style="display:none" onclick="voiceRetryNow(this)">Retry now</button><span id="st-voice-raw" class="st-hint" style="display:none;margin:0;font-size:0.75rem;white-space:normal;overflow-wrap:anywhere"></span></div>`
         : `<span id="st-voice-status" class="st-hint" style="margin:0;flex:1;min-width:0;white-space:normal">Checking…</span>`);
@@ -20659,12 +20685,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       if (admin) {
         h += row('Default voice', `<select id="st-voice-default" onchange="voiceSettingDefaultVoice()" style="padding:4px"></select> <button class="st-test-btn" id="st-voice-sample" type="button" onclick="voicePlaySample()">Play sample</button><span id="st-voice-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span>`);
       }
-      h += `<div class="st-hint" style="margin-top:10px">On this device only:</div>`;
       h += row('Mic level', `<input type="range" min="0" max="100" step="1" id="st-voice-mic" value="${voiceMicLevelNow()}" oninput="voiceSettingMicInput(this)" onchange="voiceSettingsSavePrefs()" style="width:180px"> <span id="st-voice-mic-val" style="min-width:2.5em;display:inline-block">${voiceMicLevelNow()}</span> <span class="voice-meter"><i id="st-voice-meter"></i></span> <button class="st-test-btn" id="st-voice-testmic" type="button" onclick="voiceTestMic()">Test the mic</button>`);
       h += row('Talk mode', `<select id="st-voice-mode" onchange="voiceSettingsSavePrefs()" style="padding:4px"><option value="handsfree" ${p.mode !== 'tap' && p.mode !== 'press' ? 'selected' : ''}>Hands-free</option><option value="press" ${p.mode === 'press' ? 'selected' : ''}>Tap to talk</option><option value="tap" ${p.mode === 'tap' ? 'selected' : ''}>Dictation</option></select>`);
       h += `<div class="st-hint">Hands-free: tap the mic to start a call; it hears you whenever you speak. Tap to talk: a voice call where the agent answers aloud; tap the mic, speak, tap again to send (or hold it while you speak and let go). Dictation: tap the mic to turn what you say into text in the message box.</div>`;
-      h += row('Interrupt sensitivity', `<input type="range" min="0" max="100" step="1" id="st-voice-sens" value="${voiceSensNow()}" oninput="voiceSettingSensInput(this)" onchange="voiceSettingsSavePrefs('interruptSensitivity')" style="width:180px"> <span id="st-voice-sens-val" style="min-width:2.5em;display:inline-block">${voiceSensNow()}</span>`);
-      h += row('Pause before I\'m done', `${voicePauseSelectHtml('st-voice-pause', 'onchange="voiceSettingsSavePrefs(\'endPause\')"')} <span class="st-hint" style="margin:0 0 0 8px">How long a quiet moment ends your turn: short 0.8 s, normal 1.2 s, long 2 s, very long 4 s.</span>`);
+      h += row('How easily I can interrupt it', `<input type="range" min="0" max="100" step="1" id="st-voice-sens" value="${voiceSensNow()}" oninput="voiceSettingSensInput(this)" onchange="voiceSettingsSavePrefs('interruptSensitivity')" style="width:180px"> <span id="st-voice-sens-val" style="min-width:2.5em;display:inline-block">${voiceSensNow()}</span>`);
+      h += row('Pause before it answers', `${voicePauseSelectHtml('st-voice-pause', 'onchange="voiceSettingsSavePrefs(\'endPause\')"')} <span class="st-hint" style="margin:0 0 0 8px">How long a quiet moment ends your turn: short 0.8 s, normal 1.2 s, long 2 s, very long 4 s.</span>`);
       h += row('Read short extra parts aloud', `<select id="st-voice-details" onchange="voiceSettingsSavePrefs()" style="padding:4px">${VOICE_DETAILS_READ_WORDS.map(n => `<option value="${n}"${n === (p.detailsReadWords == null ? 40 : p.detailsReadWords) ? ' selected' : ''}>${n ? 'Up to ' + n + ' words' : 'Off'}</option>`).join('')}</select> <span class="st-hint" style="margin:0 0 0 8px">When a reply has only a little more than what is read on a call, read that too. Longer lists, tables and code stay in the chat.</span>`);
       h += row('When something comes in during a call', `<select id="st-voice-hubcue" onchange="voiceSettingsSavePrefs()" style="padding:4px">${[['off', 'Off'], ['chime', 'Chime'], ['cue', 'Short cue']].map(([v, l]) => `<option value="${v}"${v === (p.hubCue || 'cue') ? ' selected' : ''}>${l}</option>`).join('')}</select> <span class="st-hint" style="margin:0 0 0 8px">A scheduled task or another agent's request is never read out on a call. When one needs you: nothing, a soft chime, or the chime and “Something came in for you; it's in the chat.”</span>`);
       h += row('While I finish something in the background', `<select id="st-voice-bgcue" onchange="voiceSettingsSavePrefs()" style="padding:4px">${[['off', 'Off'], ['show', 'Show it'], ['say', 'Say it']].map(([v, l]) => `<option value="${v}"${v === (p.backgroundCue || 'say') ? ' selected' : ''}>${l}</option>`).join('')}</select> <span class="st-hint" style="margin:0 0 0 8px">When you speak while the agent is busy with something of its own, your words wait for your turn. Show it: “Working in the background” on the call; Say it: the agent also says so.</span>`);
@@ -21628,11 +21653,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         <label class="vcb-dnd"><input type="checkbox" id="${id('dnd')}" data-vcb="dnd"> Do not disturb</label>
         <label class="vcb-disp ucd-dup">Call display <select id="${id('display')}" data-vcb="display" aria-label="Call display"><option value="follow">Follow agent default</option></select></label>
         <button type="button" class="vcb-hang ucd-dup" data-vcb="hang" aria-label="Hang up">${VOICE_HANGUP_SVG}<span>Hang up</span></button></div>
-        <div class="vcb-focus-hint" id="${id('focushint')}" hidden>Music playing? Pause it for a clearer call</div>
+        <div class="vcb-focus-hint" id="${id('focushint')}" hidden>Pause music for a clearer call</div>
         <div class="vcb-sliders ucd-dup">
           <label>Mic level <input type="range" min="0" max="100" step="1" id="${id('mic')}" data-vcb="mic" value="${voiceMicLevelNow()}"> <span id="${id('mic-val')}">${voiceMicLevelNow()}</span></label>
-          <label>Interrupt sensitivity <input type="range" min="0" max="100" step="1" id="${id('sens')}" data-vcb="sens" value="${voiceSensNow()}"> <span id="${id('sens-val')}">${voiceSensNow()}</span></label>
-          <label>Pause before I'm done ${voicePauseSelectHtml(id('pause'), 'data-vcb="pause"')}</label>
+          <label>How easily I can interrupt it <input type="range" min="0" max="100" step="1" id="${id('sens')}" data-vcb="sens" value="${voiceSensNow()}"> <span id="${id('sens-val')}">${voiceSensNow()}</span></label>
+          <label>Pause before it answers ${voicePauseSelectHtml(id('pause'), 'data-vcb="pause"')}</label>
           <label>Voice speed <input type="range" min="0.75" max="1.5" step="0.05" id="${id('speed')}" data-vcb="speed" value="${voiceSpeedNow()}"> <span id="${id('speed-val')}">${voiceSpeedLabel(voiceSpeedNow())}</span> <small>${VOICE_SPEED_HINT}</small></label>
         </div>
         <div class="vcb-micline"><span class="vcb-micinfo" id="${id('micinfo')}"></span> <button type="button" class="st-test-btn vcb-retry" id="${id('retry')}" data-vcb="retry" hidden>Try the microphone again</button></div>
@@ -22082,11 +22107,11 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         <label class="vp-row"><span class="vp-label">Voice speed</span><input type="range" min="0.75" max="1.5" step="0.05" id="${id('speed')}" data-vp="speed" value="${voiceSpeedNow()}"> <span id="${id('speed-val')}">${voiceSpeedLabel(voiceSpeedNow())}</span></label>${voiceFollowLine(agent, 'voiceSpeed')}
         <label class="vp-row"><span class="vp-label">Voice loudness, speaker</span>${voiceLoudnessSelectHtml(id('loudness'), 'data-vp="loudness"', 'loudness')}</label>
         <label class="vp-row"><span class="vp-label">Voice loudness, Bluetooth / car</span>${voiceLoudnessSelectHtml(id('loudnessBt'), 'data-vp="loudnessBt"', 'loudnessBt')}</label>
-        <label class="vp-row"><span class="vp-label">Pause before I'm done</span>${voicePauseSelectHtml(id('pause'), 'data-vp="pause"')}</label>${voiceFollowLine(agent, 'endPause')}
-        <label class="vp-row"><span class="vp-label">Wait for me to go on</span><select id="${id('wait')}" data-vp="wait" style="padding:4px">${waits}</select></label>${voiceFollowLine(agent, 'continueWait')}
+        <label class="vp-row"><span class="vp-label">Pause before it answers</span>${voicePauseSelectHtml(id('pause'), 'data-vp="pause"')}</label>${voiceFollowLine(agent, 'endPause')}
+        <label class="vp-row"><span class="vp-label">Wait when I pause to think</span><select id="${id('wait')}" data-vp="wait" style="padding:4px">${waits}</select></label>${voiceFollowLine(agent, 'continueWait')}
         <label class="vp-row"><span class="vp-label">Mic level</span><input type="range" min="0" max="100" step="1" id="${id('mic')}" data-vp="mic" value="${voiceMicLevelNow()}"> <span id="${id('mic-val')}">${voiceMicLevelNow()}</span></label>
         <div class="vp-row"><span class="vp-label">Level now</span><span class="voice-meter" aria-hidden="true"><i id="${id('level')}"></i></span></div>
-        <label class="vp-row"><span class="vp-label">Interrupt sensitivity</span><input type="range" min="0" max="100" step="1" id="${id('sens')}" data-vp="sens" value="${voiceSensNow()}"> <span id="${id('sens-val')}">${voiceSensNow()}</span></label>${voiceFollowLine(agent, 'interruptSensitivity')}
+        <label class="vp-row"><span class="vp-label">How easily I can interrupt it</span><input type="range" min="0" max="100" step="1" id="${id('sens')}" data-vp="sens" value="${voiceSensNow()}"> <span id="${id('sens-val')}">${voiceSensNow()}</span></label>${voiceFollowLine(agent, 'interruptSensitivity')}
         <label class="vp-row"><span class="vp-label">Thinking sound</span><input type="checkbox" id="${id('think')}" data-vp="think"${voiceThinkingOnNow() ? ' checked' : ''}></label>
         <label class="vp-row ucd-dup"><span class="vp-label">Call display</span><select id="${id('display')}" data-vp="display" style="padding:4px"><option value="follow">Follow agent default</option></select></label>
         <div class="vp-display-note" id="${id('display-note')}" aria-live="polite"></div>
@@ -26952,7 +26977,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
         </div>
         <div class="chat-actions">
           <button onclick="clearChat('${chatId}')">🗑️ Clear</button>
-          <button onclick="saveChat('${chatId}')">💾 Save</button>
+          <button onclick="saveChat('${chatId}')">💾 Save chat</button>
           <span style="margin-left:auto; color: var(--purple);">🎯 Led Mode</span>
         </div>
         <div class="group-header">
@@ -27134,7 +27159,7 @@ Your next move:`;
             const a = AGENTS.find(ag => ag.name === i.agent);
             return a?.display || i.agent;
           });
-          addOrchMessage(chatId, 'system', 'System', `📋 Dispatching ${instructions.length} worker(s): ${workerNames.join(', ')}`);
+          addOrchMessage(chatId, 'system', 'System', `📋 Dispatching ${plural(instructions.length, 'worker', 'workers')}: ${workerNames.join(', ')}`);
           
           // Execute each worker sequentially with turn separators
           for (let wi = 0; wi < instructions.length; wi++) {

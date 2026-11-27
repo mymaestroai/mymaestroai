@@ -93,7 +93,10 @@ function setup(over = {}) {
   const win = { innerWidth: 1200, location: { pathname: '/', hash: '', search: '' }, addEventListener() {}, removeEventListener() {} };
   const confirms = [];
   win.confirm = (q) => { confirms.push(q); return over.confirm !== false; };
-  const state = { agents: agentsFix(), notify: over.notify || { default: { questions: 'on', requested: 'on', other: 'on', security: 'on' }, agents: {} }, fail: {}, models: over.models || MODELS };
+  const sources = [];   // every sound the fake speakers were given: { started, stopped }
+  if (!over.noAudio) win.AudioContext = class { constructor() { this.state = 'running'; this.destination = {}; } async resume() { this.state = 'running'; } async decodeAudioData(b) { if (over.decodeGate) await over.decodeGate(); return { bytes: b.byteLength }; }
+    createBufferSource() { const s = { started: false, stopped: false, buffer: null, onended: null, connect() {}, start() { s.started = true; }, stop() { s.stopped = true; } }; sources.push(s); return s; } };
+  const state = { ttsFail: over.ttsFail, ttsHeaders: over.ttsHeaders || {}, agents: agentsFix(), notify: over.notify || { default: { questions: 'on', requested: 'on', other: 'on', security: 'on' }, agents: {} }, fail: {}, models: over.models || MODELS };
   if (over.tweak) over.tweak(state.agents);
   const calls = [];
   const fetch = async (url, init = {}) => {
@@ -107,6 +110,11 @@ function setup(over = {}) {
     if (url === '/api/models' && state.modelGate) await state.modelGate;   // a test holds the model list back
     if (url === '/api/models') return resp(200, { models: state.models, billing: {}, health: { 'ninfer/qwen3': { state: 'warn', short: 'slow lately' } } });
     if (url === '/api/faces') return resp(200, { packs: [{ id: 'fox', name: 'Fox' }], available: [{ id: 'owl', name: 'Owl', size: 4000000 }] });
+    if (url === '/api/voice/tts' && method === 'POST') {
+      if (over.ttsGate) await over.ttsGate();   // a test holds the sample back
+      if (state.ttsFail) return { ok: false, status: state.ttsFail.status || 500, headers: { get: () => null }, json: async () => (state.ttsFail.error ? { error: state.ttsFail.error } : Promise.reject(new Error('no body'))) };
+      return { ok: true, status: 200, headers: { get: (k) => state.ttsHeaders[k] || null }, arrayBuffer: async () => new ArrayBuffer(16), json: async () => ({}) };
+    }
     if (url === '/api/voice/status') return resp(200, { enabled: true, voices: [{ id: 'amber', label: 'Amber' }] });
     if (url === '/api/users') return resp(200, { users: [{ id: 'u1', name: 'Owner', login: 'owner' }, { id: 'u2', name: 'Sam', login: 'sam' }, { id: 'u3', name: 'Hazel', login: 'hazel' }] });
     if (url === '/api/openrouter') return resp(200, { models: [] });
@@ -158,7 +166,7 @@ function setup(over = {}) {
     doc, win, fetch, records: () => over.records || RECORDS, me: () => ('me' in over ? over.me : ADMIN), agentsList: () => stale, subscribe: () => () => {},
     help: null, setTimeout: () => {}, phone: false, simple: !!over.simple, requestMs: over.requestMs,
   });
-  return { card, doc, win, state, calls, confirms };
+  return { card, doc, win, state, calls, confirms, sources };
 }
 const opened = async (over, where) => { B.reset(); const t = setup(over); await t.card.open('harbor', where || {}); await flush(); return t; };
 const writes = (t) => t.calls.filter((c) => c.method !== 'GET');
@@ -442,6 +450,95 @@ test('Voice: "Its own voice" opens the voice options under More; each saves PATC
   const row = rowOf(t.card.el(), 'OPT-0023');
   assert.strictEqual(all(row, 'select')[0].value, 'own');
   assert.ok(all(row, '.ac-reset').length === 1, 'Use default again is offered');
+});
+
+const sampleBtn = (t) => all(rowOf(t.card.el(), 'OPT-0023'), 'button').find((b) => /^(Play sample|Stop)$/.test(b.textContent));
+const ttsCalls = (t) => t.calls.filter((c) => c.url === '/api/voice/tts');
+
+test('Voice: Play sample posts the sample text for this agent and its chosen local voice, plays what comes back and says which engine answered', async () => {
+  const t = await opened({ tweak: (l) => { l[1].voice = { voice: 'amber', stt: 'local', tts: 'local' }; }, ttsHeaders: { 'X-Voice-Engine': 'local' } });
+  assert.strictEqual(sampleBtn(t).textContent, 'Play sample');
+  sampleBtn(t).click();
+  await flush();
+  assert.deepStrictEqual(ttsCalls(t).map((c) => [c.method, c.body]), [['POST', { agent: 'harbor', text: 'This is the voice I will use to read replies to you.', voice: 'amber' }]]);
+  assert.strictEqual(t.sources.length, 1);
+  assert.ok(t.sources[0].started, 'it plays');
+  assert.strictEqual(sampleBtn(t).textContent, 'Stop');
+  assert.match(rowOf(t.card.el(), 'OPT-0023').textContent, /Played with the Local \(free\) engine\./);
+  assert.strictEqual(writes(t).filter((c) => c.url !== '/api/voice/tts').length, 0, 'playing saves nothing');
+  // a second press stops it, and the button is Play sample again
+  sampleBtn(t).click();
+  await flush();
+  assert.ok(t.sources[0].stopped);
+  assert.strictEqual(sampleBtn(t).textContent, 'Play sample');
+  assert.strictEqual(ttsCalls(t).length, 1, 'stopping asks the hub for nothing');
+  // when it ends by itself the button is back
+  sampleBtn(t).click(); await flush();
+  t.sources[1].onended(); await flush();
+  assert.strictEqual(sampleBtn(t).textContent, 'Play sample');
+});
+
+test('Voice: with no voice chosen the sample is asked for the agent only; a cloud engine that failed is said, and so is any other failure', async () => {
+  const t = await opened({ ttsHeaders: { 'X-Voice-Engine': 'local', 'X-Voice-Fallback': 'quota exceeded' } });
+  sampleBtn(t).click(); await flush();
+  assert.deepStrictEqual(ttsCalls(t)[0].body, { agent: 'harbor', text: 'This is the voice I will use to read replies to you.' }, 'no voice key for the hub default');
+  assert.match(rowOf(t.card.el(), 'OPT-0023').textContent, /Played with the Local \(free\) engine: the cloud engine failed \(quota exceeded\), so the free local engine answered\./);
+  const t2 = await opened({ ttsFail: { status: 409, error: 'voice_off' } });
+  sampleBtn(t2).click(); await flush();
+  assert.match(rowOf(t2.card.el(), 'OPT-0023').textContent, /Could not play the sample: voice_off/);
+  assert.strictEqual(t2.sources.length, 0);
+  assert.strictEqual(sampleBtn(t2).textContent, 'Play sample');
+  assert.ok(!sampleBtn(t2).getAttribute('disabled'), 'the button is usable again');
+  const t3 = await opened({ ttsFail: { status: 502 } });
+  sampleBtn(t3).click(); await flush();
+  assert.match(rowOf(t3.card.el(), 'OPT-0023').textContent, /Could not play the sample: HTTP 502/);
+  const t4 = await opened({ noAudio: true });
+  sampleBtn(t4).click(); await flush();
+  assert.match(rowOf(t4.card.el(), 'OPT-0023').textContent, /Could not play the sample: /);
+});
+
+test('Voice: the sample stops when the card closes, and the select still works beside it', async () => {
+  const t = await opened();
+  sampleBtn(t).click(); await flush();
+  assert.ok(t.sources[0].started && !t.sources[0].stopped);
+  t.card.close();
+  assert.ok(t.sources[0].stopped, 'closing the card stops the sound');
+  const t2 = await opened();
+  await pick(all(rowOf(t2.card.el(), 'OPT-0023'), 'select')[0], 'own');
+  assert.strictEqual(all(rowOf(t2.card.el(), 'OPT-0023'), 'select')[0].value, 'own');
+  assert.ok(sampleBtn(t2), 'the button is still there after a redraw');
+});
+
+test('Voice r1: closing the card while the sample is still being fetched or decoded plays nothing; an old attempt does not unlock a newer one', async () => {
+  // held in the request
+  let release; const gate = new Promise((r) => { release = r; });
+  const t = await opened({ ttsGate: () => gate });
+  sampleBtn(t).click(); await flush();
+  t.card.close();
+  release(); await flush(); await flush();
+  assert.strictEqual(t.sources.filter((s) => s.started).length, 0, 'no sound after the card closed (request)');
+  // held in decodeAudioData
+  let release2; const gate2 = new Promise((r) => { release2 = r; });
+  const t2 = await opened({ decodeGate: () => gate2 });
+  sampleBtn(t2).click(); await flush();
+  t2.card.close();
+  release2(); await flush(); await flush();
+  assert.strictEqual(t2.sources.filter((s) => s.started).length, 0, 'no sound after the card closed (decode)');
+  // close, reopen, press again: the old attempt finishing late leaves the newer one busy and silent
+  const gates = []; let n = 0;
+  const t3 = await opened({ ttsGate: () => { const g = new Promise((r) => gates.push(r)); n++; return g; } });
+  sampleBtn(t3).click(); await flush();
+  t3.card.close();
+  await t3.card.open('harbor', {}); await flush();
+  sampleBtn(t3).click(); await flush();
+  assert.strictEqual(n, 2, 'two requests');
+  assert.ok(sampleBtn(t3).disabled, 'the newer attempt is busy');
+  gates[0](); await flush(); await flush();
+  assert.ok(sampleBtn(t3).disabled, 'the old attempt did not unlock the newer one');
+  assert.strictEqual(t3.sources.filter((s) => s.started).length, 0, 'and did not start');
+  gates[1](); await flush(); await flush();
+  assert.strictEqual(t3.sources.filter((s) => s.started).length, 1, 'the newer attempt plays');
+  assert.strictEqual(sampleBtn(t3).textContent, 'Stop');
 });
 
 test('Voice: back to "Same as all agents" clears the voice (PATCH {voice:null}); an agent with a stored voice shows as its own', async () => {

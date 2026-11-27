@@ -192,7 +192,7 @@ test('track gets isAdmin, stopJob and stopWorker; stopJob posts /api/jobs/cancel
 });
 
 test('the phone service worker is v79 and the panel has its CSS', () => {
-  assert.match(fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8'), /const VERSION = 'hub-mobile-v109'/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8'), /const VERSION = 'hub-mobile-v112'/);
   for (const c of ['.wo-ring', '.wo-row', '.wo-kind', '.wo-title', '.wo-sub', '.wo-quiet', '.wo-stop']) assert.ok(html.includes(c), c);
   assert.match(html, /\.wo-quiet \{[^}]*dashed/);
 });

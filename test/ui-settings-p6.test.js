@@ -17,7 +17,7 @@ test('the New agent section is first in Agents and teams and drawn for admins on
   assert.match(app.slice(Math.max(0, at - 120), at), /if \(isHubAdmin\(\)\) \{\s*html \+= `<div class="st-section" $/, 'inside an isHubAdmin() gate');
   const sec = app.slice(at, app.indexOf('</div>`;', at));
   assert.match(sec, /<h4>New agent<\/h4>/);
-  assert.match(sec, /<label[^>]*>New agent<\/label>/);
+  assert.doesNotMatch(sec, /<label[^>]*>New agent<\/label>/, 'one heading, one button: no third "New agent" title (p7 design fix)');
   assert.match(sec, /id="st-new-agent-btn"[^>]*onclick="openCreateAgent\(null\)">Make a new agent…<\/button>/);
   assert.ok(sec.includes('Give it a name and describe its role; your Maestro sets it up. You can also ask your lead to make one for you.'));
 });

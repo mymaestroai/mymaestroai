@@ -229,7 +229,7 @@ test('warnings: 75 then 90 once each, never repeated, again after the window res
   assert.strictEqual(notified[0].url, '/mobile');
   assert.strictEqual(notified[0].tag, 'plan-chatgpt-codex');
   assert.ok(notified[0].body.includes(`Resets <${RESET_ISO}>.`));
-  assert.ok(notified[0].body.includes('1 agent(s) run on ChatGPT (Codex).'));
+  assert.ok(notified[0].body.includes('1 agent runs on ChatGPT (Codex).'));
   const ev = published.filter(p => p.type === 'plan_warning');
   assert.deepStrictEqual(ev[0].data, { provider: 'chatgpt', window: 'chatgpt:codex', label: 'ChatGPT', family: null, utilization: 76, level: 75, resetsAt: RESET_ISO, agents: ['cx'], autoSwitch: false });
   u.noteSnapshot(weekly(80));

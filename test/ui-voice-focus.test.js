@@ -123,7 +123,7 @@ test('phone: the focus is created and started in the tap before any await, stopp
   const t = js.indexOf('function voiceCallTeardown(vc)'), tb = js.slice(t, js.indexOf('\n}\n', t));
   assert.ok(/if \(vc\.focus\) \{ try \{ vc\.focus\.stop\(\); \} catch \{\} \}/.test(tb)); assert.ok(tb.includes('voiceFocusHint(false)'));
   assert.ok(/function voiceFocusHint\(show\)/.test(js));
-  assert.ok(html.includes('<p id="cp-focus-hint" class="cp-focus-hint" role="status" hidden>Music playing? Pause it for a clearer call</p>'));
+  assert.ok(html.includes('<p id="cp-focus-hint" class="cp-focus-hint" role="status" hidden>Pause music for a clearer call</p>'));
   assert.ok(html.indexOf('class="cp-top"') < html.indexOf('id="cp-focus-hint"'));
 });
 
@@ -136,7 +136,7 @@ test('desktop: started before the first await, stopped in the teardown, hint onl
   assert.ok(/!ok && S\.focus === focus/.test(body), 'hint only on refusal');
   const t = app.indexOf('function voiceCallTeardown()'), tb = app.slice(t, app.indexOf('\n    }\n', t));
   assert.ok(tb.includes('focus = S.focus') && tb.includes('S.focus = null') && tb.includes('focus.stop()'));
-  assert.ok(app.includes('<div class="vcb-focus-hint" id="${id(\'focushint\')}" hidden>Music playing? Pause it for a clearer call</div>'));
+  assert.ok(app.includes('<div class="vcb-focus-hint" id="${id(\'focushint\')}" hidden>Pause music for a clearer call</div>'));
   assert.ok(html.includes('.voice-callbar .vcb-focus-hint'));
 });
 

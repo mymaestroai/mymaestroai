@@ -65,7 +65,7 @@ test('settings: Talk mode, Interrupt sensitivity, Room check; the phase-1 hint i
 test('call bar: help line, switch, sliders, buttons and the dark-theme CSS', () => {
   const w = wiring();
   assert.ok(w.includes("Hands-free works with the page open and the screen on, also through a car\\'s Bluetooth hands-free or a Bluetooth speaker. Locked-screen use and car apps (CarPlay, Android Auto) are not supported."));
-  for (const s of ['Do not disturb', 'Mic level', 'Interrupt sensitivity', 'Hang up', "'Now'", "'Later'", "'Skip'", 'Hearing you', 'Listening', 'Thinking', 'Speaking', 'Starting']) assert.ok(w.includes(s), s);
+  for (const s of ['Do not disturb', 'Mic level', 'How easily I can interrupt it', 'Hang up', "'Now'", "'Later'", "'Skip'", 'Hearing you', 'Listening', 'Thinking', 'Speaking', 'Starting']) assert.ok(w.includes(s), s);
   assert.match(w, /area\.parentNode\.insertBefore\(bar, area\)/, 'above the message box');
   assert.match(w, /voiceCallS\.call\.setMode\(t\.checked \? 'dnd' : 'announce'\)/);
   assert.match(w, /voiceCallS\.call\.decide\(t\.dataset\.id, t\.dataset\.choice\)/);

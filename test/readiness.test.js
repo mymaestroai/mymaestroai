@@ -42,7 +42,7 @@ test('a Mac with a member and no Docker: critical, with the consequence spelled 
   }).check();
   const d = byId(r, 'docker');
   assert.strictEqual(d.level, 'critical');
-  assert.match(d.title, /Docker is missing and 1 agent\(s\) need a sandbox/);
+  assert.match(d.title, /Docker is missing and 1 agent needs a sandbox/);
   assert.match(d.detail, /get NO shell or file tools/);
   assert.strictEqual(byId(r, 'tools-default').level, 'warn');
   assert.match(byId(r, 'tools-default').fix, /set to hub/);
@@ -107,7 +107,7 @@ test('agents on ChatGPT with Codex signed out: critical, with the command that f
   const agents = async () => [{ name: 'maestro', model: 'codex-cli/gpt-x' }];
   const out = await createReadiness({ ...base, agents, hasCodexSignIn: async () => false }).check();
   assert.strictEqual(byId(out, 'chatgpt-signin').level, 'critical');
-  assert.match(byId(out, 'chatgpt-signin').title, /1 agent\(s\) use ChatGPT through Codex/);
+  assert.match(byId(out, 'chatgpt-signin').title, /1 agent uses ChatGPT through Codex/);
   assert.match(JSON.stringify(byId(out, 'chatgpt-signin')), /mymaestro connect chatgpt/);
   assert.strictEqual(byId(await createReadiness({ ...base, agents, hasCodexSignIn: async () => true }).check(), 'chatgpt-signin'), undefined);
   assert.strictEqual(byId(await createReadiness({ ...base, agents: async () => [{ name: 'a', model: 'claude-sdk/x' }], hasCodexSignIn: () => false }).check(), 'chatgpt-signin'), undefined);
@@ -120,7 +120,7 @@ test('agents on ChatGPT with Codex itself missing (a Node.js update took it): cr
   const out = await createReadiness({ ...base, agents, hasCodexBinary: () => false, hasCodexSignIn: async () => { asked++; return false; } }).check();
   const item = byId(out, 'chatgpt-signin');
   assert.strictEqual(item.level, 'critical');
-  assert.match(item.title, /2 agent\(s\) use ChatGPT through Codex but Codex is not installed/);
+  assert.match(item.title, /2 agents use ChatGPT through Codex but Codex is not installed/);
   assert.match(JSON.stringify(item), /mymaestro connect chatgpt/);
   assert.strictEqual(asked, 0, 'the sign-in is not asked of a program that is not there');
   assert.strictEqual(byId(await createReadiness({ ...base, agents: async () => [{ name: 'a', model: 'claude-sdk/x' }], hasCodexBinary: () => false }).check(), 'chatgpt-signin'), undefined, 'no ChatGPT agents: quiet');
@@ -156,7 +156,7 @@ test('admin two-factor optional: the totp warning becomes an info item; required
   for (const v of [undefined, true, 'false', null]) {
     const r = await mk([off], v);
     assert.strictEqual(byId(r, 'totp').level, 'warn');
-    assert.strictEqual(byId(r, 'totp').title, '1 admin account(s) without two-factor');
+    assert.strictEqual(byId(r, 'totp').title, '1 admin account without two-factor');
     assert.strictEqual(byId(r, 'admin-2fa-optional'), undefined);
   }
 });

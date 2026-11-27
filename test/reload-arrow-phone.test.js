@@ -83,7 +83,7 @@ test('arrow: a photo attached during the wait is asked about at the final check;
   t.ctx.pendingImages.push({ name: 'p.jpg' });   // attached during the wait
   t.release();
   await settle();
-  assert.deepStrictEqual(t.asked, ['Reload and remove the attached photo(s)? The text stays.'], 'asked once, at the final check');
+  assert.deepStrictEqual(t.asked, ['Reload and remove the attached photo? The text stays.'], 'asked once, at the final check');
   assert.deepStrictEqual(t.reloads, [], 'Cancel: no reload');
   assert.strictEqual(t.ctx.pendingImages.length, 1, 'the photo is still there');
   assert.strictEqual(t.session.m.size, 0, 'nothing stashed');

@@ -456,7 +456,7 @@ test('gateway: a model without vision gets the text with a line about the pictur
   const m = gwSeen[1].filter(x => x.role === 'user').pop();
   assert.strictEqual(typeof m.content, 'string', 'plain text: no picture parts for a model that cannot see');
   assert.match(m.content, /^\[OPERATOR INTERJECTION\]: hurry\n\(The operator attached 2 pictures that this model cannot see\.\)$/);
-  assert.match(res.written.join(''), /2 image\(s\) removed — model `[^`]*perplexity\/sonar[^`]*` does not support vision/);
+  assert.match(res.written.join(''), /2 images removed — model `[^`]*perplexity\/sonar[^`]*` does not support vision/);
 });
 
 // ── F3: data URLs only on the interjection route; no files left behind; the gateway carries a late one ─────────

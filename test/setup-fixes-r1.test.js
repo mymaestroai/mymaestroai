@@ -33,10 +33,12 @@ async function press(w, answers) {
   await new Promise((res) => setImmediate(res));
   return { asked, reloads };
 }
-test('↻ with attached photos asks "Reload and remove the attached photo(s)? The text stays." and Cancel does not reload', async () => {
+test('↻ with an attached photo asks "Reload and remove the attached photo? The text stays." and Cancel does not reload', async () => {
   const w = reloadWorld({ images: ['data:image/jpeg;base64,x'] });
   const r = await press(w, [false]);
-  assert.deepStrictEqual(r.asked, ['Reload and remove the attached photo(s)? The text stays.']);
+  assert.deepStrictEqual(r.asked, ['Reload and remove the attached photo? The text stays.']);
+  const two = await press(reloadWorld({ images: ['x', 'y'] }), [false]);
+  assert.deepStrictEqual(two.asked, ['Reload and remove the attached photos? The text stays.']);
   assert.strictEqual(r.reloads, 0);
   const ok = await press(reloadWorld({ images: ['x'] }), [true]);
   assert.strictEqual(ok.reloads, 1);

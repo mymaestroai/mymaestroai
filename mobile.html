@@ -319,7 +319,16 @@
     #review-banner.mm-rvb-enter { animation: mm-rvb-enter .22s ease-out; }
     @media (prefers-reduced-motion: reduce) { #review-banner.mm-rvb-enter { animation: none; } }
     #review-banner a { color: var(--on-accent); text-decoration: underline; }
-    #review-banner button.rvb-fix { margin-left: 4px; padding: 2px 10px; border-radius: 4px; border: 1px solid var(--on-health-notice); background: transparent; color: var(--on-health-notice); font: inherit; cursor: pointer; }
+    #review-banner button.rvb-fix, #review-banner a.rvb-fix { margin-left: 4px; padding: 2px 10px; border-radius: 4px; border: 1px solid var(--on-health-notice); background: transparent; color: var(--on-health-notice); font: inherit; cursor: pointer; }
+    /* the fix as a link (e.g. Open the Welcome page) is a button like the desktop's, never a second run of underlined text */
+    #review-banner a.rvb-fix { display: inline-block; text-decoration: none; max-width: 100%; box-sizing: border-box; white-space: normal; margin-top: 4px; }
+    #review-banner a.rvb-open { white-space: nowrap; }   /* "Open For your review" never splits across two lines */
+    /* thumb-sized tap areas (40 px tall), each within its own control's width; the outline keeps its size. The link's area reaches up
+       from its text and the fix's down from its outline, so when the fix drops below the link (narrow phones) neither covers the other. */
+    #review-banner a.rvb-open, #review-banner .rvb-fix { position: relative; }
+    #review-banner a.rvb-open::after, #review-banner .rvb-fix::after { content: ''; position: absolute; left: 0; right: 0; height: 40px; }
+    #review-banner a.rvb-open::after { bottom: -3px; }
+    #review-banner .rvb-fix::after { top: -3px; }
     .pacing-bar { display: none; width: 100%; flex-shrink: 0; padding: 4px 12px; background: var(--pacing-bar-bg); color: var(--on-pacing); font-size: 12px; font-weight: 600; text-align: left; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     #pacing-text { white-space: pre-line; }
     .pacing-bar.on { display: block; }
@@ -1656,13 +1665,13 @@ html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, htm
     <!-- The model, effort, plan usage and context size get their own thin row, which wraps rather than cutting anything
          off: the model stays in view busy or idle (the bell and Stop buttons leave the name a 46 px column on a 360 px
          phone). Under the name, only what the agent is doing right now, while it works; a tap tells it in full. -->
-    <div id="chat-meta"><span class="sub-wrap"><span class="sub" id="chat-model"></span><select id="chat-model-pick" aria-label="Change this agent's model" hidden></select></span><span class="sub-wrap effort-wrap" id="chat-effort-wrap" hidden><span class="sub" id="chat-effort"></span><select id="chat-effort-pick" aria-label="Reasoning effort"></select></span><button type="button" class="sub" id="chat-plan" hidden></button><span class="sub" id="chat-ctx" hidden></span><button type="button" class="wk-chip" id="chat-workers-btn" aria-haspopup="dialog" title="Workers: what is working now, and the history of past workers" hidden><span class="wb-dot" aria-hidden="true"></span><span class="wb-label"><span class="wb-noun">Workers</span><span class="wb-counts"></span></span></button></div>
+    <div id="chat-meta"><span class="sub-wrap"><span class="sub" id="chat-model"></span><select id="chat-model-pick" aria-label="Change this agent's model" hidden></select></span><span class="sub-wrap effort-wrap" id="chat-effort-wrap" hidden><span class="sub" id="chat-effort"></span><select id="chat-effort-pick" aria-label="Thinking effort"></select></span><button type="button" class="sub" id="chat-plan" hidden></button><span class="sub" id="chat-ctx" hidden></span><button type="button" class="wk-chip" id="chat-workers-btn" aria-haspopup="dialog" title="Workers: what is working now, and the history of past workers" hidden><span class="wb-dot" aria-hidden="true"></span><span class="wb-label"><span class="wb-noun">Workers</span><span class="wb-counts"></span></span></button></div>
     <button class="pacing-bar" title="Tap to resume full parallel"></button>
     <div class="scroll" id="chat-scroll"><div id="messages"></div></div>
     <div id="call-ended-bar" role="status" hidden><span class="ceb-text">The call ended when you left the app</span><button type="button" id="call-again" class="ceb-again">Call again</button><button type="button" id="call-ended-x" class="ceb-x" aria-label="Dismiss">&#x2715;</button></div>
     <div id="call-panel" role="region" aria-label="Voice call" hidden>
       <div class="cp-top ucd-dup"><span id="cp-state" role="status" aria-live="polite">Starting</span><div id="cp-meter" aria-hidden="true"><i></i></div></div>
-      <p id="cp-focus-hint" class="cp-focus-hint" role="status" hidden>Music playing? Pause it for a clearer call</p>
+      <p id="cp-focus-hint" class="cp-focus-hint" role="status" hidden>Pause music for a clearer call</p>
       <div id="cp-activity" aria-live="off"></div>
       <div id="cp-heard" aria-live="off"></div>
       <div id="cp-mic"></div>
@@ -1697,7 +1706,7 @@ html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, htm
         <select id="vp-loudness" class="vs-btn"><option value="normal">Normal</option><option value="louder">Louder</option><option value="loudest">Loudest</option></select>
         <label class="vp-row" for="vp-loudness-bt"><span>Voice loudness, Bluetooth / car</span></label>
         <select id="vp-loudness-bt" class="vs-btn"><option value="normal">Normal</option><option value="louder">Louder</option><option value="loudest">Loudest</option></select>
-        <label class="vp-row" for="vp-pause"><span>Pause before I&#39;m done</span></label>
+        <label class="vp-row" for="vp-pause"><span>Pause before it answers</span></label>
         <select id="vp-pause" class="vs-btn"></select>
         <div class="vp-display-note vp-follow" id="vp-follow-endPause" hidden></div>
         <label class="vp-row" for="vp-details"><span>Read short extra parts aloud</span></label>
@@ -1706,13 +1715,13 @@ html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, htm
         <select id="vp-hubcue" class="vs-btn"><option value="off">Off</option><option value="chime">Chime</option><option value="cue">Short cue</option></select>
         <label class="vp-row" for="vp-bgcue"><span>While I finish something in the background</span></label>
         <select id="vp-bgcue" class="vs-btn"><option value="off">Off</option><option value="show">Show it</option><option value="say">Say it</option></select>
-        <label class="vp-row" for="vp-wait"><span>Wait for me to go on</span></label>
+        <label class="vp-row" for="vp-wait"><span>Wait when I pause to think</span></label>
         <select id="vp-wait" class="vs-btn"></select>
         <div class="vp-display-note vp-follow" id="vp-follow-continueWait" hidden></div>
         <label class="vp-row" for="vp-level"><span>Mic level</span><b class="vp-level-val"></b></label>
         <input type="range" id="vp-level" class="vs-level" min="0" max="100" step="1">
         <div id="vp-meter" class="vs-meter vp-room-meter" aria-hidden="true"><i></i></div>
-        <label class="vp-row" for="vp-sens"><span>Interrupt sensitivity</span><b class="vp-sens-val"></b></label>
+        <label class="vp-row" for="vp-sens"><span>How easily I can interrupt it</span><b class="vp-sens-val"></b></label>
         <input type="range" id="vp-sens" class="vs-level" min="0" max="100" step="1">
         <div class="vp-display-note vp-follow" id="vp-follow-interruptSensitivity" hidden></div>
         <label class="vp-row ucd-dup" for="vp-display"><span>Call display</span></label>
@@ -1788,7 +1797,7 @@ html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, htm
     <!-- This device: how this phone shows things and what it does; what you set for the hub is in Settings (admins) -->
     <div class="menu-group" data-group="device" role="group" aria-labelledby="menu-gt-device">
       <div class="menu-group-title" id="menu-gt-device">This device</div>
-      <button id="menu-look" aria-expanded="false" aria-controls="menu-look-pick" hidden><span>&#x1F3A8; Interface style</span><span id="menu-look-name" class="menu-version" aria-hidden="true"></span></button>
+      <button id="menu-look" aria-expanded="false" aria-controls="menu-look-pick" hidden><span>&#x1F3A8; Look of the interface</span><span id="menu-look-name" class="menu-version" aria-hidden="true"></span></button>
       <div id="menu-look-pick" hidden></div>
       <button id="menu-notify">&#x1F514; Notifications</button>
       <button id="menu-notify-test" hidden>&#x1F4E8; Send a test notification</button>
@@ -1801,7 +1810,7 @@ html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, htm
     <div class="menu-group" data-group="chat" role="group" aria-labelledby="menu-gt-chat">
       <div class="menu-group-title" id="menu-gt-chat">This chat</div>
       <button id="menu-agentwork" class="chat-only">&#x1F9F0; Show agent work</button>
-      <button id="menu-recall" class="chat-only">&#x1F50E; Recall</button>
+      <button id="menu-recall" class="chat-only">&#x1F50E; Search this chat</button>
       <button id="menu-copy" class="chat-only">&#x29C9; Copy whole chat</button>
       <button id="menu-compact" class="chat-only">&#x2699; Compress now</button>
       <button id="menu-clear" class="danger chat-only">Clear chat / new session</button>

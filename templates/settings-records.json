@@ -1,5 +1,5 @@
 {
-  "version": "c64a05ef85559ef605d1936fe2eabad17743b697",
+  "version": "8262b4c6af0c3a90e7806fca8151d95f4ada5d2c",
   "records": [
     {
       "id": "OPT-0001",
@@ -899,7 +899,7 @@
     {
       "id": "OPT-0030",
       "kind": "setting",
-      "name": "Wait if I pause",
+      "name": "Wait when I pause to think",
       "labels": [
         "Wait for me to go on"
       ],
@@ -928,7 +928,7 @@
     {
       "id": "OPT-0031",
       "kind": "setting",
-      "name": "How easily it is interrupted",
+      "name": "How easily I can interrupt it",
       "labels": [
         "Interrupt sensitivity"
       ],
@@ -6974,7 +6974,7 @@
     {
       "id": "OPT-0227",
       "kind": "setting",
-      "name": "Voice for everyone",
+      "name": "Voice on or off for everyone",
       "labels": [
         "Voice conversations: On for everyone on this Maestro",
         "Voice conversations",
@@ -12891,7 +12891,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "Claude subscription"
+          "selector": "[data-setting=\"OPT-0412\"]"
         }
       ],
       "facts": "DEFAULT_CAPS 'claude-sdk': 6 lib/provider-pacing.js:15; 1 to 32 lib/provider-pacing.js:21-22, 33; applied on save, no restart server.js:3133, lib/sdk-chat.js:78-79; slows itself down after failures lib/provider-pacing.js:4-8."
@@ -12927,7 +12927,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "ChatGPT subscription"
+          "selector": "[data-setting=\"OPT-0413\"]"
         }
       ],
       "facts": "DEFAULT_CAPS 'codex-cli': 2 lib/provider-pacing.js:15-16; 1..32 lib/provider-pacing.js:21-22; applied on save server.js:3133."
@@ -12963,7 +12963,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "Anthropic API"
+          "selector": "[data-setting=\"OPT-0414\"]"
         }
       ],
       "facts": "DEFAULT_CAPS anthropic: 4 lib/provider-pacing.js:15; 1..32; applied on save server.js:3133."
@@ -12999,7 +12999,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "OpenAI API"
+          "selector": "[data-setting=\"OPT-0415\"]"
         }
       ],
       "facts": "DEFAULT_CAPS openai: 4 lib/provider-pacing.js:15; 1..32; applied on save server.js:3133."
@@ -13035,7 +13035,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "OpenAI Codex API"
+          "selector": "[data-setting=\"OPT-0416\"]"
         }
       ],
       "facts": "DEFAULT_CAPS codex: 2 lib/provider-pacing.js:15-16; 1..32; applied on save server.js:3133."
@@ -13070,7 +13070,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "Google Gemini"
+          "selector": "[data-setting=\"OPT-0417\"]"
         }
       ],
       "facts": "DEFAULT_CAPS google: 4 lib/provider-pacing.js:16; 1..32; applied on save server.js:3133."
@@ -13105,7 +13105,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "Perplexity"
+          "selector": "[data-setting=\"OPT-0418\"]"
         }
       ],
       "facts": "DEFAULT_CAPS perplexity: 3 lib/provider-pacing.js:16; 1..32; applied on save server.js:3133."
@@ -13141,7 +13141,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "LM Studio"
+          "selector": "[data-setting=\"OPT-0419\"]"
         }
       ],
       "facts": "DEFAULT_CAPS lmstudio: 1 lib/provider-pacing.js:17; 1..32; applied on save server.js:3133; 'no per-use charge' follows lib/ledger.js:11-13 (local models carry no per-use charge)."
@@ -13177,7 +13177,7 @@
       "anchors": [
         {
           "surface": "desktop",
-          "label": "Ollama"
+          "selector": "[data-setting=\"OPT-0420\"]"
         }
       ],
       "facts": "DEFAULT_CAPS ollama: 1 lib/provider-pacing.js:17; 1..32; applied on save server.js:3133."
@@ -14089,7 +14089,7 @@
     {
       "id": "OPT-0447",
       "kind": "setting",
-      "name": "Busy agents at the top",
+      "name": "Show busy agents at the top",
       "labels": [
         "Show active agents at the top of the agent list",
         "⬆ Active agents at the top: On/Off"
@@ -16911,7 +16911,7 @@
       "kind": "setting",
       "name": "Daily limit for everything",
       "labels": [
-        "Daily pay-per-use cap, whole hub ($)"
+        "Daily pay-per-use cap, your whole Maestro ($)"
       ],
       "what": "Sets how many dollars of pay-per-use spend all your agents together may use each day. Past it, agents have to ask you before their riskier actions, for the rest of the day.",
       "when": "Set it as an overall safety net. Leave it empty for no limit.",
@@ -26996,7 +26996,7 @@
     {
       "id": "OPT-0899",
       "kind": "indicator",
-      "name": "Music hint for calls",
+      "name": "Pause music for a clearer call",
       "labels": [
         "Music playing? Pause it for a clearer call"
       ],
@@ -28155,12 +28155,7 @@
       "scope": "install",
       "home": "Settings > Agents and teams > More",
       "storedAs": "settings.workersAtOnce.<service>",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "selector": "#st-wao-rows"
-        }
-      ],
+      "anchors": [],
       "mergedInto": "OPT-0412"
     },
     {
@@ -28804,7 +28799,7 @@
     {
       "id": "OPT-0960",
       "kind": "setting",
-      "name": "Hub briefing for the lead",
+      "name": "Briefing for your lead",
       "labels": [
         "hubBrief"
       ],

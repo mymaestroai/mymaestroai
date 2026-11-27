@@ -149,7 +149,7 @@ test('Settings: In use row, Test web search button, Brave link and cost, Perplex
   assert.match(app, /<button class="st-test-btn" onclick="testWebSearch\(\)">Test web search<\/button>/);
   assert.match(app, /async function testWebSearch\(\)/);
   assert.match(app, /query: 'weather forecast tomorrow', maxResults: 10/);
-  assert.match(app, /Answered by \$\{WS_LABELS\[r\.backend\] \|\| r\.backend\}\$\{r\.backend === 'duckduckgo' \? ', the free no-key fallback' : ''\}: \$\{n\} result\(s\) in/);
+  assert.match(app, /Answered by \$\{WS_LABELS\[r\.backend\] \|\| r\.backend\}\$\{r\.backend === 'duckduckgo' \? ', the free no-key fallback' : ''\}: \$\{plural\(n, 'result', 'results'\)\} in/);
   assert.match(app, /<a href="https:\/\/brave\.com\/search\/api\/" target="_blank" rel="noopener" style="color:var\(--link\)">brave\.com\/search\/api<\/a>/);
   assert.match(app, /\$5 per 1,000 searches, \$5 of free credit each month \(about 1,000 searches\); Brave asks for a card/);
   assert.match(app, /id="st-ws-pplx"/);
@@ -247,13 +247,14 @@ function testButtonWith(answer) {
   const end = app.indexOf('    async function tryWebFetch() {');
   assert.ok(lStart > 0 && lEnd > lStart && labels.includes('WS_LABELS') && start > 0 && end > start, 'the Test web search code is found in app.js');
   const out = { textContent: '' };
-  const run = new Function('document', 'fetch', `${labels}${app.slice(start, end)}\nreturn testWebSearch();`);
+  const pluralFn = app.match(/function plural\(n, one, many\) \{[^\n]*\}/)[0];   // the page's one plural helper
+  const run = new Function('document', 'fetch', `${pluralFn}\n${labels}${app.slice(start, end)}\nreturn testWebSearch();`);
   return run({ getElementById: (id) => (id === 'st-ws-test' ? out : null) }, async () => ({ json: async () => answer })).then(() => out.textContent);
 }
 
 test('Test web search: names who answered and how many results', async () => {
   const t = await testButtonWith({ backend: 'duckduckgo', results: [{}, {}, {}], ms: 1234 });
-  assert.strictEqual(t, 'Answered by DuckDuckGo (scraped, no key), the free no-key fallback: 3 result(s) in 1.2 s');
+  assert.strictEqual(t, 'Answered by DuckDuckGo (scraped, no key), the free no-key fallback: 3 results in 1.2 s');
 });
 
 test('Test web search: a refused key reads as refused, not as the raw error body; long errors are cut', async () => {

@@ -353,7 +353,7 @@ test('records that raise recurring spending or download/build/install software a
     ['OPT-0274', 'Self-check: ordinary agents'], ['OPT-0275', 'Self-check: agents in a box'], ['OPT-0276', 'Self-check: shared agents'],
     ['OPT-0626', 'Requests table'], ['OPT-0651', 'Install llama-swap'], ['OPT-0652', 'Build llama.cpp'], ['OPT-0684', 'Download everything'],
     ['OPT-0281', 'Update Codex now'], ['OPT-0280', 'Codex updates'], ['OPT-0105', 'Update channel'], ['OPT-0767', 'Which channel?'],
-    ['OPT-0227', 'Voice for everyone'], ['OPT-0292', 'Retry voice set-up'], ['OPT-0245', 'Checklist fix button'],
+    ['OPT-0227', 'Voice on or off for everyone'], ['OPT-0292', 'Retry voice set-up'], ['OPT-0245', 'Checklist fix button'],
     ['OPT-0081', 'Records limit for this agent'], ['OPT-0381', 'Past messages (all agents)'], ['OPT-0954', 'Records limit for all agents'],
     ['OPT-0159', 'Discussion style'], ['OPT-0161', 'Leader agent'], ['OPT-0163', 'Challenger'], ['OPT-0728', 'Agents in the group'],
     ['OPT-0719', 'Tell the team something'], ['OPT-0452', "Claude's built-in helpers"], ['OPT-0963', 'Reuse earlier text'],

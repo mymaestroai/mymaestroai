@@ -34,7 +34,7 @@ test('every spoken string goes through voiceSpeechText: call lines, read-aloud, 
 
 test('desktop Settings, Voices: pause, speed (with the hint) and spoken activity; saved with the other prefs', () => {
   const s = between(app, 'function voiceSettingsHtml(data)', 'function voicePaintSettings');
-  assert.ok(s.includes("Pause before I\\'m done"));
+  assert.ok(s.includes('Pause before it answers'));
   assert.match(s, /voicePauseSelectHtml\('st-voice-pause', 'onchange="voiceSettingsSavePrefs\(\\'endPause\\'\)"'\)/);
   assert.match(s, /id="st-voice-speed" value="\$\{voiceSpeedNow\(\)\}" oninput="voiceSettingSpeedInput\(this\)"/);
   assert.ok(s.includes('min="0.75" max="1.5" step="0.05"'));
@@ -50,7 +50,7 @@ test('desktop Settings, Voices: pause, speed (with the hint) and spoken activity
 
 test('desktop call bar: pause select and speed slider, no spoken-activity switch, a silent activity line', () => {
   const bar = between(app, 'function voiceCallBarHtml(chatId)', 'function voiceCallShowBar(chatId)');
-  assert.ok(bar.includes("Pause before I'm done"));
+  assert.ok(bar.includes('Pause before it answers'));
   assert.ok(bar.includes(`voicePauseSelectHtml(id('pause'), 'data-vcb="pause"')`));
   assert.ok(bar.includes('data-vcb="speed"') && bar.includes('min="0.75" max="1.5" step="0.05"'));
   assert.ok(bar.includes('${VOICE_SPEED_HINT}'));
@@ -67,7 +67,7 @@ test('desktop call bar: pause select and speed slider, no spoken-activity switch
 
 test('phone Voice sheet: pause select, speed slider with the hint, spoken activity switch; the call panel shows activity', () => {
   const sheet = between(mob, 'function voiceSheet()', 'function paintVoiceSheet()');
-  assert.ok(sheet.includes('Pause before I&#39;m done'));
+  assert.ok(sheet.includes('Pause before it answers'));
   assert.ok(sheet.includes("VOICE_END_PAUSES.map((ms, i) => '<option value=\"' + ms + '\">' + ['Short', 'Normal', 'Long', 'Very long (4 s)'][i] + '</option>')"));
   assert.ok(sheet.includes('id="vs-speed" class="vs-level vs-speed" min="0.75" max="1.5" step="0.05"'));
   assert.ok(sheet.includes("VOICE_SPEED_HINT"));
