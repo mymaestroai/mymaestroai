@@ -11283,9 +11283,8 @@
       AgentDot.applyDot(document.querySelector(`#tab-${id} .status`), state, opts);
       AgentDot.applyDot(document.getElementById(`status-dot-${id}`), state, opts);
     }
-    // The ring on a ring or blue line was clicked: that agent's chat, with its "Working on" panel open.
+    // The ring on a ring or blue line was clicked: that agent's chat (its "Working on" panel starts collapsed like any chat's).
     function bgOpenChat(name) {
-      if (typeof HandOffCard !== 'undefined' && typeof HandOffCard.open === 'function') HandOffCard.open(name);
       const btn = document.getElementById('agent-btn-' + name);
       startSoloChat(name, btn && btn.dataset ? btn.dataset.model : undefined);
     }
@@ -24060,9 +24059,21 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       for (const i of items) counts[i.state === 'running' ? 'running' : i.state === 'failed' ? 'failed' : 'done']++;
       return { items, gone, counts, alert: items.some(i => i.state === 'failed' && !i.failSeen) };
     }
+    // The chip reads "Workers: 3 working · 11 done" ("Workers" is what the list it opens is called); "Workers" alone when nothing is listed.
+    function workerButtonParts(counts) {
+      if (!counts.running && !counts.done && !counts.failed) return { noun: 'Workers', counts: '' };
+      return { noun: 'Workers', counts: `${counts.running} working · ${counts.done} done${counts.failed ? ` · ${counts.failed} failed` : ''}` };
+    }
     function workerButtonLabel(counts) {
-      if (!counts.running && !counts.done && !counts.failed) return 'Workers';
-      return `${counts.running} working · ${counts.done} done${counts.failed ? ` · ${counts.failed} failed` : ''}`;
+      const p = workerButtonParts(counts);
+      return p.counts ? `${p.noun}: ${p.counts}` : p.noun;
+    }
+    // Sets the chip's .wb-label: the noun and the counts in their own spans when it has them (so the noun can truncate, never the counts).
+    function setWorkerButtonLabel(el, counts) {
+      const p = workerButtonParts(counts);
+      const n = el.querySelector ? el.querySelector('.wb-noun') : null, c = el.querySelector ? el.querySelector('.wb-counts') : null;
+      if (n && c) { n.textContent = p.counts ? p.noun + ':' : p.noun; c.textContent = p.counts ? ' ' + p.counts : ''; }
+      else el.textContent = workerButtonLabel(counts);
     }
     function fmtWorkerClock(ms) {
       const t = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
@@ -24318,7 +24329,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       // history views opened from the history panel go once something else is on screen
       for (const [id, chat] of Object.entries(chats)) if (chat && chat.isHistory && id !== activeChat) retireWorkerCard(id);
       if (!btn) return;
-      btn.querySelector('.wb-label').textContent = workerButtonLabel(shown);
+      setWorkerButtonLabel(btn.querySelector('.wb-label'), shown);
       btn.classList.toggle('busy', shown.running > 0);
       btn.classList.toggle('alert', alert);
       btn.title = alert ? 'A worker failed: open the list to see it' : 'Workers: what is working now, and the history of past workers';

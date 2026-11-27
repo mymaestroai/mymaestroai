@@ -492,6 +492,9 @@
     /* Workers (mobile.js wkRefresh / wkShow): a chip in the row under the chat's name while workers are listed, and one
        full-screen sheet for the list, a worker, the history and an old run. */
     .wk-chip { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border-strong); border-radius: 999px; padding: 2px 9px; font-size: 12px; color: var(--text-dim); background: transparent; }
+    .wk-chip .wb-label { display: inline-flex; min-width: 0; max-width: 100%; }
+    .wk-chip .wb-noun { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .wk-chip .wb-counts { flex: none; white-space: pre; }
     .wk-chip .wb-dot { width: 7px; height: 7px; border-radius: 50%; display: none; }
     .wk-chip.busy { border-color: var(--accent-edge); color: var(--text); }
     .wk-chip.busy .wb-dot { display: inline-block; background: var(--worker-busy); box-shadow: 0 0 0 3px var(--worker-busy-glow); }
@@ -1618,7 +1621,7 @@ html.mm-simple .sa-tm:focus-visible, html.mm-simple .sa-sec-h:focus-visible, htm
     <!-- The model, effort, plan usage and context size get their own thin row, which wraps rather than cutting anything
          off: the model stays in view busy or idle (the bell and Stop buttons leave the name a 46 px column on a 360 px
          phone). Under the name, only what the agent is doing right now, while it works; a tap tells it in full. -->
-    <div id="chat-meta"><span class="sub-wrap"><span class="sub" id="chat-model"></span><select id="chat-model-pick" aria-label="Change this agent's model" hidden></select></span><span class="sub-wrap effort-wrap" id="chat-effort-wrap" hidden><span class="sub" id="chat-effort"></span><select id="chat-effort-pick" aria-label="Reasoning effort"></select></span><button type="button" class="sub" id="chat-plan" hidden></button><span class="sub" id="chat-ctx" hidden></span><button type="button" class="wk-chip" id="chat-workers-btn" aria-haspopup="dialog" title="Workers: what is working now, and the history of past workers" hidden><span class="wb-dot" aria-hidden="true"></span><span class="wb-label">Workers</span></button></div>
+    <div id="chat-meta"><span class="sub-wrap"><span class="sub" id="chat-model"></span><select id="chat-model-pick" aria-label="Change this agent's model" hidden></select></span><span class="sub-wrap effort-wrap" id="chat-effort-wrap" hidden><span class="sub" id="chat-effort"></span><select id="chat-effort-pick" aria-label="Reasoning effort"></select></span><button type="button" class="sub" id="chat-plan" hidden></button><span class="sub" id="chat-ctx" hidden></span><button type="button" class="wk-chip" id="chat-workers-btn" aria-haspopup="dialog" title="Workers: what is working now, and the history of past workers" hidden><span class="wb-dot" aria-hidden="true"></span><span class="wb-label"><span class="wb-noun">Workers</span><span class="wb-counts"></span></span></button></div>
     <button class="pacing-bar" title="Tap to resume full parallel"></button>
     <div class="scroll" id="chat-scroll"><div id="messages"></div></div>
     <div id="call-ended-bar" role="status" hidden><span class="ceb-text">The call ended when you left the app</span><button type="button" id="call-again" class="ceb-again">Call again</button><button type="button" id="call-ended-x" class="ceb-x" aria-label="Dismiss">&#x2715;</button></div>

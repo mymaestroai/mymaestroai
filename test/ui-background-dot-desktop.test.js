@@ -186,12 +186,12 @@ test('header: background only -> the blue part alone, not the orange .on look', 
 });
 
 // ── the click, the panel's Stop calls ──
-test('a click on the ring or the blue line opens that agent\'s chat with the panel open', () => {
+test('a click on the ring or the blue line opens that agent\'s chat (its panel starts collapsed)', () => {
   const calls = [];
   const btn = { dataset: { model: 'sonnet' } };
   const body = `${extract('bgOpenChat')}\nreturn bgOpenChat;`;
   new Function('HandOffCard', 'document', 'startSoloChat', body)({ open: (n) => calls.push(['open', n]) }, { getElementById: (id) => (id === 'agent-btn-hazel' ? btn : null) }, (n, m) => calls.push(['chat', n, m]))('hazel');
-  assert.deepStrictEqual(calls, [['open', 'hazel'], ['chat', 'hazel', 'sonnet']]);
+  assert.deepStrictEqual(calls, [['chat', 'hazel', 'sonnet']], 'no expansion is asked for');
   // changed with the Teams view: the same listener also takes the Teams rows' ring and line, and finds the row of either kind
   assert.ok(/closest\('\.agent-btn \.agent-status\.bg-work, \.agent-btn \.agent-bg-line, \.teams-row \.teams-dot\.bg-work, \.teams-row \.teams-bg-line'\)[\s\S]{0,200}closest\('\.agent-btn, \.teams-row'\)[\s\S]{0,300}bgOpenChat\(name\);\s*\}, true\);/.test(src), 'one capturing listener for the ring and the line, in All Agents and in Teams');
 });

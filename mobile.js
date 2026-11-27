@@ -2742,10 +2742,9 @@ function bgCountOf(name) {
 function bgStateOf(name, busy, question) {
   return AgentDot.dotState({ busy: !!busy, question: !!question, background: bgCountOf(name) });
 }
-// Tapping a ring or the blue line (or the blue chip): that agent's chat with the "Working on" panel opened.
+// Tapping a ring or the blue line (or the blue chip): that agent's chat (its "Working on" panel starts collapsed like any chat's).
 function bgOpenChat(name) {
   if (!name) return;
-  if (window.HandOffCard && typeof HandOffCard.open === 'function') HandOffCard.open(name);
   navigate('chat', name);
 }
 // The second chip (blue): agents that are free but have background work. Hidden in Simple (CSS) and when there is none.
@@ -9535,9 +9534,21 @@ function workerListPick(entries, now, activeId) {
   for (const i of items) counts[i.state === 'running' ? 'running' : i.state === 'failed' ? 'failed' : 'done']++;
   return { items, gone, counts, alert: items.some(i => i.state === 'failed' && !i.failSeen) };
 }
+// The chip reads "Workers: 3 working · 11 done" ("Workers" is what the list it opens is called); "Workers" alone when nothing is listed.
+function workerButtonParts(counts) {
+  if (!counts.running && !counts.done && !counts.failed) return { noun: 'Workers', counts: '' };
+  return { noun: 'Workers', counts: `${counts.running} working · ${counts.done} done${counts.failed ? ` · ${counts.failed} failed` : ''}` };
+}
 function workerButtonLabel(counts) {
-  if (!counts.running && !counts.done && !counts.failed) return 'Workers';
-  return `${counts.running} working · ${counts.done} done${counts.failed ? ` · ${counts.failed} failed` : ''}`;
+  const p = workerButtonParts(counts);
+  return p.counts ? `${p.noun}: ${p.counts}` : p.noun;
+}
+// Sets the chip's .wb-label: the noun and the counts in their own spans when it has them (so the noun can truncate, never the counts).
+function setWorkerButtonLabel(el, counts) {
+  const p = workerButtonParts(counts);
+  const n = el.querySelector ? el.querySelector('.wb-noun') : null, c = el.querySelector ? el.querySelector('.wb-counts') : null;
+  if (n && c) { n.textContent = p.counts ? p.noun + ':' : p.noun; c.textContent = p.counts ? ' ' + p.counts : ''; }
+  else el.textContent = workerButtonLabel(counts);
 }
 function fmtWorkerClock(ms) {
   const t = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
@@ -9868,7 +9879,7 @@ function wkRefresh() {
   const btn = $('chat-workers-btn');
   if (btn) {
     btn.hidden = !items.length && !hubCount;
-    btn.querySelector('.wb-label').textContent = workerButtonLabel({ ...counts, running: counts.running + hubCount });
+    setWorkerButtonLabel(btn.querySelector('.wb-label'), { ...counts, running: counts.running + hubCount });
     btn.classList.toggle('busy', counts.running + hubCount > 0);
     btn.classList.toggle('alert', alert);
   }
@@ -17902,7 +17913,7 @@ function simpleAgentRow(a, opts) {
   simpleDotPaint(b.querySelector('.sa-dot'), a.name);
   b.addEventListener('click', (e) => {
     const bt = e && e.target && e.target.closest ? e.target.closest('[data-build-team]') : null; if (bt) { if (e.stopPropagation) e.stopPropagation(); if (typeof opts.onPick === 'function') opts.onPick(); buildTeamActivate(bt); return; }   // the small Build team link starts the same Build team as the Teams link; the row does not open the chat
-    if (e && e.target && e.target.closest && e.target.closest('.sa-dot.bg-work, .sa-sub-bg') && window.HandOffCard) HandOffCard.open(a.name); if (typeof opts.onPick === 'function') opts.onPick(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name); });
+    if (typeof opts.onPick === 'function') opts.onPick(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name); });
   return b;
 }
 // Simple's Teams view: the same sections and rows as the phone's Teams tab (hubTeams.sections; a leader's workers open unless folded by hand).

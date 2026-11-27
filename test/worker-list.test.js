@@ -39,7 +39,7 @@ test('running first; finished workers stay 2 minutes; stopped counts as finished
   assert.deepStrictEqual(r.items.map(i => [i.id, i.state]), [['b', 'running'], ['d', 'stopped'], ['a', 'done']]);
   assert.deepStrictEqual(r.gone, ['c']);
   assert.deepStrictEqual(r.counts, { running: 1, done: 2, failed: 0 });
-  assert.strictEqual(L.workerButtonLabel(r.counts), '1 working · 2 done');
+  assert.strictEqual(L.workerButtonLabel(r.counts), 'Workers: 1 working · 2 done');
   assert.strictEqual(r.alert, false);
 });
 
@@ -49,7 +49,7 @@ test('failed workers stay until opened or 10 minutes, the newest 3; the button t
   assert.deepStrictEqual(r.items.map(i => i.id), ['f1', 'f2', 'f3']);
   assert.deepStrictEqual(r.gone.sort(), ['f4', 'old', 'seen']);
   assert.strictEqual(r.alert, true);
-  assert.strictEqual(L.workerButtonLabel(r.counts), '0 working · 0 done · 3 failed');
+  assert.strictEqual(L.workerButtonLabel(r.counts), 'Workers: 0 working · 0 done · 3 failed');
   // once opened, a failed worker no longer turns the button red, and leaves when something else is on screen
   chats.f1.failSeen = true; chats.f2.failSeen = true; chats.f3.failSeen = true;
   const r2 = L.workerListOf({ f1: chats.f1 }, NOW, 'f1');

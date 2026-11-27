@@ -436,38 +436,53 @@ test('collapsed: when the panel empties, rows that come back start collapsed', a
   });
 });
 
-test('collapsed: a ring clicked in the list opens that chat expanded once; the next visit starts collapsed', async () => {
+test('collapsed: there is no expand-on-navigate path; a ring or line tap that opens a chat leaves its panel collapsed', async () => {
+  assert.equal(typeof freshPanel().open, 'undefined', 'HandOffCard.open is gone');
   await withPanel(memStorage(), async ({ M, ctx, switchTo, box, expanded }) => {
     ctx.answers['agent-a'] = ROWS('A-row'); ctx.answers['agent-b'] = ROWS('B-row');
-    await switchTo('agent-b'); await switchTo('agent-a');
-    M.open('agent-b');
-    assert.equal(expanded(), 'false', "the open chat (A) is not expanded by B's ring");
+    await switchTo('agent-a');
+    // a ring tap or a blue sub-line tap only opens the chat (follow); nothing asks for expansion
     await switchTo('agent-b');
-    assert.equal(expanded(), 'true');
-    await switchTo('agent-a'); await switchTo('agent-b');
-    assert.equal(expanded(), 'false');
-    M.open('agent-b');
-    assert.equal(expanded(), 'true', 'the ring of the open chat expands it at once');
-    assert.ok(box);
+    assert.equal(expanded(), 'false', "the ring/sub-line tap opened B's chat collapsed");
+    find(box, 'ho-strip')[0].click();
+    assert.equal(expanded(), 'true', 'pressing the summary line expands');
+    await switchTo('agent-a');
+    assert.equal(expanded(), 'false', 'another chat is collapsed');
+    await switchTo('agent-b');
+    assert.equal(expanded(), 'false', 'and coming back starts collapsed again');
   });
 });
 
-test('collapsed: only a ring or blue line (All Agents, Teams, the phone chip) asks for the panel open; both pages mark it before the chat opens', () => {
+test('collapsed: neither page, nor the Simple list, asks the panel to open when a ring, blue line or chip opens a chat', () => {
   const fs = require('node:fs');
   const path = require('node:path');
   const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-  const app = read('app.js'), mobile = read('mobile.js');
+  const app = read('app.js'), mobile = read('mobile.js'), lib = read('lib/ui-hand-off-card.js');
   const body = (src, head) => { const i = src.indexOf(head); assert.ok(i >= 0, head); return src.slice(i, i + 400); };
-  // desktop: bgOpenChat marks the agent, then opens its chat; the one click handler for rings and blue lines covers Teams rows
-  const dBg = body(app, 'function bgOpenChat(name)');
-  assert.ok(dBg.includes('HandOffCard.open(name)') && dBg.indexOf('HandOffCard.open(name)') < dBg.indexOf('startSoloChat('), 'desktop: open() before the chat opens');
+  assert.ok(!/HandOffCard\.open\b/.test(app) && !/HandOffCard\.open\b/.test(mobile), 'no page calls HandOffCard.open');
+  assert.ok(!/openFor|openAt|OPEN_FOR_MS/.test(lib), 'the library keeps no expand-on-open state');
+  assert.ok(body(app, 'function bgOpenChat(name)').includes('startSoloChat('), 'desktop: the tap still opens the chat');
+  assert.ok(body(mobile, 'function bgOpenChat(name)').includes("navigate('chat', name)"), 'phone: the tap still opens the chat');
   assert.ok(app.includes('.teams-row .teams-dot.bg-work, .teams-row .teams-bg-line'), 'desktop: a Teams row ring and blue line are handled');
-  assert.equal((app.match(/HandOffCard\.open\(/g) || []).length, 1, 'desktop: open() only in bgOpenChat');
-  // phone: bgOpenChat marks the agent, then navigates; the list handler sends the ring and the blue line there
-  const pBg = body(mobile, 'function bgOpenChat(name)');
-  assert.ok(pBg.includes('HandOffCard.open(name)') && pBg.indexOf('HandOffCard.open(name)') < pBg.indexOf("navigate('chat', name)"), 'phone: open() before the chat opens');
   assert.ok(mobile.includes("e.target.closest('.dot.bg-work, .agent-bg-line')) { bgOpenChat(r.dataset.agent)"), 'phone: the list ring and blue line');
-  // every other open() call on the phone sits in a ring handler (the Simple list's .sa-dot.bg-work)
-  const others = mobile.split('\n').filter((l) => l.includes('HandOffCard.open(') && !pBg.includes(l.trim()));
-  assert.ok(others.length > 0 && others.every((l) => l.includes('.sa-dot.bg-work')), 'phone: no other caller: ' + others.join(' | '));
+  assert.ok(mobile.includes("if (typeof opts.onPick === 'function') opts.onPick(); if (a.name !== current || screen !== 'chat') navigate('chat', a.name);"), 'Simple: the row still opens the chat');
+});
+
+test('panelModel: the next check names the day when it is not today', () => {
+  const at = (y, mo, d, h, mi) => new Date(y, mo, d, h, mi).getTime();
+  const clock = (t) => { const d = new Date(t); const h = d.getHours() % 12 || 12; return h + ':' + String(d.getMinutes()).padStart(2, '0') + (d.getHours() < 12 ? ' AM' : ' PM'); };
+  const text = (nowMs, nextMs) => H.panelModel({ handOffs: [ho({})], nextCheck: { at: nextMs } }, { now: nowMs, fmt: clock }).nextCheckText;
+  const now = at(2026, 10, 26, 15, 0);   // Thu Nov 26 2026, 3:00 PM local
+  assert.equal(text(now, at(2026, 10, 26, 19, 18)), 'next check 7:18 PM', 'today');
+  assert.equal(text(now, at(2026, 10, 26, 23, 59)), 'next check 11:59 PM', 'a check at 11:59 PM today is still today');
+  assert.equal(text(now, at(2026, 10, 27, 19, 18)), 'next check tomorrow 7:18 PM', 'tomorrow');
+  assert.equal(text(now, at(2026, 10, 27, 0, 0)), 'next check tomorrow 12:00 AM', 'just after midnight is tomorrow');
+  assert.equal(text(at(2026, 10, 26, 23, 59), at(2026, 10, 27, 0, 1)), 'next check tomorrow 12:01 AM', 'two minutes away across midnight');
+  assert.equal(text(at(2026, 10, 27, 0, 5), at(2026, 10, 27, 7, 0)), 'next check 7:00 AM', 'just after midnight, same day');
+  assert.equal(text(now, at(2026, 10, 28, 19, 18)), 'next check Sat 7:18 PM', 'two days out: short weekday');
+  assert.equal(text(now, at(2026, 11, 2, 8, 30)), 'next check Wed 8:30 AM', 'six days out is still a weekday');
+  assert.equal(text(now, at(2026, 11, 3, 19, 18)), 'next check Dec 3, 7:18 PM', 'a week out: short date');
+  assert.equal(text(now, now), 'check due now', 'at now');
+  assert.equal(text(now, now - 60000), 'check due now', 'before now');
+  assert.equal(H.panelModel({ handOffs: [ho({})], nextCheck: { at: now - 1000 } }, { now, fmt: clock }).summary, 'Working on: 1 thing · check due now');
 });
