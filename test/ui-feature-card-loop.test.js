@@ -387,7 +387,7 @@ test('(g) messageArrived with focus inside the card moves focus to the toggle; f
   }
 });
 
-const isFolded = (list) => { const c = list.children.find((k) => String(k.className).includes('feature-card')); return !!c && c.children.some((k) => String(k.className).includes('fc-toggle')); };
+const isFolded = (list) => { const c = list.children.find((k) => String(k.className).includes('feature-card')); return !!c && c.children.length === 1 && String(c.children[0].className).includes('fc-toggle') && c.children[0].getAttribute('aria-expanded') === 'false'; };   // closed: the header button alone
 
 test('a live message before the card first answers: the card arrives folded in that chat visit', async () => {
   const { FC, D, gets } = load({ deferGet: true });
