@@ -176,7 +176,8 @@ test('review prep: GIT_WORK_TREE / GIT_DIR in front of git point it at the insta
   // protection on and the command can't be read: refused, never let through
   const broken = { ...make('on'), commandWritesProtected: () => { throw new Error('scan broke'); } };
   tp.setCodeProtectProvider(() => broken);
-  try { assert.ok(refused(tp.decide({ agent: lead, tool: 'Bash', input: { command: 'echo hi' }, cwd: cwdOf(lead) }))); }
+  // (a command that only reads is not refused by this feature: test/code-protect-scope.test.js)
+  try { assert.ok(refused(tp.decide({ agent: lead, tool: 'Bash', input: { command: 'echo hi > out.txt' }, cwd: cwdOf(lead) }))); }
   finally { tp.setCodeProtectProvider(null); }
   // no provider registered (a unit test, a script): nothing is read and nothing refused by this rule
   tp.setCodeProtectProvider(null);
@@ -282,15 +283,11 @@ test('r2: the same commands inside quotes or backticks (sh -c, bash -c, command 
 
 test('review r1: a detection error inside the command reading refuses (no internal catch); the settings files in data/ are protected', () => {
   const cp = make('on');
-  const verify = require('../lib/selfcheck/verify');
-  const orig = verify.shellWritePaths;
-  verify.shellWritePaths = () => { throw new Error('scan broke'); };
-  try {
-    assert.throws(() => cp.commandWritesProtected(`echo change > ${P('app.js')}`, '/'), /scan broke/);
-    tp.setCodeProtectProvider(() => cp);
-    try { assert.ok(refused(tp.decide({ agent: lead, tool: 'Bash', input: { command: `echo change > ${P('app.js')}` }, cwd: cwdOf(lead) }))); }
-    finally { tp.setCodeProtectProvider(null); }
-  } finally { verify.shellWritePaths = orig; }
+  // the reading now lives in code-protect itself (shellWriteTargets): a reader that throws still refuses a command that might write
+  const broken = { ...cp, commandWritesProtected: () => { throw new Error('scan broke'); } };
+  tp.setCodeProtectProvider(() => broken);
+  try { assert.ok(refused(tp.decide({ agent: lead, tool: 'Bash', input: { command: `echo change > ${P('app.js')}` }, cwd: cwdOf(lead) }))); }
+  finally { tp.setCodeProtectProvider(null); }
   assert.strictEqual(cp.isProtectedPath(P('data', 'behaviour-reviews.json')), true);
   assert.strictEqual(cp.isProtectedPath(P('data', 'put-aside.json')), true);
   assert.strictEqual(cp.isProtectedPath(P('data', 'other.json')), false);

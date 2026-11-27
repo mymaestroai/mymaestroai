@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **"Protect your Maestro's own code" no longer blocks your agents' own work.** With the setting on, agents could be stopped from writing their own Files folders and shared folders, and from harmless checks such as reading or copying a file. This happened when your Maestro's shared folders sit in its program folder, or when either is reached through a link. Now only real changes to your Maestro's program files are refused, and reading is never refused.
+
 - **Settings rows line up and say what they mean.** Expert and startup values show one row shape, with the default in the help line and as the box's hint; each Workers at once service has its own ⓘ; the spend caps have one "Save caps" button after all three caps; new features in For your review show their whole description and cost; the security check speaks of your Maestro.
 - **One Claude sign-in problem shows once.** For your review used to list it three times; now it is one item that says how many agents can't answer, with Sign in again, and the count on the gear drops with it. The two-factor warning for admins is no longer listed twice either.
 - **Counts read as words.** "1 agent", "3 files" and "2 admin accounts" replace "agent(s)", "file(s)" and "account(s)" across Settings, For your review and the security check.
