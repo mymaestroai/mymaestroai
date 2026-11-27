@@ -15,19 +15,20 @@ const MAX_DELIVERIES = 5000;
 
 function dom() {
   const observers = [];
+  const focused = { el: null };
   let deliveries = 0; let runaway = false; let queued = false;
-  const pending = new Set();
-  function notify(target) {
-    for (const o of observers) if (o.targets.includes(target)) pending.add(o);
+  const pending = new Map();   // observer -> the nodes added since its last delivery
+  function notify(target, added = []) {
+    for (const o of observers) if (o.targets.includes(target)) pending.set(o, (pending.get(o) || []).concat(added));
     if (queued || !pending.size) return;
     queued = true;
     queueMicrotask(() => {
       queued = false;
       const now = [...pending]; pending.clear();
-      for (const o of now) {
+      for (const [o, addedNodes] of now) {
         if (deliveries >= MAX_DELIVERIES) { runaway = true; return; }
         deliveries++;
-        o.f([]);
+        o.f([{ addedNodes }]);
       }
     });
   }
@@ -35,19 +36,20 @@ function dom() {
     const n = {
       tag, className: '', id: '', hidden: false, disabled: false, textContent: '', children: [], listeners: {}, attrs: {}, parentNode: null, isConnected: true,
       classList: { contains: (c) => String(n.className).split(/\s+/).includes(c), add: (c) => { if (!n.classList.contains(c)) n.className = `${n.className} ${c}`.trim(); }, remove: () => {}, toggle: () => {} },
-      appendChild(c) { if (c.parentNode) c.parentNode.removeChild(c, true); c.parentNode = this; this.children.push(c); notify(this); return c; },
+      appendChild(c) { if (c.parentNode) c.parentNode.removeChild(c, true); c.parentNode = this; this.children.push(c); notify(this, [c]); return c; },
       insertBefore(c, ref) {
         if (!ref) return this.appendChild(c);
         if (c.parentNode) c.parentNode.removeChild(c, true);
-        const i = this.children.indexOf(ref); c.parentNode = this; this.children.splice(i < 0 ? this.children.length : i, 0, c); notify(this); return c;
+        const i = this.children.indexOf(ref); c.parentNode = this; this.children.splice(i < 0 ? this.children.length : i, 0, c); notify(this, [c]); return c;
       },
       removeChild(c, quiet) { this.children = this.children.filter((x) => x !== c); c.parentNode = null; if (!quiet) notify(this); return c; },
-      replaceChildren(...c) { this.children.forEach((x) => { x.parentNode = null; }); this.children = []; c.forEach((x) => { x.parentNode = this; this.children.push(x); }); notify(this); },
+      replaceChildren(...c) { this.children.forEach((x) => { x.parentNode = null; }); this.children = []; c.forEach((x) => { x.parentNode = this; this.children.push(x); }); notify(this, c); },
       setAttribute(k, v) { this.attrs[k] = String(v); },
       getAttribute(k) { return this.attrs[k]; },
       hasAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k); },
       addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); },
-      focus() {},
+      focus() { focused.el = this; },
+      click() { if (this.disabled) return; (this.listeners.click || []).forEach((f) => f({ preventDefault() {} })); },
       get lastChild() { return this.children[this.children.length - 1] || null; },
       get lastElementChild() { return this.lastChild; },
       get nextElementSibling() { const p = this.parentNode; if (!p) return null; const i = p.children.indexOf(this); return p.children[i + 1] || null; },
@@ -55,7 +57,7 @@ function dom() {
     return n;
   }
   class MO { constructor(f) { this.f = f; this.targets = []; observers.push(this); } observe(t) { this.targets.push(t); } disconnect() { this.targets = []; } }
-  return { node, MO, stats: () => ({ deliveries, runaway }) };
+  return { node, MO, focused, stats: () => ({ deliveries, runaway }) };
 }
 
 function load() {
@@ -70,9 +72,9 @@ function load() {
     entries: [{ id: 'quick-research', title: 'Quick research', summary: 'A run for its own work.', cost: 'plan allowance', leadMay: true, recommendation: null, rev: 'pending #0' }] };
   const fetch = () => Promise.resolve({ status: 200, json: async () => card });
   const mod = { exports: {} };
-  const ctx = { module: mod, document: d, fetch, location: { search: '' }, encodeURIComponent, JSON, Promise, console, MutationObserver: D.MO, Date: { now: () => 1000000 }, setTimeout, clearTimeout, queueMicrotask };
+  const ctx = { module: mod, document: d, fetch, location: { search: '', assign(u) { ctx.assigned.push(u); } }, assigned: [], encodeURIComponent, JSON, Promise, console, MutationObserver: D.MO, Date: { now: () => 1000000 }, setTimeout, clearTimeout, queueMicrotask };
   vm.runInNewContext(SRC, ctx, { filename: FILE });
-  return { FC: mod.exports, D, d };
+  return { FC: mod.exports, D, d, ctx, card };
 }
 // The phone's busy card as mobile.js paints it: appended last, and its own observer puts it back at the end after anything else is added.
 function busyCard(D, list) {
@@ -188,4 +190,142 @@ test('after the move limit gave up, a chat switch places the card at once in the
   await settle();
   const last = b.children[b.children.length - 1];
   assert.ok(last && String(last.className).includes('feature-card'), 'the card is placed at the end of the new list');
+});
+
+// ---- folding when a newer message arrives, the closing link, the second admin header ----
+const isCard = (k) => String(k.className).includes('feature-card');
+const cardIn = (list) => list.children.find(isCard);
+const allNodes = (n, out = []) => { out.push(n); n.children.forEach((c) => allNodes(c, out)); return out; };
+const buttonsIn = (n) => allNodes(n).filter((x) => x.tag === 'button');
+const toggleOf = (n) => buttonsIn(n).find((b) => /\bfc-toggle\b/.test(b.className));
+
+test('(a) a bubble appended after the card folds it to its header button; the card stays last', async () => {
+  const { FC, D } = load();
+  const list = D.node('div'); list.appendChild(D.node('div'));
+  FC.chatShown('harbor', list); await settle();
+  const card = cardIn(list);
+  assert.ok(card && buttonsIn(card).some((b) => b.textContent === 'Turn on'), 'unfolded to begin with');
+  assert.ok(!toggleOf(card), 'a plain header before any fold');
+  const bubble = D.node('div'); bubble.className = 'msg'; list.appendChild(bubble);
+  await settle();
+  assert.strictEqual(D.stats().runaway, false);
+  assert.strictEqual(list.children[list.children.length - 1], card, 'the card is last');
+  const t = toggleOf(card);
+  assert.ok(t, 'the header is a button');
+  assert.strictEqual(t.type, 'button');
+  assert.strictEqual(t.getAttribute('aria-expanded'), 'false');
+  assert.ok(t.textContent.endsWith(' \u25BE'), t.textContent);
+  assert.ok(t.textContent.startsWith('One new feature is off until you say yes.'));
+  assert.deepStrictEqual(buttonsIn(card), [t], 'no row buttons');
+});
+
+test('(a2) folded and a busy card present: the card sits just above the busy card', async () => {
+  const { FC, D } = load();
+  const list = D.node('div');
+  const busy = desktopBusy(D, list);
+  FC.chatShown('harbor', list); await settle();
+  const bubble = D.node('div'); list.appendChild(bubble); await settle();
+  assert.strictEqual(D.stats().runaway, false);
+  assert.ok(toggleOf(cardIn(list)), 'folded');
+  assert.deepStrictEqual(order(list, new Map([[busy, 'busy'], [bubble, 'bubble']])), ['bubble', 'card', 'busy']);
+});
+
+test('(b) adding a busy card or a keep-last element does not fold the card', async () => {
+  const { FC, D } = load();
+  const list = D.node('div'); list.appendChild(D.node('div'));
+  FC.chatShown('harbor', list); await settle();
+  busyCard(D, list);
+  const keep = D.node('div'); keep.setAttribute('data-keep-last', ''); list.appendChild(keep);
+  await settle();
+  assert.strictEqual(D.stats().runaway, false);
+  assert.ok(!toggleOf(cardIn(list)), 'not folded');
+  assert.ok(buttonsIn(cardIn(list)).some((b) => b.textContent === 'Turn on'));
+});
+
+test('(c) pressing the header unfolds (rows back, aria-expanded true, focus on the first button); pressing again folds', async () => {
+  const { FC, D } = load();
+  const list = D.node('div'); list.appendChild(D.node('div'));
+  FC.chatShown('harbor', list); await settle();
+  list.appendChild(D.node('div')); await settle();
+  const card = cardIn(list);
+  toggleOf(card).click();
+  assert.strictEqual(list.children[list.children.length - 1], card);
+  let t = toggleOf(card);
+  assert.strictEqual(t.getAttribute('aria-expanded'), 'true');
+  assert.ok(t.textContent.endsWith(' \u25B4'), t.textContent);
+  const turnOn = buttonsIn(card).find((b) => b.textContent === 'Turn on');
+  assert.ok(turnOn, 'the rows are back');
+  assert.strictEqual(D.focused.el, turnOn, 'focus goes to the first button of the first open row');
+  t.click();
+  await settle();
+  t = toggleOf(card);
+  assert.strictEqual(t.getAttribute('aria-expanded'), 'false');
+  assert.ok(t.textContent.endsWith(' \u25BE'));
+  assert.deepStrictEqual(buttonsIn(card), [t]);
+  assert.strictEqual(D.stats().runaway, false);
+});
+
+test('a chat switch away and back does not unfold; a new message while unfolded after a fold folds again', async () => {
+  const { FC, D } = load();
+  const a = D.node('div'); const b = D.node('div');
+  FC.chatShown('harbor', a); await settle();
+  a.appendChild(D.node('div')); await settle();
+  assert.ok(toggleOf(cardIn(a)));
+  FC.chatShown('other', b); await settle();
+  FC.chatShown('harbor', a); await settle();
+  assert.ok(toggleOf(cardIn(a)), 'still folded');
+  toggleOf(cardIn(a)).click();
+  a.appendChild(D.node('div')); await settle();
+  assert.strictEqual(toggleOf(cardIn(a)).getAttribute('aria-expanded'), 'false');
+});
+
+test('(d) the Settings page copy from renderInto never folds', async () => {
+  const { FC, D } = load();
+  const box = D.node('div'); D.node('div');
+  const list = D.node('div');
+  await FC.renderInto(box);
+  FC.chatShown('harbor', list); await settle();
+  list.appendChild(D.node('div')); box.appendChild(D.node('div')); await settle();
+  assert.ok(toggleOf(cardIn(list)), 'the chat copy folded');
+  const page = box.children.find(isCard);
+  assert.ok(page, 'the page copy is drawn');
+  assert.ok(!toggleOf(page), 'no fold button');
+  assert.ok(buttonsIn(page).some((x) => x.textContent === 'Turn on'));
+});
+
+test('(e) the closing line says "on the Changes page" and its link goes to API.openChanges, else location.assign(/changes)', async () => {
+  for (const mode of ['fn', 'assign', 'nothing']) {
+    const { FC, D, ctx } = load();
+    let n = 0;
+    if (mode === 'fn') FC.openChanges = () => { n++; };
+    if (mode === 'nothing') ctx.location = {};   // no assign at all: nothing happens, nothing throws
+    const list = D.node('div');
+    FC.chatShown('harbor', list); await settle();
+    buttonsIn(cardIn(list)).find((b) => b.textContent === 'Leave off').click();
+    await settle();
+    const card = cardIn(list);
+    const closing = allNodes(card).find((x) => /\bfc-closing\b/.test(x.className));
+    assert.ok(closing, mode);
+    const text = (x) => (x.textContent || '') + x.children.map(text).join('');
+    assert.strictEqual(text(closing), 'All set. You can change these any time on the Changes page.');
+    const link = buttonsIn(closing)[0];
+    assert.strictEqual(link.textContent, 'Changes page');
+    link.click();
+    if (mode === 'fn') { assert.strictEqual(n, 1); assert.deepStrictEqual(ctx.assigned, []); }
+    if (mode === 'assign') assert.deepStrictEqual(ctx.assigned, ['/changes']);
+    if (mode === 'nothing') assert.deepStrictEqual(ctx.assigned, []);
+  }
+});
+
+test('(f) second admin: every open entry locked (canSwitch false) says "until the owner says yes."', async () => {
+  const mk = async (mut) => {
+    const l = load(); mut(l.card);
+    const list = l.D.node('div'); l.FC.chatShown('harbor', list); await settle();
+    return l.FC.headerText();
+  };
+  assert.strictEqual(await mk((c) => { c.entries[0].canSwitch = false; }), 'One new feature is off until the owner says yes.');
+  assert.strictEqual(await mk((c) => { c.entries.push({ ...c.entries[0], id: 'b' }); c.entries.forEach((e) => { e.canSwitch = false; }); }), 'Two new features are off until the owner says yes.');
+  assert.strictEqual(await mk((c) => { c.entries.push({ ...c.entries[0], id: 'b' }); c.entries[0].canSwitch = false; }), 'Two new features are off until you say yes.', 'one row can be switched');
+  assert.strictEqual(await mk((c) => { c.entries[0].canSwitch = false; c.notices.push({ id: 'n', title: 'T', line: 'x' }); }), 'One new feature is off until you say yes.', 'a notice row is open too');
+  assert.strictEqual(await mk(() => {}), 'One new feature is off until you say yes.');
 });

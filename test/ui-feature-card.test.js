@@ -251,8 +251,8 @@ test('every row answered: one closing line and no buttons', async () => {
   assert.ok(!c().text.includes('All set.'), 'one row is still open');
   p.btns(c(), 'Leave off')[0].click(); await p.settle();
   await p.answer('/api/behaviour-changes/protect-code', 200, { ok: true, rev: 'r1' });
-  assert.ok(c().text.includes('All set. You can change these any time in Settings.'));
-  assert.deepStrictEqual(p.btns(c()).map((b) => b.textContent), ['Undo', 'Undo', 'Settings'], 'only Undo and the Settings link');
+  assert.ok(c().text.includes('All set. You can change these any time on the Changes page.'));
+  assert.deepStrictEqual(p.btns(c()).map((b) => b.textContent), ['Undo', 'Undo', 'Changes page'], 'only Undo and the Changes page link');
   assert.strictEqual(c().text.split('All set.').length, 2, 'once');
 });
 
@@ -449,7 +449,7 @@ test('r1 fix7: the header counts only open entry rows; no header when none is op
   await p.answer('/api/behaviour-changes/protect-code', 200, { ok: true });
   const t = p.cards(list)[0].text;
   assert.ok(!/new features? (is|are) off/.test(t), 'no entry header');
-  assert.ok(t.includes('Left off.') && t.includes('All set. You can change these any time in Settings.'));
+  assert.ok(t.includes('Left off.') && t.includes('All set. You can change these any time on the Changes page.'));
   const q = page({ first: { status: 200, body: body({ entries: [], notices: [N1] }) } }); const l2 = q.mkList();
   q.FC.chatShown('harbor', l2); await q.settle();
   assert.ok(q.cards(l2)[0].text.includes('New features were turned on for you.'));
@@ -707,18 +707,18 @@ test('r5: a refused Undo hides every copy until a fresh card answer; a 403 there
   assert.strictEqual(p.cards(list).length, 0);
   assert.strictEqual(p.FC.state.rows.length, 0);
 });
-test('r4 fix3: Settings in the closing line opens Settings through FeatureCard.openSettings, else window.openSettings', async () => {
-  for (const mode of ['fc', 'global']) {
+test('r4 fix3: the Changes page link in the closing line calls FeatureCard.openChanges, else location.assign(/changes)', async () => {
+  for (const mode of ['fc', 'assign']) {
     const p = page({ first: { status: 200, body: body({ entries: [E1], notices: [] }) } }); const list = p.mkList();
-    let n = 0;
-    if (mode === 'fc') p.FC.openSettings = () => { n++; }; else p.ctx.openSettings = () => { n++; };
+    let n = 0; const assigned = [];
+    if (mode === 'fc') p.FC.openChanges = () => { n++; }; else p.ctx.location = { search: '', assign: (u) => assigned.push(u) };
     p.FC.chatShown('harbor', list); await p.settle();
     p.btns(rowsOf(p, list)[0], 'Leave off')[0].click(); await p.settle();
     await p.answer('/api/behaviour-changes/quick-research', 200, { ok: true, rev: 'r' });
     const c = p.cards(list)[0];
-    assert.ok(c.text.includes('All set. You can change these any time in Settings.'));
-    p.btns(c, 'Settings')[0].click();
-    assert.strictEqual(n, 1, mode);
+    assert.ok(c.text.includes('All set. You can change these any time on the Changes page.'));
+    p.btns(c, 'Changes page')[0].click();
+    if (mode === 'fc') assert.strictEqual(n, 1); else assert.deepStrictEqual(assigned, ['/changes']);
   }
 });
 test('r4 fix4: Turn on is the primary only on a row whose recommendation is on', async () => {
