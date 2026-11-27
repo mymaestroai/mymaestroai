@@ -157,7 +157,7 @@ function fakePage() {
 }
 function loadShell(doc) {
   const app = read('app.js');
-  const a = app.indexOf('function stShowGroup(groupId, remember) {'), b = app.indexOf('// A critical finding in some group', a);
+  const a = app.indexOf('let stPhonePage = null;'), b = app.indexOf('// A critical finding in some group', a);
   assert.ok(a > 0 && b > a);
   const store = {};
   const make = new Function('document', 'STG', 'localStorage', 'stSearch', `let stCurGroup = null; let stPicked = false; let stSearching = false; ${app.slice(a, b)}; return { stShowGroup, stSetMore, stReveal, state: () => ({ cur: stCurGroup, picked: stPicked }) };`);

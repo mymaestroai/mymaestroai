@@ -1196,7 +1196,7 @@ test('U2.2: the users of mm-settings-kept / mm-settings-asking: the frame posts 
   const app = read('app.js'), mob = read('mobile.js');
   assert.match(app, /if \(how === 'confirm'\) \{ settingsOnlyAsk\(\); return; \}/);
   assert.match(app, /settingsOnlyPost\('mm-settings-asking'\)/);
-  assert.match(mob, /type === 'mm-settings-kept' \|\| type === 'mm-settings-asking'\) \{ clearTimeout\(s\.closeTimer\)/);
+  assert.match(mob, /type === 'mm-settings-kept' \|\| type === 'mm-settings-asking' \|\| type === 'mm-settings-popped'\) \{ clearTimeout\(s\.closeTimer\)/);
   assert.match(mob, /!asking && Date\.now\(\) - t0 > 9000/);
   assert.ok(!/mm-settings-kept/.test(read('lib/ui-settings-help.js')));
 });

@@ -2945,6 +2945,18 @@
     #st-groups.st-searching .st-more-body[hidden] { display: block; }
     .st-moved > h4 { font-size: 0.85rem; }
     @media (max-width: 720px) { .st-panes { display: block; } .st-glist { position: static; margin-bottom: 12px; } }
+    /* The phone (the Settings frame, or a window under 721 px; app.js sets data-page there only): the list of groups as full-width rows, or one group as a page under a "‹ Settings" header. */
+    .st-phone-head { display: none; }
+    #st-groups[data-page="group"] .st-phone-head { display: flex; align-items: center; gap: 10px; min-height: 56px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+    .st-phone-back { min-height: 44px; padding: 0 12px 0 0; background: transparent; border: 0; color: var(--accent); cursor: pointer; font: inherit; font-size: 1rem; }
+    .st-phone-back:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+    .st-phone-title { font-weight: 600; font-size: 1.05rem; color: var(--text); }
+    #st-groups[data-page="group"] .st-search, #st-groups[data-page="group"] #st-quick-links, #st-groups[data-page="group"] .st-glist { display: none; }
+    #st-groups[data-page="list"] .st-gpane, #st-groups[data-page="list"].st-searching .st-glist { display: none; }
+    #st-groups[data-page="list"].st-searching .st-gpane { display: block; }
+    #st-groups[data-page] .st-gbtn { min-height: 56px; align-items: center; width: 100%; }
+    #st-groups[data-page].st-searching .st-ghead { cursor: pointer; color: var(--accent); }
+    #st-groups[data-page].st-searching .st-ghead::after { content: " ›"; }
     .st-section.st-match > h4 { color: var(--accent); border-bottom-color: var(--accent); }
     /* Data connectors box (Settings) */
     .cx-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.8rem; }
@@ -3645,6 +3657,7 @@
     html.mm-simple .simple-modal .sm-x { width: 32px; height: 32px; border-radius: 8px; color: var(--sm-muted, var(--simple-muted-text)); font-size: 18px; }
     html.mm-simple .simple-modal .sm-set { padding: 16px 0; border-top: 1px solid var(--sm-border, var(--simple-border)); }
     html.mm-simple .simple-modal .sm-set:first-of-type { border-top: 0; }
+    html.mm-simple .simple-modal .sm-gh { margin: 18px 0 0; font-size: 15px; font-weight: 600; color: var(--sm-text, var(--text)); }
     html.mm-simple .simple-modal .sm-lab { display: block; font-size: 13px; color: var(--sm-muted, var(--simple-muted-text)); margin-bottom: 8px; font-weight: 500; }
     html.mm-simple .simple-modal .sm-seg { display: flex; background: var(--sm-side, var(--simple-side-bg)); border: 1px solid var(--sm-border, var(--simple-border)); border-radius: 12px; padding: 3px; gap: 3px; }
     html.mm-simple .simple-modal .sm-seg button { flex: 1; height: 36px; border-radius: 9px; font-size: 14px; color: var(--sm-sec, var(--auto-head-text)); }

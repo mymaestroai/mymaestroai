@@ -479,12 +479,18 @@
       overlay.innerHTML =
         '<div class="simple-modal" role="dialog" aria-label="Settings">' +
           '<div class="sm-h"><h2>Settings</h2><button type="button" class="sm-x" aria-label="Close">✕</button></div>' +
+          '<h3 class="sm-gh" id="sm-g-you">You and this device</h3>' +
           '<div class="sm-set"><span class="sm-lab">Appearance</span><div class="sm-seg"><button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div><div class="sm-follow" hidden></div></div>' +
           '<div class="sm-set"><span class="sm-lab">Interface style</span><div class="sm-style"></div></div>' +
           '<div class="sm-set"><span class="sm-lab">Name</span><div class="sm-name"></div></div>' +
-          (me.isAdmin === false ? '' : '<div class="sm-set"><button type="button" class="sm-plain" data-act="settings"><div><b>All settings</b><span>Provider keys, web search, voice, backups and the rest</span></div><span aria-hidden="true">›</span></button></div>') +   // admins only, as the gear in Advanced
+          '<h3 class="sm-gh" id="sm-g-voice">Voice and calls</h3>' +
+          (me.isAdmin === false ? '<div class="sm-set"><span class="sm-lab">An admin turns voice on and picks the voices. Use the microphone in a chat to talk.</span></div>' : '<div class="sm-set"><button type="button" class="sm-plain" data-act="voice"><div><b>Voice settings</b><span>Turn voice on or off, the voices and calls</span></div><span aria-hidden="true">›</span></button></div>') +
+          '<h3 class="sm-gh" id="sm-g-notes">Notifications</h3>' +
+          '<div class="sm-set"><span class="sm-lab">Each agent\'s notifications are on its card: press the agent\'s name in its chat.</span></div>' +
+          '<h3 class="sm-gh" id="sm-g-account">Account</h3>' +
           '<div class="sm-set"><button type="button" class="sm-plain" data-act="advanced"><div><b>Switch to Advanced</b><span>All tools, agents\' work and settings</span></div><span aria-hidden="true">›</span></button></div>' +
           '<div class="sm-set"><button type="button" class="sm-plain sm-out" data-act="signout">Sign out</button></div>' +
+          (me.isAdmin === false ? '' : '<div class="sm-set"><button type="button" class="sm-plain" data-act="settings"><div><b>More settings</b><span>Provider keys, web search, backups and the rest</span></div><span aria-hidden="true">›</span></button></div>') +   // admins only (as the gear in Advanced); the last button
         '</div>';
       overlay.querySelector('.sm-name').textContent = name;
       const paintSeg = () => { const cur = me.theme === 'light' || me.theme === 'dark' ? me.theme : 'auto'; overlay.querySelectorAll('.sm-seg button').forEach(b => b.classList.toggle('on', b.dataset.theme === cur)); };
@@ -518,6 +524,7 @@
         const a = e.target.closest('[data-act]');
         if (!a) return;
         if (a.dataset.act === 'settings') { simpleCloseSettings(); openSettings(); }   // the full Settings dialog, as in Advanced
+        else if (a.dataset.act === 'voice') { simpleCloseSettings(); openVoiceSettings(); }   // Settings at the Voice group
         else if (a.dataset.act === 'advanced') simpleSwitchMode('advanced');
         else if (a.dataset.act === 'signout') signOut();
       });
@@ -3415,10 +3422,43 @@
     // Show one group in the right pane (the others are hidden). remember = the person chose it: kept in localStorage 'hub-settings-group'
     // and a red finding arriving later no longer switches the pane. A link or a door passes remember false: it opens the group
     // for now without changing which one is remembered.
-    function stShowGroup(groupId, remember) {
+    // The phone (the Settings frame, or a window under 721 px) shows the list of groups first and one group at a time as a page:
+    // stPhonePage is null on the list, else the open group's id. #st-groups[data-page] is "list" or "group" only there.
+    let stPhonePage = null;
+    function stPhoneOn() {
+      try { return document.documentElement.classList.contains('mm-settings-only') || (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 720px)').matches); } catch { return false; }
+    }
+    function stPhoneList() {   // the list of groups (also the starting state)
+      stPhonePage = null;
+      const wrap = document.getElementById('st-groups');
+      if (!wrap) return;
+      if (stPhoneOn()) wrap.dataset.page = 'list'; else delete wrap.dataset.page;
+    }
+    function stPhoneGo(groupId) {   // one group as a page
+      if (!stPhoneOn()) return;
+      const wrap = document.getElementById('st-groups');
+      if (!wrap) return;
+      stPhonePage = groupId;
+      wrap.dataset.page = 'group';
+      const t = wrap.querySelector('.st-phone-title');
+      const def = STG.GROUPS.find((x) => x.id === groupId);
+      if (t) t.textContent = def ? def.title : '';
+      const m = wrap.closest('.st-modal'); if (m) m.scrollTop = 0;
+    }
+    // Back: from a group page to the list. false when it was already on the list (the caller then closes Settings).
+    function stPhoneBack() {
+      if (!stPhonePage) return false;
+      const from = stPhonePage;
+      stPhoneList();
+      const w = document.getElementById('st-groups'), m = w && w.closest('.st-modal'); if (m) m.scrollTop = 0;
+      const b = document.getElementById(`st-gbtn-${from}`); if (b) { try { b.focus(); } catch { /* not focusable */ } }
+      return true;
+    }
+    function stShowGroup(groupId, remember, keepPage) {
       const g = document.getElementById(`st-group-${groupId}`);
       if (!g) return null;
       stCurGroup = groupId;
+      if (!keepPage) stPhoneGo(groupId);
       stPicked = true;
       for (const el of document.querySelectorAll('#st-groups .st-group')) el.hidden = stSearching ? el.hidden : el.dataset.group !== groupId;
       if (stSearching) g.hidden = false;
@@ -3451,7 +3491,7 @@
       const crit = {};
       for (const [gid, parts] of Object.entries(stSumParts)) crit[gid] = Object.values(parts).some((p) => p.crit && p.text);
       crit[id] = true;
-      stShowGroup(STG.defaultGroup({ crit, last: null }), false);
+      stShowGroup(STG.defaultGroup({ crit, last: null }), false, true);   // the pane's group; the phone stays on its list
       stPicked = false;
     }
 
@@ -3554,10 +3594,10 @@
       let last = null;
       try { last = localStorage.getItem(STG.STORE_KEY); } catch {}
       for (const k of Object.keys(stSumParts)) delete stSumParts[k];
-      stSearching = false; stPicked = false; stCurGroup = null;
+      stSearching = false; stPicked = false; stCurGroup = null; stPhonePage = null;
       const wrap = document.createElement('div');
       wrap.id = 'st-groups';
-      wrap.innerHTML = `<div class="st-search"><input type="search" id="st-search" placeholder="Search settings: privacy, sandbox, push, spend…" autocomplete="off" aria-label="Search settings"><span id="st-search-none" hidden>Nothing matches.</span></div>`
+      wrap.innerHTML = `<div class="st-phone-head"><button type="button" class="st-phone-back" id="st-phone-back">‹ Settings</button><span class="st-phone-title"></span></div><div class="st-search"><input type="search" id="st-search" placeholder="Search settings: privacy, sandbox, push, spend…" autocomplete="off" aria-label="Search settings"><span id="st-search-none" hidden>Nothing matches.</span></div>`
         + (window.hubMe && window.hubMe.isAdmin ? `<div id="st-quick-links" style="margin:6px 0 10px;font-size:0.85rem">Go to: <a href="/modules" id="st-connectors-link" style="color:var(--accent)">🔌 Data connectors</a><a href="/modules#remote-computers" id="st-remote-link" style="color:var(--accent);margin-left:14px;display:${remoteComputersOk === true ? '' : 'none'}">💻 Remote computers</a><a href="/changes" id="st-changes-link" style="color:var(--accent);margin-left:14px">Changes to how agents behave</a></div>` : '')
         + `<div class="st-panes"><nav class="st-glist" aria-label="Settings groups">`
         + STG.GROUPS.map(g => `<button type="button" class="st-gbtn" id="st-gbtn-${g.id}" data-group="${g.id}"><span class="st-gicon" aria-hidden="true">${esc(g.icon)}</span><span class="st-gtext"><span class="st-group-title">${esc(g.title)}</span><span class="st-gsub">${esc(g.sub)}</span><span class="st-group-sum" id="st-sum-${g.id}"></span></span></button>`).join('')
@@ -3584,7 +3624,15 @@
         });
       }
       for (const m of wrap.querySelectorAll('.st-more-btn')) m.addEventListener('click', () => stSetMore(m.closest('.st-group'), m.getAttribute('aria-expanded') !== 'true'));
-      stShowGroup(STG.defaultGroup({ crit: {}, last }), false);
+      stShowGroup(STG.defaultGroup({ crit: {}, last }), false, true);
+      stPhoneList();   // the phone starts on the list of groups; the desktop shows the group at once
+      wrap.querySelector('#st-phone-back').addEventListener('click', () => { stPhoneBack(); });
+      for (const h of wrap.querySelectorAll('.st-ghead')) h.addEventListener('click', () => {   // a match in a phone search: its group opens as a page
+        if (!stSearching || !stPhoneOn()) return;
+        const id = h.closest('.st-group').dataset.group;
+        const inp = document.getElementById('st-search'); if (inp) { inp.value = ''; stSearch(''); }
+        stShowGroup(id, false);
+      });
       stPicked = false;   // only their click (or a link) counts as a choice; a red finding may still bring another group forward
       const input = wrap.querySelector('#st-search');
       input.addEventListener('input', () => stSearch(input.value));
@@ -3763,7 +3811,7 @@
         for (const g of groups) for (const s of g.querySelectorAll('.st-section')) { s.style.display = ''; s.classList.remove('st-match'); }
         if (none) none.hidden = true;
         const picked = stPicked;
-        stShowGroup(stCurGroup || STG.DEFAULT_GROUP, false);
+        stShowGroup(stCurGroup || STG.DEFAULT_GROUP, false, true);
         stPicked = picked;
         return;
       }
@@ -25797,8 +25845,12 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
     function settingsOnlyMessage(e) {
       if (!e || e.source !== window.parent || e.origin !== location.origin) return;
       const type = e.data && e.data.type;
-      if (type !== 'mm-settings-close') return;
+      if (type !== 'mm-settings-close' && type !== 'mm-settings-back') return;
       settingsOnlyGoing = '';   // Back is not the way to the page a link asked for
+      if (type === 'mm-settings-back') {   // Back first leaves a group page for the list; on the list (or with a box open over Settings) it is the close request
+        const bl = dialogGuard.layers(), bt = bl.length ? bl[bl.length - 1].el : null;
+        if ((!bt || bt === document.getElementById('st-overlay')) && stPhoneBack()) { settingsOnlyPost('mm-settings-popped'); return; }
+      }
       // Back closes the innermost layer first (a box opened over Settings, then Settings), as everywhere else
       const ls = dialogGuard.layers();
       const top = ls.length ? ls[ls.length - 1].el : document.getElementById('st-overlay');

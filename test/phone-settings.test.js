@@ -259,7 +259,7 @@ test('the phone sheet: opens the settings-only page in a frame, registers with B
   assert.ok(s.el.classes.has('ready'));
   // Back once ready: the dialog in the frame is asked, at this origin, with nothing but the type
   s.el.__dialogClose();
-  assert.deepStrictEqual(h.frameWin.posted, [[{ type: 'mm-settings-close' }, 'https://hub.example']]);
+  assert.deepStrictEqual(h.frameWin.posted, [[{ type: 'mm-settings-back' }, 'https://hub.example']]);   // Back first asks the frame to go back a page
   assert.ok(!s.el.removed, 'stays until the frame says closed');
   // "Discard changes?" kept it: registered again so the next Back works
   h.api.settingsSheetMessage({ source: h.frameWin, origin: 'https://hub.example', data: { type: 'mm-settings-kept' } });
@@ -292,10 +292,10 @@ test('entry points: the phone menu and Simple\'s sheets offer Settings to admins
   assert.match(mob, /\$\('menu-settings'\)\?\.addEventListener\('click', settingsSheetOpen\);/);
   assert.match(mob, /if \(\$\('menu-settings'\)\) \$\('menu-settings'\)\.hidden = !hubMe\.isAdmin;/);
   const simplePhone = fnSrc(mob, 'function simpleSettingsOpen() {');
-  assert.match(simplePhone, /\(hubMe && hubMe\.isAdmin === false \? '' : '<button type="button" class="ss-row" id="ss-all"><b>All settings<\/b>/);
+  assert.match(simplePhone, /\(hubMe && hubMe\.isAdmin === false \? '' : '<button type="button" class="ss-row" id="ss-all"><b>More settings<\/b>/);
   assert.match(simplePhone, /\$\('ss-all'\)\?\.addEventListener\('click', \(\) => \{ d\.close\(\); settingsSheetOpen\(\); \}\);/);
   const simpleDesk = fnSrc(app, 'function openSimpleSettings() {');
-  assert.match(simpleDesk, /\(me\.isAdmin === false \? '' : '<div class="sm-set"><button type="button" class="sm-plain" data-act="settings"><div><b>All settings<\/b>/);
+  assert.match(simpleDesk, /\(me\.isAdmin === false \? '' : '<div class="sm-set"><button type="button" class="sm-plain" data-act="settings"><div><b>More settings<\/b>/);
   assert.match(simpleDesk, /if \(a\.dataset\.act === 'settings'\) \{ simpleCloseSettings\(\); openSettings\(\); \}/);
 });
 

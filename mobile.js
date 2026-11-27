@@ -2572,7 +2572,7 @@ function researchSimplePaint(d) {
   const old = d.querySelector('#ss-research-sec');
   if (old) old.remove();
   if (!researchPrefOn) return;
-  const anchor = d.querySelector('#ss-style-sec');
+  const anchor = d.querySelector('#ss-notes-sec') || d.querySelector('#ss-style-sec');   // under the Notifications heading
   if (!anchor) return;
   const sec = document.createElement('div'); sec.className = 'ss-sec'; sec.id = 'ss-research-sec';
   const t = document.createElement('div'); t.className = 'ss-title'; t.textContent = 'Deep research';
@@ -16314,7 +16314,7 @@ function settingsSheetOpen(doorId) {
     '<div class="ssh-btns ssh-stuck" hidden><button type="button" class="ssh-wait-more">Keep waiting</button><button type="button" class="ssh-force">Close anyway</button></div></div>';
   document.body.appendChild(el);
   settingsSheet = { el, frame: el.querySelector('iframe'), ready: false, timer: null, door: doorId || '' };
-  el.__dialogClose = settingsSheetRequestClose;   // Back: the dialog in the frame decides (unsaved changes, a save running)
+  el.__dialogClose = () => settingsSheetRequestClose(true);   // Back: the dialog in the frame decides (a group page goes back to the list first; unsaved changes, a save running)
   el.querySelector('.ssh-retry').addEventListener('click', settingsSheetLoad);
   el.querySelector('.ssh-close').addEventListener('click', settingsSheetClosed);
   el.querySelector('.ssh-done').addEventListener('click', settingsSheetClosed);   // shown once the frame left Settings
@@ -16374,11 +16374,12 @@ function settingsSheetFrameLoaded() {
   s.el.classList.add('ready');
   s.el.querySelector('.ssh-bar').hidden = false;
 }
-function settingsSheetRequestClose() {
+function settingsSheetRequestClose(back) {
   const s = settingsSheet;
   if (!s) return;
   if (!s.ready) { settingsSheetClosed(); return; }   // nothing of Settings in the frame: nothing to lose
-  try { s.frame.contentWindow.postMessage({ type: 'mm-settings-close' }, location.origin); } catch { settingsSheetClosed(); return; }
+  // Back (back === true) asks the frame to go back a page first: it answers mm-settings-popped, or treats the message as a close request on its list
+  try { s.frame.contentWindow.postMessage({ type: back === true ? 'mm-settings-back' : 'mm-settings-close' }, location.origin); } catch { settingsSheetClosed(); return; }
   // the dialog answers at once (closed, or kept with its question up). No answer: the sheet stays and asks, since the frame
   // may hold changes; it is never closed without the person saying so.
   clearTimeout(s.closeTimer);
@@ -16405,7 +16406,7 @@ function settingsSheetMessage(e) {
   const type = e.data && e.data.type;
   if (type === 'mm-settings-ready') { s.ready = true; s.away = false; clearTimeout(s.timer); s.el.classList.add('ready'); s.el.querySelector('.ssh-bar').hidden = true; }   // back on Settings (after signing in again)
   else if (type === 'mm-settings-closed') settingsSheetClosed();
-  else if (type === 'mm-settings-kept' || type === 'mm-settings-asking') { clearTimeout(s.closeTimer); settingsSheetKeepWaiting(); dialogGuard.open(s.el); }   // a late answer also clears "isn't answering"   // "Discard changes?", a save running or an inner box closed: the sheet stays, Back works again
+  else if (type === 'mm-settings-kept' || type === 'mm-settings-asking' || type === 'mm-settings-popped') { clearTimeout(s.closeTimer); settingsSheetKeepWaiting(); dialogGuard.open(s.el); }   // a late answer also clears "isn't answering"   // "Discard changes?", a save running or an inner box closed: the sheet stays, Back works again
 }
 function settingsSheetClosed() {
   const s = settingsSheet;
@@ -18116,13 +18117,19 @@ function simpleSettingsOpen() {
   const name = (hubMe && hubMe.user && (hubMe.user.name || hubMe.user.login)) || '';
   d.setAttribute('aria-label', 'Settings');
   d.innerHTML = '<h3>Settings</h3>' +
+    '<h4 class="ss-gh" id="ss-g-you">You and this device</h4>' +
     '<div class="ss-sec"><div class="ss-title">Appearance</div><div class="ss-seg" role="group" aria-label="Appearance">' +
     '<button type="button" data-theme="light">Light</button><button type="button" data-theme="dark">Dark</button><button type="button" data-theme="auto">Match device</button></div><div class="ss-follow" hidden></div></div>' +
     '<div class="ss-sec" id="ss-style-sec"><div class="ss-title">Interface style</div><div id="ss-style"></div></div>' +
     '<div class="ss-sec"><div class="ss-title">Name</div><div class="ss-val"></div></div>' +
-    (hubMe && hubMe.isAdmin === false ? '' : '<button type="button" class="ss-row" id="ss-all"><b>All settings</b><small>Provider keys, web search, voice, backups and the rest</small></button>') +   // admins only, as on the desktop
+    '<h4 class="ss-gh" id="ss-g-voice">Voice and calls</h4>' +
+    (hubMe && hubMe.isAdmin === false ? '<div class="ss-sec ss-rhint">An admin turns voice on and picks the voices. Use the microphone in a chat to talk.</div>' : '<button type="button" class="ss-row" id="ss-voice"><b>Voice settings</b><small>Turn voice on or off, the voices and calls</small></button>') +
+    '<h4 class="ss-gh" id="ss-notes-sec">Notifications</h4>' +
+    '<div class="ss-sec ss-rhint">Each agent’s notifications are on its card: tap the agent’s name in its chat.</div>' +
+    '<h4 class="ss-gh" id="ss-g-account">Account</h4>' +
     '<button type="button" class="ss-row" id="ss-adv"><b>Switch to Advanced</b><small>All tools, agents’ work and settings</small></button>' +
     '<button type="button" class="ss-row" id="ss-out"><b>Sign out</b></button>' +
+    (hubMe && hubMe.isAdmin === false ? '' : '<button type="button" class="ss-row" id="ss-all"><b>More settings</b><small>Provider keys, web search, backups and the rest</small></button>') +   // admins only, as on the desktop; the last button
     '<button type="button" class="ss-close">Close</button>';
   d.querySelector('.ss-val').textContent = name;
   lookPickerPaint(d.querySelector('#ss-style'));   // Interface style sits right after Appearance
@@ -18159,6 +18166,7 @@ function simpleSettingsOpen() {
   $('ss-adv').addEventListener('click', async () => { if (await simplePrefsPost({ uiMode: 'advanced' })) simpleReload(); else toast('Could not switch'); });
   $('ss-out').addEventListener('click', () => { signOut(); });
   $('ss-all')?.addEventListener('click', () => { d.close(); settingsSheetOpen(); });
+  $('ss-voice')?.addEventListener('click', () => { d.close(); settingsSheetOpen(); });   // Settings opens on its list; Voice and calls is one tap away
   d.querySelector('.ss-close').addEventListener('click', () => d.close());
   if (!d.open) d.showModal();
   if (window.hubSettingsHelp) window.hubSettingsHelp.mount(d, 'simple-phone').catch(() => {});   // the ⓘ help, if the records anchor any here
