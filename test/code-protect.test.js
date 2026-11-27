@@ -121,7 +121,7 @@ test('work-practices: the section is the lead\'s, and only while own-code-guidan
   assert.strictEqual(wp.textFor({ agent: { category: 'worker' }, isLead: true, ownCode: true }), '');
   const sdk = fs.readFileSync(path.join(ROOT_DIR, 'lib', 'sdk-chat.js'), 'utf8');
   assert.match(sdk, /ownCode = bc\.isOn\('own-code-guidance'\)[,;]/);
-  assert.match(sdk, /checkIns, suggestions, handOffs, partner, ownCode, parallel \}\)/);
+  assert.match(sdk, /checkIns, suggestions, handOffs, partner, ownCode, parallel, kept \}\)/);
 });
 
 test('behaviour changes: both entries exist (leadMay false / true); new installs get them on, existing ones pending', () => {

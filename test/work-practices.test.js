@@ -81,7 +81,7 @@ test('parallel-work: only the lead gets the create-another-lead line', () => {
 });
 
 test('parallel-work: the hand_off line appears only when hand-offs are on', () => {
-  const re = /Long work still goes to a teammate with hand_off; the agent that leads that work is the one that splits it\./;
+  const re = /Work that will take more than a few minutes still goes to a teammate with hand_off, rather than being split and waited on in your own turn; the teammate that leads it does the splitting\./;
   assert.doesNotMatch(wp.parallelText(), re);
   assert.doesNotMatch(wp.parallelText({ isLead: true }), re);
   assert.match(wp.parallelText({ handOffs: true }), re);
@@ -91,7 +91,7 @@ test('parallel-work: the hand_off line appears only when hand-offs are on', () =
 
 test('parallel-work: the text holds the key rules and names no model', () => {
   const t = wp.parallelText({ isLead: true, handOffs: true });
-  for (const s of ['run them at the same time, without being asked', 'several consult_agent or spawn_workers calls in one message', 'reviews from different vendors side by side', 'Quality comes first', 'one design or writing voice', 'tightly coupled changes to the same files', 'each step depends on the last', 'Say in one line why it stays in one thread', 'Check every part that comes back before you use it', "Don't split trivial jobs"]) assert.ok(t.includes(s), s);
+  for (const s of ['first look for parts that don\'t depend on each other', 'Where running them separately keeps the quality, start them at the same time, without being asked', 'from the models you may use', "reviews from different companies' models side by side", 'several consult_agent or spawn_workers calls in one message', 'Quality comes first', 'one design or writing voice', 'tightly coupled changes to the same files', 'each step depends on the last', 'Say in one line why it stays in one thread', 'Check every part that comes back before you use it', "Don't split trivial jobs"]) assert.ok(t.includes(s), s);
   assert.doesNotMatch(t, /claude|sonnet|opus|haiku|gpt|gemini|fable/i);
   assert.ok(t.startsWith('\n\n## COMPLEX WORK'));
 });
@@ -107,5 +107,31 @@ test('parallel-work: sdk-chat reads the flag on its own (not tied to hand-off tu
   assert.match(sdk, /parallel = bc\.isOn\('parallel-work'\);/);
   assert.doesNotMatch(sdk, /parallel = bc\.isOn\('parallel-work'\) &&/);
   assert.doesNotMatch(sdk, /parallel = [^;\n]*handOffOfTurn/);
-  assert.match(sdk, /textFor\(\{ agent: rec, [^}]*\bparallel \}\)/);
+  assert.match(sdk, /textFor\(\{ agent: rec, [^}]*\bparallel, kept \}\)/);
+});
+
+test('parallel-work: content kept on its own service never points at another company\'s model', () => {
+  const kept = wp.textFor({ agent: primary, isLead: true, handOffs: true, parallel: true, kept: true });
+  assert.match(kept, /Your work stays on your own service: every worker and reviewer runs on your own model, never on another company's\./);
+  assert.match(kept, /several reviewers side by side\./);
+  assert.doesNotMatch(kept, /different companies' models|Pick the model for each part/);
+  const open = wp.textFor({ agent: primary, parallel: true });
+  assert.doesNotMatch(open, /Your work stays on your own service/);
+  const sdk = fs.readFileSync(path.join(ROOT, 'lib', 'sdk-chat.js'), 'utf8');
+  assert.match(sdk, /const kept = parallel && researchKeptOnBox\(rec\);/);
+  assert.match(sdk, /partner, ownCode, parallel, kept \}\)/);
+});
+
+test('parallel-work: the word counts in the manifest and the settings record match the text', () => {
+  const words = (t) => t.split(/\s+/).filter(Boolean).length;
+  const core = words(wp.parallelText({ handOffs: true })), lead = words(wp.parallelText({ isLead: true, handOffs: true }));
+  const near = (n, claim) => Math.abs(n - claim) <= claim * 0.15;
+  assert.ok(near(core, 220) && near(lead, 260), `core ${core}, lead ${lead}`);
+  const m = JSON.parse(fs.readFileSync(path.join(ROOT, 'templates', 'behaviour-changes.json'), 'utf8')).changes.find((c) => c.id === 'parallel-work');
+  assert.match(m.costs, /^About 220 words more in each primary agent's instructions \(about 260 for the lead\)/);
+  assert.strictEqual(m.leadMay, true);
+  const r = JSON.parse(fs.readFileSync(path.join(ROOT, 'templates', 'settings-records.json'), 'utf8')).records.find((x) => x.id === 'OPT-1083');
+  assert.strictEqual(r.storedAs, 'behaviour:parallel-work');
+  assert.match(r.risk, /about 220 words longer/);
+  assert.deepStrictEqual(r.labels, [m.title]);
 });
