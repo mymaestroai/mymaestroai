@@ -256,8 +256,8 @@ test('desktop banner: red fixed bar with the titles and a link that opens Settin
   assert.match(bar.style.cssText, /color:var\(--on-color-text\)/);
   assert.match(bar.style.cssText, /font-weight:(700|bold)/);
   assert.match(bar.innerHTML, /^Health: Disk almost full; No backup &lt;3 days&gt;\. <a /);
-  assert.match(bar.innerHTML, /openSettingsAt\('st-health-section'\)/);
-  assert.match(bar.innerHTML, />Open Settings → Status<\/a>/);
+  assert.match(bar.innerHTML, /openReviewAt\('health'\)/, 'opens Settings at For your review (P4-6a)');
+  assert.match(bar.innerHTML, />Open Settings → For your review<\/a>/);
   assert.ok(r.laid() >= 1, 'banners re-laid out');
 });
 

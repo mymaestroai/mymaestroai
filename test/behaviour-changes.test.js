@@ -307,10 +307,11 @@ test('changes.html: pending first, then decided; each entry has the change id an
   });
 });
 
-test('Settings: the admin quick links carry the Changes link, counted when something is waiting', () => {
+test('Settings: the "Go to" line and its Changes link are gone (P4-3); the pending changes are the new features in For your review', () => {
   const app = read('app.js');
-  assert.match(app, /id="st-quick-links"[^\n]*<a href="\/changes" id="st-changes-link"[^\n]*>Changes to how agents behave<\/a>/);
-  assert.match(app, /fetch\('\/api\/behaviour-changes'\)[\s\S]{0,300}c\.state === 'pending'[\s\S]{0,200}Changes waiting for your decision \(\$\{n\}\)/);
+  assert.ok(!/st-quick-links|st-changes-link|Changes waiting for your decision/.test(app));
+  assert.match(app, /RV\.merge\(RV\.build\(input\), extra\)/);
+  assert.match(read('lib/ui-review.js'), /changes: '\/api\/behaviour-changes'/, 'the review reads the same answer');
 });
 
 // Review r1 (Sonnet F1; GPT-6 B3; GPT-6 B1 / Sentinel F1).

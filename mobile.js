@@ -15737,7 +15737,10 @@ async function reviewRefresh() {
     let dismissed = ''; try { dismissed = localStorage.getItem('hub-security-warn-dismissed') || ''; } catch { /* blocked storage */ }
     input.securityDismissed = dismissed;
     input.now = Date.now();
-    r = RV.build(input);
+    let extra = [];
+    try { extra = await RV.loadSources((u, o) => fetch(u, o)); } catch { extra = []; }   // modules that registered a source (same list as the desktop)
+    if (seq !== reviewSeq) return;
+    r = RV.merge(RV.build(input), extra);
   }
   reviewPaint(r);
 }

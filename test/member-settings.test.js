@@ -68,12 +68,12 @@ test('openMemberSettings runs: html, loaders and no fetch', async () => {
 
 // a stub element that records appendChild and accepts the rest of groupSettings' calls
 function groupHarness(admin) {
-  const log = { appended: [], wrapHtml: '', shown: [], rv: 0 };
-  const stub = (sel) => ({ sel, dataset: {}, hidden: false, classList: { add() {}, remove() {}, toggle() {} }, addEventListener() {}, appendChild(s) { log.appended.push([sel, s.id]); }, querySelector: (q) => stub(q), querySelectorAll: () => [], closest: () => null });
-  const wrap = { ...stub('wrap'), set innerHTML(h) { log.wrapHtml = h; }, get innerHTML() { return log.wrapHtml; }, querySelector: (q) => stub(q), querySelectorAll: () => [] };
+  const log = { appended: [], wrapHtml: '', shown: [], rv: 0, slots: [], events: [] };
+  const stub = (sel) => ({ sel, dataset: {}, hidden: false, classList: { add() {}, remove() {}, toggle() {} }, addEventListener() {}, appendChild(s) { log.appended.push([sel, s.id]); }, insertBefore(s) { log.slots.push([sel, s.id, s.slot]); }, firstChild: null, querySelector: (q) => stub(q), querySelectorAll: () => [], closest: () => null });
+  const wrap = { ...stub('wrap'), set innerHTML(h) { log.wrapHtml = h; }, get innerHTML() { return log.wrapHtml; }, setAttribute(k, v) { if (k === 'data-slot') this.slot = v; }, querySelector: (q) => stub(q), querySelectorAll: () => [] };
   const sections = ['st-looks-section', 'st-notify-section', 'st-chat-section', 'st-voice-section', 'st-account-section'].map((id) => ({ id, classList: { contains: (c) => c === 'st-section' } }));
   const modal = { children: sections, insertBefore() {} };
-  const document = { querySelector: () => modal, createElement: () => wrap, getElementById: () => null };
+  const document = { querySelector: () => modal, createElement: () => wrap, getElementById: () => null, dispatchEvent: (e) => { log.events.push(e.type); } };
   const env = {
     document, window: { hubMe: { isAdmin: admin } }, localStorage: { getItem: () => null },
     STG: G, stSumParts: {}, PROVIDERS: [], esc: (s) => String(s), remoteComputersOk: false,
@@ -99,6 +99,8 @@ test('groupSettings for a member: one group "You and this device", no list of gr
   assert.ok(!m.log.wrapHtml.includes('st-quick-links'), 'the admin links row is not drawn');
   assert.deepStrictEqual([...new Set(m.log.appended.map((a) => a[0]))], ['#st-group-you .st-group-body'], 'every section lands in the one group (the voice section too, not in a Voice group)');
   assert.strictEqual(m.log.appended.length, 5);
+  assert.deepStrictEqual(m.log.slots, [], 'a member has no slots');
+  assert.deepStrictEqual(m.log.events, ['hub-settings-drawn'], 'the event fires for a member too');
   assert.deepStrictEqual(m.log.shown, ['you']);
 });
 
@@ -106,8 +108,11 @@ test('groupSettings for an admin is unchanged: eight groups', () => {
   const a = groupHarness(true);
   a.run({});
   assert.deepStrictEqual([...a.log.wrapHtml.matchAll(/<section class="st-group" id="st-group-([a-z]+)"/g)].map((x) => x[1]), G.GROUPS.map((g) => g.id));
-  assert.ok(a.log.wrapHtml.includes('st-quick-links'));
+  assert.ok(!a.log.wrapHtml.includes('st-quick-links'), 'the Go to line is gone (doors replace it)');
   assert.doesNotMatch(a.log.wrapHtml, /class="st-single"/);
+  // P4-6a: two empty slots, one at the top of For your review and one first in Models and money; then the event modules wait for
+  assert.deepStrictEqual(a.log.slots, [['#st-group-review .st-group-body', 'st-review-top', 'stop-all'], ['#st-group-money .st-group-body', 'st-money-cap', 'monthly-cap']]);
+  assert.deepStrictEqual(a.log.events, ['hub-settings-drawn'], 'fired once, after the slots exist');
 });
 
 test('the phone: a one-group Settings never shows the list page, and Back leaves (closes) at once', () => {
@@ -138,7 +143,7 @@ test('the gear is a member\'s: applyMemberView hides the other admin controls bu
   const doc = { body: { classList: { add() {} } }, getElementById: (id) => mk(id), querySelector: () => null };
   new Function('document', 'window', `${src}; applyMemberView();`)(doc, { hubMe: { isAdmin: false } });
   assert.ok(!hidden.includes('settings-btn'), 'the gear stays');
-  for (const id of ['schedule-btn', 'more-wrap', 'wallet-btn', 'spend-today']) assert.ok(hidden.includes(id), `${id} is still hidden`);
+  for (const id of ['schedule-btn', 'update-chip', 'spend-today']) assert.ok(hidden.includes(id), `${id} is still hidden`);
   assert.match(idx, /<button id="settings-btn" class="header-btn" title="Settings" onclick="openSettings\(\)">/);
 });
 

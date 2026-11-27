@@ -87,13 +87,10 @@ function makeEnv(o = {}) {
   return { api, calls, store, mic, els, appended, doc, stubs, state };
 }
 
-// ── the ⋯ menu ──
-test('⋯ menu: a Voice item right after Recordings and before Wallets, closing the menu and opening Settings at Voice', () => {
-  const rec = html.indexOf('id="recordings-item"'), v = html.indexOf('id="more-voice-item"'), w = html.indexOf('id="wallet-btn"');
-  assert.ok(rec > 0 && v > rec && w > v, 'order: recordings-item, more-voice-item, wallet-btn');
-  const tag = html.slice(html.lastIndexOf('<button', v), html.indexOf('</button>', v) + 9);
-  assert.match(tag, /class="more-item" role="menuitem" id="more-voice-item" title="Voice conversations: on or off, voices and microphone" onclick="closeMoreMenu\(\); openVoiceSettings\(\)">🎙 Voice<\/button>/);
-  assert.ok(html.slice(html.indexOf('<div id="more-menu"'), v).length < 6000, 'inside the ⋯ menu');
+// ── the ⋯ menu is gone (P4-11): Voice is the gear's Voice and calls group ──
+test('no ⋯ menu Voice item any more: the voice entry is openVoiceSettings (Settings at Voice and calls)', () => {
+  assert.ok(!html.includes('id="more-voice-item"') && !html.includes('id="more-menu"'));
+  assert.match(read('app.js'), /async function openVoiceSettings\(\) \{\s*await openSettingsAt\('st-voice-section'\);/);
 });
 
 test('openVoiceSettings: opens the voice section; an admin lands on the On switch, anyone else on the heading', async () => {

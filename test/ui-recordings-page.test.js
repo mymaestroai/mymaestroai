@@ -70,12 +70,14 @@ test('recorded text is never put in with innerHTML: textContent only', () => {
 
 test('the menus show Recordings only when an agent has recordings.canDownload === true', () => {
   const idx = read('index.html'), mob = read('mobile.html'), app = read('app.js'), mjs = read('mobile.js');
-  assert.match(idx, /id="recordings-item" class="more-item" role="menuitem"[^>]*style="display:none"[^>]*location\.href = '\/recordings'/, 'hidden until shown');
+  assert.ok(!idx.includes('id="recordings-item"'), 'the ⋯ menu entry is gone');
+  assert.match(app, /stDoorHtml\('recordings', 'Recordings', '[^']+', "location\.href='\/recordings'", \{ hidden: !recordingsDoorShown\(\) \}\)/, 'a door in Voice and calls, hidden until shown');
+  assert.match(app, /function recordingsDoorShown\(\) \{ return AGENTS\.some\(a => a && a\.recordings && a\.recordings\.canDownload === true\); \}/);
   assert.match(mob, /<a id="menu-recordings" href="\/recordings\?from=mobile" hidden>/);
-  assert.match(app, /getElementById\('recordings-item'\); if \(ri\) ri\.style\.display = AGENTS\.some\(a => a && a\.recordings && a\.recordings\.canDownload === true\) \? '' : 'none'/);
+  assert.match(app, /getElementById\('st-door-recordings'\); if \(ri\) ri\.style\.display = recordingsDoorShown\(\) \? '' : 'none'/);
   assert.match(mjs, /\$\('menu-recordings'\); if \(ri\) ri\.hidden = !agents\.some\(a => a && a\.recordings && a\.recordings\.canDownload === true\)/);
-  // The desktop ⋯ menu entry sits with the other more-menu items; the phone's with the ⋮ menu.
-  assert.ok(idx.indexOf('id="recordings-item"') > idx.indexOf('id="more-menu"') && idx.indexOf('id="recordings-item"') < idx.indexOf('id="restart-hub-btn"'));
+  // The desktop door sits in the voice section (a member's Settings has it too); the phone's entry with the ⋮ menu.
+  assert.ok(app.indexOf("stDoorHtml('recordings'") > app.indexOf('function voiceSettingsHtml(data)') && app.indexOf("stDoorHtml('recordings'") < app.indexOf('function voicePaintSettings('));
   assert.ok(mob.indexOf('id="menu-recordings"') > mob.indexOf('<div id="menu">'));
 });
 

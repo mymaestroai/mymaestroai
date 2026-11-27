@@ -116,9 +116,9 @@ test('desktop: the label sits under the title and opens About; About is the firs
   const label = html.indexOf('id="hub-version"');
   assert.ok(h1 > 0 && label > h1 && label - h1 < 200, 'label right under the title');
   assert.ok(/<button type="button" id="hub-version"[^>]*onclick="openAboutDialog\(\)"/.test(html));
-  const menu = html.slice(html.indexOf('id="more-menu"'));
-  assert.ok(menu.indexOf('class="more-item"') === menu.indexOf('id="about-btn" class="more-item"') + 'id="about-btn" '.length, 'About is the first menu item');
-  assert.ok(menu.includes('openAboutDialog()'));
+  assert.ok(!html.includes('id="more-menu"'), 'the ⋯ menu is gone');
+  const settings = read('app.js');
+  assert.match(settings, /id="st-maestro-section"><h4>This Maestro<\/h4>[\s\S]*?id="about-btn"[^>]*onclick="openAboutDialog\(\)"/, 'About is in Settings, Upkeep, This Maestro');
   const app = read('app.js');
   for (const s of ['async function paintVersionLabel()', 'async function openAboutDialog()', "fetch('/api/version'", 'paintVersionLabel().catch(() => {});', 'versionDetailsText(v, u, navigator.userAgent)']) assert.ok(app.includes(s), s);
   assert.ok(app.includes('Restart pending: code on disk is newer than the running hub'), 'the dot explains itself');

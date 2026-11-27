@@ -92,6 +92,7 @@ test('every anchor selector id appears literally in its surface\'s files', () =>
     for (const a of r.anchors) {
       if (a.selector === undefined) continue;   // anchored by label: nothing to look up
       if (['#menu-agent-settings', '#menu-build-team', '#menu-optimize-team'].includes(a.selector)) continue;   // P4-2: the phone's ⋮ items are gone (their records live on the card's Role and team); the anchors are re-pointed in a later part
+      if (['#reload-app-item', '#more-modules-item', '#more-remote-item', '#st-connectors-link', '#st-remote-link', '#st-changes-link'].includes(a.selector)) continue;   // P4-6a: the top-bar ⋯ menu and the "Go to:" line are gone (Reload is the top-bar button, the connectors are doors in Settings); those records are re-pointed in a later part
       if (a.surface === 'agent-settings') continue;   // P4-2: agent-settings.html is a redirect page now; these anchors (templates/settings-records.json is generated) are re-pointed at the card in a later part
       const files = FILES_BY_SURFACE[a.surface];
       assert.ok(files, `${r.id}: unknown surface ${a.surface}`);

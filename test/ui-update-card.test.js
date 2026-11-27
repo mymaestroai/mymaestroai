@@ -16,7 +16,8 @@ test('desktop: a card with Update now and Later, a chip, escaped notes, for admi
   assert.match(app, /id="uc-now" onclick="updateNow\(\)">Update now</);
   assert.match(app, /id="uc-later" onclick="updateLater\(\)">Later</);
   assert.match(app, NOTES_ESCAPED);
-  assert.match(app, /'more-wrap', 'update-chip'\]/, 'the chip is hidden for members');
+  assert.match(app, /'halt-btn', 'update-chip'\]/, 'the chip is hidden for members');
+  assert.match(app, /id="uc-settings" onclick="openSettingsAt\('st-updates-section'\); return false">Update settings</, 'the card opens Settings at Upkeep');
   assert.match(index, /<span id="update-chip" onclick="showUpdateCard\(\)"/);
   assert.match(index, /#hub-update-card \{/);
 });
@@ -35,7 +36,7 @@ test('desktop: Update now is the Update dialog\'s own update, then its restart; 
 
 test('desktop: Settings → Status → Updates has the switch and Check now', () => {
   // the Self-check section sits between Memory and Updates (Settings → Status → Self-check)
-  assert.deepStrictEqual(require('../lib/ui-settings-groups.js').GROUPS.find((g) => g.id === 'upkeep').sections.slice(1, 5), ['st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section']);
+  assert.deepStrictEqual(require('../lib/ui-settings-groups.js').GROUPS.find((g) => g.id === 'upkeep').sections.slice(2, 6), ['st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section']);
   assert.match(app, /id="st-updates-section"/);
   assert.match(app, /onchange="saveUpdateCheck\(this\.checked\)"/);
   assert.match(app, /fetch\('\/api\/update-check\/settings'/);

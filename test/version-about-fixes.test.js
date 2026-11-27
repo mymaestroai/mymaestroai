@@ -44,7 +44,7 @@ test('desktop About: Tab stays inside, Esc always closes, focus goes back to the
   assert.match(f, /overlay\.__dialogClose = close;/);
   assert.match(f, /overlay\.querySelector\('#about-close'\)\.onclick = \(\) => dialogRequestClose\(overlay\);/);
   assert.ok(!/addEventListener\('keydown'/.test(f), 'no key handler of its own');
-  assert.match(f, /opener\.offsetParent !== null \? opener : document\.getElementById\('more-btn'\)/, 'focus back to the opener, or ⋯ when its menu closed');
+  assert.match(f, /opener\.offsetParent !== null \? opener : document\.getElementById\('settings-btn'\)/, 'focus back to the opener, or the Settings button when the opener has gone');
   assert.match(f, /if \(!overlay\.isConnected\) return;/);
   assert.ok(!/document\.getElementById\('about-(body|update|copy)'\)/.test(f), 'lookups are scoped to this overlay');
   assert.ok(!/overlay\.remove\(\); if \(ub/.test(f), 'Update closes through close()');

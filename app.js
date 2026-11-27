@@ -665,13 +665,9 @@
       const me = window.hubMe;
       if (!me || me.isAdmin) return;
       document.body.classList.add('member-view');
-      // Every item of the ⋯ menu is an admin control, so the whole menu goes (more-wrap), not just its rows.
-      for (const id of ['more-modules-item', 'more-remote-item', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn',
-                        'schedule-btn', 'credit-meter', 'spend-today', 'plan-warn', 'hub-halt-bar', 'halt-btn', 'more-wrap', 'update-chip']) {
+      for (const id of ['schedule-btn', 'credit-meter', 'spend-today', 'plan-warn', 'hub-halt-bar', 'halt-btn', 'update-chip']) {
         const el = document.getElementById(id);
-        if (!el) continue;
-        const row = el.closest('.more-item, .more-row') || el;
-        row.style.display = 'none';
+        if (el) el.style.display = 'none';
       }
       // Tiger Team is admin-only and the Guide describes admin features (gear, New/Clone, Tiger Team modes);
       // members keep the strip for All Agents and Teams (their own agents' teams).
@@ -679,8 +675,6 @@
         const tab = document.querySelector(`.tab[data-tab="${t}"]`);
         if (tab) tab.style.display = 'none';
       }
-      const menu = document.getElementById('more-menu');
-      if (menu) menu.classList.remove('advanced');
     }
     function renderUserChip() {
       const chip = document.getElementById('user-chip');
@@ -705,11 +699,11 @@
       if (note) note.style.display = (me.isAdmin && !me.user.totpEnabled && me.admin2faRequired !== false) ? '' : 'none';
       if (typeof simpleTopSync === 'function') simpleTopSync();   // the Simple view switch (real accounts only)
     }
-    // Remote computers links (⋯ menu, account menu, Settings): only for an admin, and only while the connector is on (its routes answer 200 only then).
+    // Remote computers links (account menu, Settings door): only for an admin, and only while the connector is on (its routes answer 200 only then).
     let remoteComputersOk = null, remoteComputersChecking = false;
     function applyRemoteComputersLinks() {
       const show = !!(window.hubMe && window.hubMe.isAdmin && remoteComputersOk === true);
-      for (const id of ['more-remote-item', 'account-remote', 'st-remote-link']) {
+      for (const id of ['account-remote', 'st-door-remote']) {
         const el = document.getElementById(id);
         if (el) el.style.display = show ? '' : 'none';
       }
@@ -1516,7 +1510,7 @@
     // ── Restart Hub Button ──
     async function restartHub() {
       if (!confirm('Restart My Maestro AI?\n\n• Conversation history is auto-saved (safe)\n• Memory & session notes are saved instantly (safe)\n• Active streaming responses will be flushed to disk\n• Agents mid-response will lose their last ~3 seconds of output')) return;
-      const btn = document.getElementById('restart-hub-btn');
+      const btn = document.getElementById('restart-hub-btn') || document.createElement('button');   // the button lives in Settings → Upkeep
       btn.classList.add('restarting');
       btn.title = 'Restarting...';
       // The boot id proves a restart: the old server answering /api/health again is a FAILED restart, not success.
@@ -3196,10 +3190,10 @@
         <p class="gs-sub">Restarting the hub…</p>`);
 
       // Reuse the restart button's flush + poll path.
-      const rbtn = document.getElementById('restart-hub-btn');
+      const rbtn = document.getElementById('restart-hub-btn') || document.createElement('button');   // the button lives in Settings → Upkeep: a closed dialog has none
       try {
         const pr = await postRestart();
-        if (pr.cancelled || !pr.r.ok) { gsModal(`<h3>⬇ Update from GitHub</h3><div class="gs-ok">✓ Updated to ${esc(r.head)}</div><p class="gs-sub">Not restarted yet. Restart it from the ⋯ menu to finish.</p>`); return; }
+        if (pr.cancelled || !pr.r.ok) { gsModal(`<h3>⬇ Update from GitHub</h3><div class="gs-ok">✓ Updated to ${esc(r.head)}</div><p class="gs-sub">Not restarted yet. Restart it from Settings, under Upkeep, to finish.</p>`); return; }
       } catch (e) { /* expected — server dies */ }
       setTimeout(() => pollForRestart(rbtn), 8000);
     }
@@ -3603,7 +3597,6 @@
       wrap.id = 'st-groups';
       if (stSingle) wrap.className = 'st-single';
       wrap.innerHTML = `<div class="st-phone-head"><button type="button" class="st-phone-back" id="st-phone-back">‹ Settings</button><span class="st-phone-title"></span></div><div class="st-search"${stSingle ? ' hidden' : ''}><input type="search" id="st-search" placeholder="Search settings: privacy, sandbox, push, spend…" autocomplete="off" aria-label="Search settings"><span id="st-search-none" hidden>Nothing matches.</span></div>`
-        + (window.hubMe && window.hubMe.isAdmin ? `<div id="st-quick-links" style="margin:6px 0 10px;font-size:0.85rem">Go to: <a href="/modules" id="st-connectors-link" style="color:var(--accent)">🔌 Data connectors</a><a href="/modules#remote-computers" id="st-remote-link" style="color:var(--accent);margin-left:14px;display:${remoteComputersOk === true ? '' : 'none'}">💻 Remote computers</a><a href="/changes" id="st-changes-link" style="color:var(--accent);margin-left:14px">Changes to how agents behave</a></div>` : '')
         + `<div class="st-panes"><nav class="st-glist" aria-label="Settings groups"${stSingle ? ' hidden' : ''}>`
         + defs.map(g => `<button type="button" class="st-gbtn" id="st-gbtn-${g.id}" data-group="${g.id}"><span class="st-gicon" aria-hidden="true">${esc(g.icon)}</span><span class="st-gtext"><span class="st-group-title">${esc(g.title)}</span><span class="st-gsub">${esc(g.sub)}</span><span class="st-group-sum" id="st-sum-${g.id}"></span></span></button>`).join('')
         + `</nav><div class="st-gpane">`
@@ -3614,6 +3607,10 @@
       for (const s of sections) {   // each section goes where lib/ui-settings-groups says; one it does not know lands in Upkeep > More
         const at = stSingle ? { group: 'you', more: false } : STG.groupOfSection(s.id);
         (at.more ? wrap.querySelector(`#st-group-${at.group} .st-more-body`) : body(at.group)).appendChild(s);
+      }
+      for (const id of ['st-maestro-section', 'st-users-section']) {   // "This Maestro" opens Upkeep and the Users door opens People and safety
+        const s = wrap.querySelector(`#${id}`);
+        if (s && s.parentNode) s.parentNode.insertBefore(s, s.parentNode.firstChild);
       }
       stPlaceRows();
       setTimeout(stPlaceRows, 0);   // the Appearance section paints its "new members" row a tick later
@@ -3659,13 +3656,19 @@
       stSum('notify', 'push', '');
       for (const k of ['search', 'cx']) stSum('tools', k, '');
       for (const k of ['spend', 'caps', 'month']) stSum('money', k, '');
-      // Behaviour changes waiting for the owner (lib/behaviour-changes): the link says how many.
-      const chLink = document.getElementById('st-changes-link');
-      if (chLink) fetch('/api/behaviour-changes').then((r) => r.ok ? r.json() : null).then((j) => {
-        const n = j && Array.isArray(j.changes) ? j.changes.filter((c) => c && c.state === 'pending').length : 0;
-        if (n > 0) chLink.textContent = `Changes waiting for your decision (${n})`;
-      }).catch(() => {});
       reviewMount(wrap);
+      // Empty slots that later modules fill: "Stop all agents" at the very top of For your review, a monthly cap first in Models and money.
+      // A slot draws nothing until a module puts a row in it; modules wait for 'hub-settings-drawn' (fired once per drawing).
+      if (!stSingle) {
+        for (const [gid, id, slot] of [['review', 'st-review-top', 'stop-all'], ['money', 'st-money-cap', 'monthly-cap']]) {
+          const b = body(gid);
+          if (!b || document.getElementById(id)) continue;
+          const d = document.createElement('div');
+          d.id = id; d.setAttribute('data-slot', slot);
+          b.insertBefore(d, b.firstChild);
+        }
+      }
+      document.dispatchEvent(new CustomEvent('hub-settings-drawn'));
     }
 
     // ── For your review (lib/ui-review.js): the problems and the new features waiting, the count on the gear ──
@@ -3684,7 +3687,10 @@
       if (seq !== reviewSeq) return;   // a newer read is on its way
       input.securityDismissed = reviewDismissedKey();
       input.now = Date.now();
-      reviewLast = RV.build(input);
+      let extra = [];
+      try { extra = await RV.loadSources((u, o) => fetch(u, o)); } catch { extra = []; }   // modules that registered a source
+      if (seq !== reviewSeq) return;
+      reviewLast = RV.merge(RV.build(input), extra);
       reviewPaintGear();
       reviewPaintGroup();
     }
@@ -3707,7 +3713,7 @@
       const body = wrap.querySelector('#st-group-review .st-group-body');
       if (!body) return;
       const top = document.createElement('div');
-      top.id = 'st-review-top';
+      top.id = 'st-review-list';   // the problems and features; #st-review-top (above it) is the empty slot for "Stop all agents"
       top.addEventListener('click', (e) => {
         const t = e.target && e.target.closest ? e.target.closest('[data-rv]') : null;
         if (!t) return;
@@ -3733,7 +3739,7 @@
       return p.id.startsWith('sec:') ? securityActionHtml(a) : readinessActionHtml(a);
     }
     function reviewPaintGroup() {
-      const top = document.getElementById('st-review-top');
+      const top = document.getElementById('st-review-list');
       const r = reviewLast;
       stSum('review', 'list', r && RV ? RV.summaryText(r) : 'Checking…', !!r && r.worst === 'critical');
       const sum = document.getElementById('st-sum-review');
@@ -3744,7 +3750,7 @@
       if (r.problems.length) {
         h += `<h4>Problems</h4>` + r.problems.map((p) => `<div class="rv-row rv-${p.level}" data-pid="${esc(p.id)}">
           <div class="rv-main"><div class="rv-title">${esc(p.title)}</div>${p.text ? `<div class="rv-text">${esc(p.text)}</div>` : ''}</div>
-          <div class="rv-acts">${reviewFixHtml(p)} <button type="button" class="st-test-btn" data-rv="details" data-sec="${esc(p.detailsSection)}">Details</button></div></div>`).join('');
+          <div class="rv-acts">${reviewFixHtml(p)}${p.detailsSection ? ` <button type="button" class="st-test-btn" data-rv="details" data-sec="${esc(p.detailsSection)}">Details</button>` : ''}</div></div>`).join('');
       }
       const shown = r.features.map((f) => ({ id: f.id, title: f.title, text: f.text, snoozedUntil: f.snoozedUntil }));
       for (const id of Object.keys(reviewDecided)) if (!shown.some((f) => f.id === id)) shown.push({ id, title: reviewDecided[id].title, text: '' });
@@ -3767,7 +3773,7 @@
     }
     // A choice on a new feature: Turn on / Leave off / Ask me in a week. The row then says what happened in one line.
     async function reviewDecide(id, decision, btn) {
-      const top = document.getElementById('st-review-top');
+      const top = document.getElementById('st-review-list');
       const row = top && [...top.querySelectorAll('.rv-feature')].find((e) => e.dataset.fid === id);
       const say = (t) => { const el = row && row.querySelector('.rv-result'); if (el) el.textContent = t; };
       for (const b of row ? row.querySelectorAll('button') : []) b.disabled = true;
@@ -3913,6 +3919,27 @@
 
     // Links into Settings (the plan badge, the setup and security banners, today's spend) open the group that
     // holds the section, then scroll to it.
+    // A door row (P4-3): an option that lives on another page or panel. id "st-door-<name>"; the button is "st-door-<name>-open".
+    // action is the button's onclick (location.href for a page, the opener for a panel); { hidden: true } draws it out of sight until shown.
+    function stDoorHtml(name, title, text, action, o) {
+      return `<div class="st-door" id="st-door-${name}"${o && o.hidden ? ' style="display:none"' : ''}><div class="st-door-text"><span class="st-door-title">${esc(title)}</span><span class="st-door-sub">${esc(text)}</span></div><button type="button" class="st-test-btn" id="st-door-${name}-open" aria-label="Open ${esc(title)}" onclick="${esc(action)}">Open</button></div>`;
+    }
+    // The setup, health and security banners' links: Settings at For your review, the matching problem scrolled into view
+    // (its Details button opens the full section). kind: 'setup' | 'health' | 'sec'. The list is read a moment after the dialog opens, so wait for it.
+    const REVIEW_KIND = { setup: /^(ready:|provider$|accounts$)/, health: /^health:/, sec: /^sec:/ };
+    async function openReviewAt(kind) {
+      await openSettings();
+      const list = document.getElementById('st-review-list');
+      if (!list) return;
+      stReveal(list);   // the For your review group
+      const re = REVIEW_KIND[kind];
+      for (let i = 0; re && i < 20; i++) {
+        const row = [...list.querySelectorAll('[data-pid]')].find((r) => re.test(r.dataset.pid));
+        if (row) { if (row.scrollIntoView) row.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
+        await new Promise((r) => setTimeout(r, 150));
+      }
+    }
+    function recordingsDoorShown() { return AGENTS.some(a => a && a.recordings && a.recordings.canDownload === true); }
     async function openSettingsAt(sectionId) {
       await openSettings();
       const s = document.getElementById(sectionId);
@@ -4060,6 +4087,14 @@
       </div>`;
         setTimeout(loadComponents, 0);
       }
+      // This Maestro (moved from the top-bar ⋯ menu): the things you do to the hub itself; the buttons call the same functions as before.
+      html += `<div class="st-section" id="st-maestro-section"><h4>This Maestro</h4>
+        <div class="st-hint">Things you do to the hub itself, right now.</div>
+        <div class="st-row"><label style="flex-basis:150px">About</label><button type="button" class="st-test-btn" id="about-btn" title="Version, channel, commit and update status of this hub" onclick="openAboutDialog()">About My Maestro AI</button></div>
+        <div class="st-row"><label style="flex-basis:150px">Dream</label><button type="button" class="st-test-btn" id="dream-btn" title="Agent Dreaming: agents consolidate what they learned into long-term memory" onclick="startDream()">Dream (consolidate learnings)</button></div>
+        <div class="st-row"><label style="flex-basis:150px">Update</label><button type="button" class="st-test-btn" id="git-sync-btn" title="Update from GitHub" onclick="openGitSync()">Update from GitHub</button></div>
+        <div class="st-row"><label style="flex-basis:150px">Restart</label><button type="button" class="st-test-btn" id="restart-hub-btn" title="Restart My Maestro AI" onclick="restartHub()">Restart hub</button></div>
+      </div>`;
       // Updates (lib/update-check): the daily look at GitHub behind the "Update available" card.
       html += `<div class="st-section" id="st-updates-section"><h4>Updates</h4>
         <div class="st-hint">Once a day the hub checks GitHub for a new version on its channel and tells admins: a card here with Update now or Later, a card on the phone, and a notification. It never installs anything by itself.</div>
@@ -4095,16 +4130,19 @@
       // Data connectors (lib/modules): outside services with a guided setup live on their own page.
       // Messaging channels (moved from the ⋯ menu): the existing panel, opened over Settings with its own saves
       html += `<div class="st-section" id="st-comms-section"><h4>Messaging channels</h4>
-        <div class="st-hint">Telegram and other messaging apps: which agents use each channel, who may write to them, and a test message. <button class="st-test-btn" onclick="openCommsPanel()">Open messaging channels</button></div>
+        ${stDoorHtml('comms', 'Messaging channels', 'Telegram and other messaging apps: which agents use each channel, who may write to them, and a test message.', 'openCommsPanel()')}
       </div>`;
-      html += `<div class="st-section" id="st-modules-section"><h4>Data connectors</h4>
-        <div class="st-hint">Connect outside services such as Google Drive and Oura, with a guided setup. <button class="st-test-btn" onclick="location.href='/modules'">Open Data connectors</button></div>
+      html += `<div class="st-section" id="st-modules-section"><h4>Connectors, computers and wallets</h4>
+        ${stDoorHtml('modules', 'Data connectors', 'Outside services such as Google Drive and Oura, each with a guided setup.', "location.href='/modules'")}
+        ${stDoorHtml('remote', 'Remote computers', "Open another computer's desktop from here (shown while the connector is on).", "location.href='/modules#remote-computers'", { hidden: remoteComputersOk !== true })}
+        ${stDoorHtml('wallets', 'Wallets', 'Trading wallets on-chain: balances, sending and keys for your agents.', 'openWalletPanel()')}
       </div>`;
       setTimeout(loadReadiness, 0);
 
       // Local models (lib/local-models): one proxy (llama-swap) for every local engine, configured on its own page.
       html += `<div class="st-section" id="st-local-models-section"><h4>Local models</h4>
-        <div class="st-hint">Run models on this machine through one proxy that starts the right engine (llama.cpp, NInfer or a command of your own), keeps a model loaded while it is in use and swaps when another is asked for. Models appear as <code>local/…</code>. <a href="/local-models" style="color:var(--accent)">Open the Local models page</a> <span id="st-local-models-status" class="st-dim"></span></div>
+        ${stDoorHtml('local-models', 'Local models', 'Run models on this computer through one proxy: add engines and models, see what is loaded. They appear as local/… in the model lists.', "location.href='/local-models'")}
+        <div class="st-hint"><span id="st-local-models-status" class="st-dim"></span></div>
       </div>`;
       setTimeout(async () => { try { const r = await fetch('/api/local-models', { credentials: 'include' }); const j = await r.json(); const el = document.getElementById('st-local-models-status'); if (el && j && j.ok !== false) el.textContent = `· ${j.running ? 'proxy running on ' + j.port : (j.enabled ? 'proxy stopped' : 'off')}, ${(j.models || []).length} model(s)${(j.loaded || []).length ? ', loaded: ' + j.loaded.map(x => x.model || x.id || x).join(', ') : ''}`; if (j && j.ok !== false && j.enabled) stSum('models', 'local', `local models ${j.running ? 'running' : 'stopped'}`); } catch {} }, 0);
 
@@ -4331,6 +4369,9 @@
         <div class="st-row"><label style="flex-basis:150px">Write outside its folders</label>${mpSel('write_outside')}</div>
         <div class="st-row"><label style="flex-basis:150px">Send off this machine</label>${mpSel('send')}</div>
         <div class="st-row"><label style="flex-basis:150px"></label><button class="st-test-btn" onclick="saveMemberPolicy()">Save member defaults</button><span id="st-mp-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span></div>
+      </div>`;
+        html += `<div class="st-section" id="st-users-section"><h4>People</h4>
+        ${stDoorHtml('users', 'Users and invitations', "Accounts, invitations, what each person's agents may do, API tokens.", "location.href='/users'")}
       </div>`;
         html += `<div class="st-section" id="st-sb-section"><h4>Agent sandboxes</h4>
         <div class="st-hint">A sandboxed agent's shell and file tools run in a container of its own that holds only its folders: no hub data, no keys, no other agents. Hub tools (memory, Records, consultations, the policy gate) stay outside. Each agent can be set on its settings page; the defaults below say what "hub default" means. Needs Docker and the sandbox image. Without them, a sandboxed agent gets no shell instead of running on the host.</div>
@@ -4580,7 +4621,7 @@
       const crit = (d && d.items || []).filter(i => i.level === 'critical' && i.id !== 'accounts' && i.id !== 'provider' && !String(i.id || '').startsWith('health-'));   // those two have their own banners; the health banner shows the health- items
       if (!crit.length) { if (bar) bar.remove(); layoutBanners(); return; }
       if (!bar) { bar = document.createElement('div'); bar.id = 'hub-readiness-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9996;background:var(--banner-setup-bg);color:var(--on-color-text);padding:6px 14px;font-weight:600;box-sizing:border-box'; document.body.prepend(bar); }
-      bar.innerHTML = `Setup needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-ready-section'); return false" style="color:var(--on-color-text);text-decoration:underline">Open the setup checklist</a>.`;
+      bar.innerHTML = `Setup needs attention: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openReviewAt('setup'); return false" style="color:var(--on-color-text);text-decoration:underline">Open the setup checklist</a>.`;
       layoutBanners();
     }
     // Banner for admins while the nightly health check has a critical problem (a full disk...). The sign-in items are
@@ -4598,7 +4639,7 @@
       const crit = healthBannerItems(d);
       if (!crit.length) { if (bar) bar.remove(); layoutBanners(); return; }
       if (!bar) { bar = document.createElement('div'); bar.id = 'hub-health-notice'; bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9995;background:var(--banner-critical-bg);color:var(--on-color-text);padding:6px 14px;font-weight:700;box-sizing:border-box'; document.body.prepend(bar); }
-      bar.innerHTML = `Health: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openSettingsAt('st-health-section'); return false" style="color:var(--on-color-text);text-decoration:underline">Open Settings → Status</a>`;
+      bar.innerHTML = `Health: ${crit.map(i => esc(i.title)).join('; ')}. <a href="#" onclick="openReviewAt('health'); return false" style="color:var(--on-color-text);text-decoration:underline">Open Settings → For your review</a>`;
       for (const i of crit) { const b = typeof ClaudeSignin !== 'undefined' && ClaudeSignin.healthButton(i); if (b) bar.appendChild(b); }
       layoutBanners();
     }
@@ -5147,7 +5188,7 @@
       bar.dataset.level = level;
       bar.dataset.key = level === 'warn' ? key : '';
       bar.style.cssText = `position:fixed;top:0;left:0;right:0;z-index:9995;background:${level === 'critical' ? 'var(--banner-critical-bg)' : 'var(--banner-warn-bg)'};color:var(--on-color-text);padding:6px 44px 6px 14px;font-weight:600;box-sizing:border-box`;
-      const link = `<a href="#" onclick="openSettingsAt('st-sec-section'); return false" style="color:var(--on-color-text);text-decoration:underline">Open the security check</a>`;
+      const link = `<a href="#" onclick="openReviewAt('sec'); return false" style="color:var(--on-color-text);text-decoration:underline">Open the security check</a>`;
       bar.innerHTML = level === 'critical'
         ? `Security needs attention: ${crit.map(i => esc(i.title)).join('; ')}. ${link}.`
         : `Security: ${warn.length} warning${warn.length === 1 ? '' : 's'} to review. ${link}.`
@@ -5191,7 +5232,7 @@
         ? `<div class="uc-warn">This hub has ${s.ahead ? `${s.ahead} commit${s.ahead === 1 ? '' : 's'} of its own that GitHub doesn't have` : `${s.dirty} changed file${s.dirty === 1 ? '' : 's'} that ${s.dirty === 1 ? "isn't" : "aren't"} committed`}, so it can't update by itself. Open Details to choose what to do.</div>`
         : busy.length ? `<div class="uc-warn">${busy.length === 1 ? `${esc(agentDisplayName(busy[0]))} is` : `${busy.length} agents are`} working. Updating restarts the hub and cuts ${busy.length === 1 ? 'that reply' : 'those replies'} short.</div>` : '';
       card.innerHTML = `<div class="uc-head">⬇️ ${esc(s.headline || 'An update is ready')}</div>
-        <div class="uc-sub">${have}${s.security ? ' <span class="uc-sec">Includes a security fix.</span>' : ''}</div>
+        <div class="uc-sub">${have}${s.security ? ' <span class="uc-sec">Includes a security fix.</span>' : ''} <a href="#" class="uc-details" id="uc-settings" onclick="openSettingsAt('st-updates-section'); return false">Update settings</a></div>
         ${notes ? `<div class="uc-label">What's new</div><ul class="uc-notes">${notes}</ul>` : ''}${warn}
         <div class="uc-msg" id="uc-msg"></div>
         <div class="uc-actions">${s.blocked
@@ -5223,10 +5264,10 @@
       }
       if (msg) msg.innerHTML = `<div class="uc-ok">✓ Updated. Restarting the hub…</div>`;
       // The Update dialog's own restart: flush the active replies, restart, wait for the new boot.
-      const rbtn = document.getElementById('restart-hub-btn');
+      const rbtn = document.getElementById('restart-hub-btn') || document.createElement('button');   // the button lives in Settings → Upkeep: a closed dialog has none
       let refused = null;
       try { const pr = await postRestart(); if (pr.cancelled) refused = 'cancelled'; else if (!pr.r.ok) refused = pr.r.status; } catch { /* expected: the server goes away */ }
-      if (refused) { if (msg) msg.innerHTML = `<div class="uc-err">Updated, but your Maestro was not restarted (${refused === 'cancelled' ? 'you chose to wait' : 'HTTP ' + refused}). Restart it from the ⋯ menu to finish.</div>`; return; }
+      if (refused) { if (msg) msg.innerHTML = `<div class="uc-err">Updated, but your Maestro was not restarted (${refused === 'cancelled' ? 'you chose to wait' : 'HTTP ' + refused}). Restart it from Settings, under Upkeep, to finish.</div>`; return; }
       setTimeout(() => pollForRestart(rbtn), 8000);
     }
     // Settings → Status → Updates.
@@ -7720,7 +7761,7 @@
     // ── Agent Dreaming ──
     async function startDream() {
       if (!confirm('Start agent dreaming?\n\nAgents will review their recent activity and consolidate learnings into long-term memory.\n\nUses Sonnet 5 — cost ~$0.30 total.')) return;
-      const btn = document.getElementById('dream-btn');
+      const btn = document.getElementById('dream-btn') || document.createElement('button');   // the button lives in Settings → Upkeep
       btn.classList.add('restarting');
 
       let overlay = document.getElementById('dream-overlay');
@@ -7887,43 +7928,9 @@
 
     // v5.1: All requests go through multi-provider LLM routing
 
-    // ── "⋯" header menu ──
-    // Things you do or open right now (About, Reload, Data connectors, Remote computers, Recordings, Wallets, Dream, Update,
-    // Restart) live in a dropdown under #more-btn; what you set is in Settings (gear). The tuning controls wired below sit in
-    // #st-tuning-body, which Settings → Agents → Tuning shows (stTuningMount); notifications for an agent and messaging
-    // channels are in Settings too, and the menu's last line says so.
-    const moreBtn = document.getElementById('more-btn');
-    const moreMenu = document.getElementById('more-menu');
-    const moreWrap = document.getElementById('more-wrap');
-    function isMoreMenuOpen() { return !!(moreMenu && moreMenu.classList.contains('open')); }
-    function openMoreMenu() {
-      if (!moreMenu) return;
-      moreMenu.classList.add('open');
-      moreBtn.setAttribute('aria-expanded', 'true');
-      const first = moreMenu.querySelector('.more-item');
-      if (first) first.focus();
-    }
-    function closeMoreMenu(refocus = false) {
-      if (!moreMenu || !isMoreMenuOpen()) return;
-      moreMenu.classList.remove('open');
-      moreBtn.setAttribute('aria-expanded', 'false');
-      if (refocus) moreBtn.focus();
-    }
-    function toggleMoreMenu() { if (isMoreMenuOpen()) closeMoreMenu(true); else openMoreMenu(); }
-    if (moreMenu) {
-      // Clicking anywhere outside the button + menu closes it.
-      document.addEventListener('click', (e) => {
-        if (isMoreMenuOpen() && moreWrap && !moreWrap.contains(e.target)) closeMoreMenu();
-      });
-      // Escape closes (and hands focus back to the button); Tab moves through the items as usual.
-      document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && isMoreMenuOpen()) { e.preventDefault(); closeMoreMenu(true); }
-      });
-      // Focus leaving the menu (Tab past the last item) closes it too.
-      moreWrap.addEventListener('focusout', (e) => {
-        if (isMoreMenuOpen() && e.relatedTarget && !moreWrap.contains(e.relatedTarget)) closeMoreMenu();
-      });
-    }
+    // The top-bar ⋯ menu is gone (P4-11): About, Dream, Update and Restart are in Settings → Upkeep ("This Maestro"),
+    // Recordings in Voice and calls, Wallets and the connectors in Tools and connections. The tuning controls wired below sit in
+    // #st-tuning-body, which Settings → Agents → Tuning shows (stTuningMount).
 
     // ── Pre-scan toggle ──
     const prescanToggle = document.getElementById('prescan-toggle');
@@ -8538,7 +8545,7 @@
         AGENTS = data.agents || [];
         window.__qsRoster = response.ok && data && Array.isArray(data.agents) ? 'ready' : 'failed';   // ⌘K switcher: "No agents yet." only for a real empty list
         if (typeof voiceWakeRecheck === 'function') voiceWakeRecheck();   // an agent's recognizer can have changed
-        { const ri = document.getElementById('recordings-item'); if (ri) ri.style.display = AGENTS.some(a => a && a.recordings && a.recordings.canDownload === true) ? '' : 'none'; }   // ⋯ menu: Recordings only for a person on at least one agent's download list
+        { const ri = document.getElementById('st-door-recordings'); if (ri) ri.style.display = recordingsDoorShown() ? '' : 'none'; }   // Settings → Voice and calls: the Recordings door only for a person on at least one agent's download list
         for (const a of AGENTS) { if (a.owner) agentOwnerCache.set(a.name, a.owner); else agentOwnerCache.delete(a.name); }
         if (!CYBER_MODELS.size) loadCyberModels();
         // Newer hubs report busy/busySince/activity/pendingQuestion per agent; older ones do not (then no dots are drawn).
@@ -20456,6 +20463,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       h += row('Sound route', voiceRouteBlockHtml());
       h += row('Replies', `<label style="${CHK}"><input type="checkbox" id="st-voice-readaloud" ${p.readAloud ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Read replies aloud</label>`);
       h += row('Fallback', `<label style="${CHK}"><input type="checkbox" id="st-voice-fallback" ${p.deviceVoiceFallback ? 'checked' : ''} onchange="voiceSettingsSavePrefs()"> Use this device's own offline voice when the hub voice is unavailable</label><span id="st-voice-prefs-state" style="font-size:0.8rem;color:var(--text-dim);margin-left:8px"></span>`);
+      if (typeof stDoorHtml === 'function') h += stDoorHtml('recordings', 'Recordings', 'Calls you took part in, saved as audio, to play or download.', "location.href='/recordings'", { hidden: !recordingsDoorShown() });   // the guard: this block also runs on its own in tests
       return h + `</div>`;
     }
     function voicePaintSettings(st) {
@@ -25813,7 +25821,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       return qs;
     }
     function paintReloadBusy(b) {
-      for (const id of ['reload-btn', 'reload-app-item']) {
+      for (const id of ['reload-btn']) {
         const el = document.getElementById(id);
         if (!el) continue;
         el.disabled = !!b;
@@ -26321,7 +26329,7 @@ Do NOT add opinions. Do NOT participate. Just summarize what was said.`;
       overlay._opener = opener;
       const close = () => {
         overlay.remove();
-        const back = opener && opener.isConnected && opener.offsetParent !== null ? opener : document.getElementById('more-btn');   // the ⋯ menu has closed
+        const back = opener && opener.isConnected && opener.offsetParent !== null ? opener : document.getElementById('settings-btn');   // the Settings button, when the opener has gone
         if (back && typeof back.focus === 'function') { try { back.focus({ preventScroll: true }); } catch {} }
       };
       overlay.__dialogClose = close;   // Esc, Tab kept inside, the backdrop: dialogGuard

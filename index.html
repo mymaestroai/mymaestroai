@@ -666,7 +666,7 @@
     .security-modal .sec-secret { word-break: break-all; padding: 6px 8px; background: var(--bg-input); border-radius: 5px; font-size: 0.78rem; user-select: all; }
     .security-modal .sec-codes { margin: 0; padding: 8px 10px; background: var(--bg-input); border-radius: 5px; font-size: 0.85rem; columns: 2; user-select: all; }
     /* Members never see admin surfaces (the server refuses them too) */
-    body.member-view .more-menu .more-advanced, body.member-view #more-badge, body.member-view .agent-btn .actions, body.member-view .agent-build-line, body.member-view .build-team-btn { display: none !important; }
+    body.member-view .agent-btn .actions, body.member-view .agent-build-line, body.member-view .build-team-btn { display: none !important; }
 
     /* (Hardware toggle CSS removed) */
 
@@ -1119,50 +1119,16 @@
     #hub-toast.on { display: block; }
     @keyframes pulse { 0%,100% { opacity: 0.5; } 50% { opacity: 0.8; } }
 
-    /* "⋯" menu: the rarely used header actions and (behind the Advanced flag) the tuning controls */
-    .more-wrap { position: relative; display: flex; align-items: center; }
-    #more-btn { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; line-height: 1; min-width: 32px; justify-content: center; }
-    #more-btn[aria-expanded="true"] { background: var(--line-tint); color: var(--text); }
-    #more-btn .more-badge {
-      display: none; font-size: 0.6rem; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase;
-      padding: 1px 5px; border-radius: 8px; background: var(--more-btn-more-badge-bg); color: var(--accent-hover);
-      border: 1px solid var(--more-btn-more-badge-border); line-height: 1.3;
-    }
-    #more-btn.advanced .more-badge { display: inline-block; }
-    .more-menu {
-      display: none; position: absolute; top: calc(100% + 6px); right: 0; z-index: 1500;
-      min-width: 260px; max-width: calc(100vw - 16px);
-      background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
-      box-shadow: 0 10px 30px var(--shadow-color-pop); padding: 6px;
-      flex-direction: column; gap: 2px; color: var(--text);
-    }
-    .more-menu.open { display: flex; }
-    .more-menu .more-item {
-      display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px;
-      padding: 6px 10px; border: 0; border-radius: 6px; background: transparent;
-      color: var(--text); font: inherit; font-size: 0.82rem; text-align: left; cursor: pointer; white-space: nowrap;
-    }
-    .more-menu .more-item:hover, .more-menu .more-item:focus-visible { background: var(--hover-tint-strong); outline: none; }
-    .more-menu .more-item:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
-    .more-menu .more-item.restarting { opacity: 0.5; pointer-events: none; animation: pulse 1s infinite; }
-    .more-menu .more-item input[type="checkbox"] { width: 14px; height: 14px; min-height: 0; margin: 0; accent-color: var(--accent); cursor: pointer; }
-    .more-menu .more-sep { height: 1px; background: var(--border); margin: 4px 2px; }
-    .more-menu .more-advanced { display: none; flex-direction: column; gap: 2px; }
-    .more-menu.advanced .more-advanced { display: flex; }
-    .more-menu .more-section-title { font-size: 0.65rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; padding: 4px 10px 2px; }
-    .more-menu .more-row { display: flex; flex-direction: column; gap: 3px; min-height: 32px; padding: 5px 10px; border-radius: 6px; }
-    .more-menu .more-row:hover { background: var(--hover-tint); }
-    .more-menu .more-row .toggle-switch { font-size: 0.8rem; }
-    .more-menu .more-row .toggle-label { font-family: inherit; font-size: 0.8rem; color: var(--text); }
-    .more-menu .more-row .max-tokens-control { justify-content: space-between; gap: 10px; font-size: 0.8rem; }
-    .more-menu .more-row .max-tokens-control select { font-size: 0.75rem; padding: 3px 6px; background: var(--bg-input); color: var(--text); }
-    .more-menu .more-row #team-guidance-select { font-size: 0.75rem; opacity: 1; background: var(--bg-input) !important; color: var(--text) !important; border-color: var(--border) !important; padding: 3px 6px !important; }
-    .more-menu .more-row #sdk-workers-select { font-size: 0.75rem; opacity: 1; background: var(--bg-input) !important; color: var(--text) !important; border-color: var(--border) !important; padding: 3px 6px !important; }
+    /* A button in Settings that is working (Restart, Dream): dimmed and pulsing until it finishes */
+    .st-test-btn.restarting { opacity: 0.5; pointer-events: none; animation: pulse 1s infinite; }
+    /* A door row in Settings: the other page's name and what is on the other side, then Open */
+    .st-door { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+    .st-door-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .st-door-title { font-weight: 600; }
+    .st-door-sub { font-size: 0.8rem; color: var(--text-dim); }
     .header-controls .header-btn.reload-btn { display: none; }   /* only in the installed app, which has no browser reload button; the selector also beats the narrow-screen .main-header-top .header-btn rule */
     html.app-installed .header-controls .header-btn.reload-btn { display: inline-flex; align-items: center; justify-content: center; }
-    .reload-btn[aria-busy="true"], #reload-app-item[aria-busy="true"] { opacity: 0.5; pointer-events: none; }
-    .more-menu .more-row .toggle-switch[style] { gap: 10px !important; justify-content: space-between; }
-    .more-menu .more-hint { font-size: 0.7rem; color: var(--text-dim); line-height: 1.3; white-space: normal; }
+    .reload-btn[aria-busy="true"] { opacity: 0.5; pointer-events: none; }
 
     .toggle-switch {
       display: flex; align-items: center; gap: 8px; cursor: pointer;
@@ -2918,7 +2884,7 @@
     .st-group-sum.st-sum-crit { color: var(--error); font-weight: 600; }
     .st-group-sum.st-sum-warn { color: var(--warning); font-weight: 600; }
     /* For your review (lib/ui-review.js): the list at the top of the first group and the count on the gear. Only problems take a warning colour. */
-    #st-review-top h4 { margin: 10px 0 6px; font-size: 0.85rem; color: var(--text-dim); }
+    #st-review-list h4 { margin: 10px 0 6px; font-size: 0.85rem; color: var(--text-dim); }
     .rv-row { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; padding: 8px 10px; margin-bottom: 6px; border: 1px solid var(--border); border-left: 4px solid var(--border-strong); border-radius: 6px; }
     .rv-row.rv-critical { border-left-color: var(--error); }
     .rv-row.rv-warn { border-left-color: var(--warning); }
@@ -3317,8 +3283,6 @@
         display: flex; align-items: center;
       }
       .header-controls { gap: 8px; }
-      .more-menu { right: 0; left: auto; width: min(320px, calc(100vw - 16px)); max-width: calc(100vw - 16px); }
-      .more-menu .more-item { min-height: 36px; white-space: normal; }
       .worker-tabs-bar { margin-top: 4px; padding: 3px 0 4px 0; }
       .worker-tabs-bar .chat-tab { font-size: 0.7rem; padding: 2px 6px; }
       .active-chats {
@@ -3376,7 +3340,6 @@
       .main-header-top { flex-wrap: wrap; row-gap: 6px; min-width: 0; }
       .main-header-top .header-controls { order: 1; flex: 1 0 100%; min-height: 36px; justify-content: flex-end; padding-left: 46px; flex-wrap: nowrap; }
       .main-header-top .header-btn { min-width: 36px; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; }
-      .main-header-top #more-btn { min-width: 36px; }   /* its own rule says 32px */
       .main-header-top .active-chats { order: 2; flex: 1 0 100%; min-width: 0; max-width: 100%; scrollbar-width: none; }
       .main-header-top .active-chats::-webkit-scrollbar { display: none; }
       .main-header-top .active-chats:empty { display: none; }
@@ -3984,23 +3947,6 @@
         <button id="settings-btn" class="header-btn" title="Settings" onclick="openSettings()">⚙️</button>
         <button id="help-btn" class="header-btn" title="Help: how-tos, the phone app, and what to do when something's wrong" aria-label="Help" onclick="openHelpPanel()">?</button>
         <button id="reload-btn" class="header-btn reload-btn" title="Reload the app" aria-label="Reload the app" onclick="reloadApp()">↻</button>
-        <div class="more-wrap" id="more-wrap">
-          <button id="more-btn" class="header-btn" aria-label="More" title="More options" aria-haspopup="menu" aria-expanded="false" aria-controls="more-menu" onclick="toggleMoreMenu()">⋯</button>
-          <div id="more-menu" class="more-menu" role="menu" aria-label="More options">
-            <button id="about-btn" class="more-item" role="menuitem" title="Version, channel, commit and update status of this hub" onclick="closeMoreMenu(); openAboutDialog()">ℹ️ About My Maestro AI</button>
-            <button id="reload-app-item" class="more-item" role="menuitem" title="Reload the app" onclick="closeMoreMenu(); reloadApp()">↻ Reload</button>
-            <button id="more-modules-item" class="more-item" role="menuitem" title="Data connectors" onclick="closeMoreMenu(); location.href = '/modules'">🔌 Data connectors</button>
-            <button id="more-remote-item" class="more-item" role="menuitem" title="Open a computer's desktop" style="display:none" onclick="closeMoreMenu(); location.href = '/modules#remote-computers'">💻 Remote computers</button>
-            <button id="recordings-item" class="more-item" role="menuitem" title="Call recordings you may open" style="display:none" onclick="closeMoreMenu(); location.href = '/recordings'">🎙 Recordings</button>
-            <button class="more-item" role="menuitem" id="more-voice-item" title="Voice conversations: on or off, voices and microphone" onclick="closeMoreMenu(); openVoiceSettings()">🎙 Voice</button>
-            <button id="wallet-btn" class="more-item" role="menuitem" title="Trading wallets (on-chain)" onclick="closeMoreMenu(); openWalletPanel()">👛 Wallets</button>
-            <button id="dream-btn" class="more-item" role="menuitem" title="Agent Dreaming — consolidate learnings" onclick="closeMoreMenu(); startDream()">💤 Dream (consolidate learnings)</button>
-            <button id="git-sync-btn" class="more-item" role="menuitem" title="Update from GitHub" onclick="closeMoreMenu(); openGitSync()">⬇️ Update from GitHub</button>
-            <button id="restart-hub-btn" class="more-item" role="menuitem" title="Restart My Maestro AI" onclick="closeMoreMenu(); restartHub()">🔄 Restart hub</button>
-            <div class="more-sep" role="separator"></div>
-            <button id="more-moved-item" class="more-item more-moved" role="menuitem" title="Open Settings" onclick="closeMoreMenu(); openSettingsAt('st-notify-agent')">Notifications, channels and tuning are now in Settings</button>
-          </div>
-        </div>
       </div>
       </div><!-- /main-header-top -->
       <div class="worker-tabs-bar" id="worker-tabs">

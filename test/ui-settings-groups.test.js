@@ -41,7 +41,7 @@ test('eight groups in the designed order, titles, icons and sub-lines as in word
 test('every section openSettings draws is in exactly one group (or its More); nothing is lost', () => {
   const app = read('app.js');
   const drawn = drawnSections(app);
-  assert.strictEqual(drawn.length, 33, 'all 33 sections carry an id');
+  assert.strictEqual(drawn.length, 35, 'all 35 sections carry an id (33 + This Maestro in Upkeep + the Users door in People)');
   const listed = G.allSectionIds();
   assert.strictEqual(new Set(listed).size, listed.length, 'no section in two groups');
   assert.deepStrictEqual([...listed].sort(), [...drawn].sort(), 'the groups name exactly the sections drawn');
@@ -59,8 +59,8 @@ test('where the sections go (P4-3 mapping)', () => {
   assert.deepStrictEqual(by.money.more, ['st-classifier-section', 'st-tuning-section']);
   assert.deepStrictEqual(by.voice.sections, ['st-voice-section']);
   assert.deepStrictEqual(by.tools.sections, ['st-ws-section', 'st-comms-section', 'st-cx-section', 'st-modules-section']);
-  assert.deepStrictEqual(by.safety.sections, ['st-sb-section', 'st-lb-section', 'st-mp-section', 'st-approvals-section', 'st-security-section']);
-  assert.deepStrictEqual(by.upkeep.sections, ['st-backups-section', 'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section', 'st-emergency-section']);
+  assert.deepStrictEqual(by.safety.sections, ['st-users-section', 'st-sb-section', 'st-lb-section', 'st-mp-section', 'st-approvals-section', 'st-security-section']);
+  assert.deepStrictEqual(by.upkeep.sections, ['st-maestro-section', 'st-backups-section', 'st-memory-section', 'st-selfcheck-section', 'st-components-section', 'st-updates-section', 'st-emergency-section']);
   assert.deepStrictEqual(G.groupOfSection('st-emergency-section'), { group: 'upkeep', more: false }, 'Halt all agents stays in Upkeep (P4-5)');
   assert.deepStrictEqual(G.groupOfSection('st-classifier-section'), { group: 'money', more: true });
 });
@@ -201,7 +201,7 @@ test('the panel is grouped right after it is drawn: a list of eight group button
   assert.match(app, /aria-current/);
   assert.match(app, /e\.key === 'ArrowDown'/);
   assert.ok(app.includes('<button type="button" class="st-more-btn" aria-expanded="false">▸ More</button>') && app.includes('`${open ? \'▾\' : \'▸\'} ${btn.dataset.label'), 'a closed More button, opening in place');
-  assert.ok(app.includes('stQuick') || app.includes('id="st-quick-links"'), 'the Go to links stay for now');
+  assert.ok(!app.includes('stQuick') && !app.includes('id="st-quick-links"'), 'the Go to links are gone: doors replace them (P4-3)');
   // every summary the loaders set lands in a real group
   const homes = new Set(G.GROUPS.map((g) => g.id));
   // the Setup/Security/Health summaries no longer sit on the first group's row (P4-4B: it says "2 problems · 1 new feature"); 'review-checks' has no row
@@ -218,8 +218,11 @@ test('the panel is grouped right after it is drawn: a list of eight group button
 test('links into Settings open the group that holds their section', () => {
   const app = read('app.js');
   assert.match(app, /async function openPlanSettings\(\) \{\s*await openSettingsAt\('st-plan-section'\);/);
-  assert.ok(app.includes(`onclick="openSettingsAt('st-ready-section'); return false"`), 'setup banner');
-  assert.ok(app.includes(`onclick="openSettingsAt('st-sec-section'); return false"`), 'security banner');
+  assert.ok(app.includes(`onclick="openReviewAt('setup'); return false"`), 'setup banner opens For your review');
+  assert.ok(app.includes(`onclick="openReviewAt('health'); return false"`), 'health banner opens For your review');
+  assert.ok(app.includes(`onclick="openReviewAt('sec'); return false"`), 'security banner opens For your review');
+  assert.ok(app.includes(`onclick="openSettingsAt('st-updates-section'); return false">Update settings`), 'the update card opens Upkeep');
+  assert.deepStrictEqual(G.groupOfSection('st-updates-section'), { group: 'upkeep', more: false });
   assert.ok(read('index.html').includes(`id="spend-today" onclick="openSettingsAt('st-spend-section')"`), "today's spend chip");
   assert.deepStrictEqual(G.groupOfSection('st-plan-section'), { group: 'money', more: false });
   assert.deepStrictEqual(G.groupOfSection('st-spend-section'), { group: 'money', more: false });

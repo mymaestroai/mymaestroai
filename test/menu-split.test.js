@@ -10,7 +10,6 @@ const path = require('path');
 
 const read = (f) => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
 const idx = read('index.html'), app = read('app.js'), mhtml = read('mobile.html'), mob = read('mobile.js');
-const moreMenu = (() => { const i = idx.indexOf('<div id="more-menu"'); return idx.slice(i, idx.indexOf('</div>\n        </div>', i)); })();
 function fnSrc(src, head) {
   const at = src.indexOf(head);
   assert.ok(at >= 0, head);
@@ -24,7 +23,7 @@ test('every item that left the ⋯ menu has its one new home in Settings', () =>
   const moved = [
     // [old ⋯ entry, gone from the menu, its home in Settings]
     ['notify-agent-item', /id="st-notify-agent"[^>]*><label for="st-nb-agent">For an agent<\/label><select id="st-nb-agent" onchange="stNotifyAgentPaint\(\)">/],
-    ['comms-btn', /id="st-comms-section"><h4>Messaging channels<\/h4>[\s\S]*?<button class="st-test-btn" onclick="openCommsPanel\(\)">Open messaging channels<\/button>/],
+    ['comms-btn', /id="st-comms-section"><h4>Messaging channels<\/h4>[\s\S]*?stDoorHtml\('comms', 'Messaging channels', '[^']+', 'openCommsPanel\(\)'\)/],
     ['more-advanced', /id="st-tuning-section"><h4>Tuning<\/h4>[\s\S]*?<div id="st-tuning-slot"><\/div>/],
     ['advanced-toggle', /id="st-tuning-section"/],
   ];
@@ -49,12 +48,22 @@ test('every item that left the ⋯ menu has its one new home in Settings', () =>
   assert.match(openSettings, /id="st-nb-agent-box" class="st-nb-box" data-no-dirty/);
 });
 
-test('what stays in the ⋯ menu: things you do or open now, and one line pointing to Settings', () => {
-  const stay = ['about-btn', 'reload-app-item', 'more-modules-item', 'more-remote-item', 'recordings-item', 'wallet-btn', 'dream-btn', 'git-sync-btn', 'restart-hub-btn', 'more-moved-item'];
-  const at = stay.map((id) => moreMenu.indexOf(`id="${id}"`));
-  for (let i = 0; i < stay.length; i++) assert.ok(at[i] >= 0, stay[i]);
-  for (let i = 1; i < at.length; i++) assert.ok(at[i] > at[i - 1], `${stay[i]} after ${stay[i - 1]}`);
-  assert.match(moreMenu, /<button id="more-moved-item" class="more-item more-moved" role="menuitem" title="Open Settings" onclick="closeMoreMenu\(\); openSettingsAt\('st-notify-agent'\)">Notifications, channels and tuning are now in Settings<\/button>/);
+test('the top-bar ⋯ menu is gone (P4-11) and every item has a home in Settings', () => {
+  assert.ok(!idx.includes('id="more-menu"') && !idx.includes('id="more-btn"') && !idx.includes('id="more-wrap"'), 'no ⋯ button or menu in index.html');
+  assert.ok(!/\.more-menu|\.more-wrap|#more-btn/.test(idx), 'its CSS went too');
+  assert.ok(!/toggleMoreMenu|closeMoreMenu|openMoreMenu|isMoreMenuOpen/.test(idx + app), 'its handlers went too');
+  for (const id of ['about-btn', 'reload-app-item', 'more-modules-item', 'more-remote-item', 'recordings-item', 'wallet-btn', 'more-voice-item', 'more-moved-item']) assert.ok(!idx.includes(`id="${id}"`), `${id} is not in index.html`);
+  // Upkeep: a section "This Maestro" with About, Dream, Update and Restart calling the same functions
+  const maestro = openSettings.slice(openSettings.indexOf('id="st-maestro-section"'), openSettings.indexOf('id="st-updates-section"'));
+  for (const [id, fn] of [['about-btn', 'openAboutDialog'], ['dream-btn', 'startDream'], ['git-sync-btn', 'openGitSync'], ['restart-hub-btn', 'restartHub']]) {
+    assert.match(maestro, new RegExp(`id="${id}"[^>]*onclick="${fn}\\(\\)"`), `${id} -> ${fn}()`);
+  }
+  const G = require('../lib/ui-settings-groups.js');
+  assert.deepStrictEqual(G.groupOfSection('st-maestro-section'), { group: 'upkeep', more: false });
+  assert.strictEqual(G.GROUPS.find((g) => g.id === 'upkeep').sections[0], 'st-maestro-section', 'first in Upkeep');
+  // doors: Wallets in Tools and connections, Recordings in Voice and calls
+  assert.match(openSettings, /stDoorHtml\('wallets', 'Wallets', '[^']+', 'openWalletPanel\(\)'\)/);
+  assert.match(app, /stDoorHtml\('recordings', 'Recordings', '[^']+', "location\.href='\/recordings'"/);
   assert.ok(!/hub-advanced|advancedToggle|applyAdvanced/.test(app), 'nothing reads the old switch');
 });
 

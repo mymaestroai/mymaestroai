@@ -65,7 +65,7 @@ test('phone (desktop page, ≤768px): the ☰ has its own row; icons on row 1, o
   assert.match(phone, /\.main-header-top \{ flex-wrap: wrap;[^}]*min-width: 0;/);
   assert.match(phone, /\.main-header-top \.header-controls \{ order: 1; flex: 1 0 100%; min-height: 36px; justify-content: flex-end; padding-left: 46px;/, 'icons clear of the ☰');
   assert.match(phone, /\.main-header-top \.header-btn \{ min-width: 36px; min-height: 36px;/, 'tap targets ≥ 36px');
-  assert.match(phone, /\.main-header-top #more-btn \{ min-width: 36px; \}/, '⋯ too (its own rule is 32px)');
+  assert.doesNotMatch(phone, /#more-btn/, 'no ⋯ button rule any more');
   assert.match(phone, /\.main-header-top \.active-chats \{ order: 2; flex: 1 0 100%; min-width: 0; max-width: 100%;/, 'agents on their own row');
   assert.match(html, /@media \(max-width: 1024px\) \{[\s\S]*?\.active-chats \{\s*display: flex; flex-wrap: nowrap; gap: 6px;\s*overflow-x: auto;/, 'the row scrolls sideways (existing rule)');
 });

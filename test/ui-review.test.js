@@ -191,7 +191,7 @@ function makeDoc(ids) {
 function desktop(over) {
   const app = read('app.js');
   const src = cut(app, '// ── For your review (lib/ui-review.js)', '// The ⓘ help (lib/ui-settings-help.js)');
-  const doc = makeDoc(['settings-btn', 'st-review-top', 'st-sum-review']);
+  const doc = makeDoc(['settings-btn', 'st-review-list', 'st-sum-review']);
   const calls = { fetch: [], sum: [], open: [], reveal: [] };
   const st = { me: { isAdmin: true, user: { id: 'u1' } }, responses: {}, decideStatus: 200, decideBody: null };
   const fetchStub = async (url, opts) => {
@@ -224,7 +224,7 @@ test('page: the review group shows Problems with their fix and Details, and New 
     '/api/behaviour-changes': { changes: [pending('team-guidance', { title: 'Team advice' })] },
   });
   await d.api.reviewRefresh();
-  const h = d.doc.getElementById('st-review-top').innerHTML;
+  const h = d.doc.getElementById('st-review-list').innerHTML;
   assert.match(h, /<h4>Problems<\/h4>/);
   assert.match(h, /rv-row rv-critical/);
   assert.match(h, /rv-row rv-warn/);
@@ -260,7 +260,7 @@ test('page: nothing to review shows one calm line and no heading', async () => {
   const d = desktop();
   d.st.responses = answers();
   await d.api.reviewRefresh();
-  const h = d.doc.getElementById('st-review-top').innerHTML;
+  const h = d.doc.getElementById('st-review-list').innerHTML;
   assert.strictEqual(h, '<div class="rv-calm">Nothing needs your review.</div>');
   assert.deepStrictEqual(d.calls.sum.at(-1), ['review', 'list', 'Nothing waiting', false]);
 });
@@ -270,7 +270,7 @@ test('page: a read that failed shows "Could not check ..." and not the calm line
   d.st.responses = answers({ '/api/backups': undefined });
   delete d.st.responses['/api/backups'];
   await d.api.reviewRefresh();
-  const h = d.doc.getElementById('st-review-top').innerHTML;
+  const h = d.doc.getElementById('st-review-list').innerHTML;
   assert.match(h, /Could not check the backups\./);
   assert.doesNotMatch(h, /Nothing needs your review/);
 });
@@ -280,7 +280,7 @@ test('page: a snoozed feature stays listed with "Asked again on <date>" and is n
   const until = Date.now() + 3 * DAY;
   d.st.responses = answers({ '/api/behaviour-changes': { changes: [pending('a', { snoozedUntil: until })] } });
   await d.api.reviewRefresh();
-  assert.match(d.doc.getElementById('st-review-top').innerHTML, /Asked again on /);
+  assert.match(d.doc.getElementById('st-review-list').innerHTML, /Asked again on /);
   assert.strictEqual(d.doc.getElementById('settings-count'), null, 'no badge: nothing counts');
   assert.strictEqual(d.doc.getElementById('settings-btn').attrs['aria-label'], 'Settings');
 });
@@ -295,7 +295,7 @@ test('page: each button posts its own decision; the row then says what happened 
     await d.api.reviewDecide('team-guidance', decision, null);
     const post = d.calls.fetch.find((c) => c[1] === 'POST');
     assert.deepStrictEqual([post[0], post[2]], ['/api/behaviour-changes/team-guidance', JSON.stringify({ decision })]);
-    const h = d.doc.getElementById('st-review-top').innerHTML;
+    const h = d.doc.getElementById('st-review-list').innerHTML;
     assert.match(h, /Team advice/, 'the row stays with its title');
     assert.ok(h.includes(`>${line}<`), line);
     assert.doesNotMatch(h, /data-decision=/, 'its buttons are gone');
@@ -313,7 +313,7 @@ test('page: "Ask me in a week" posts later, says when it will ask again, and the
   d.st.responses = answers({ '/api/behaviour-changes': { changes: [pending('a', { title: 'Alpha', snoozedUntil: until })] } });
   await d.api.reviewDecide('a', 'later', null);
   assert.strictEqual(d.calls.fetch.find((c) => c[1] === 'POST')[2], JSON.stringify({ decision: 'later' }));
-  const h = d.doc.getElementById('st-review-top').innerHTML;
+  const h = d.doc.getElementById('st-review-list').innerHTML;
   assert.ok(h.includes(escHtml(R.decisionLine('later', until))), "We'll ask again on <date>.");
   assert.doesNotMatch(h, /data-decision=/);
   await new Promise((r) => setImmediate(r));
@@ -331,10 +331,10 @@ test('page: a refused choice (not their own browser session) shows the server\'s
   const say = makeEl(d.doc, '');
   row.querySelector = (s) => (s === '.rv-result' ? say : null);
   row.querySelectorAll = () => [];
-  d.doc.byId['st-review-top'].querySelectorAll = () => [row];
+  d.doc.byId['st-review-list'].querySelectorAll = () => [row];
   await d.api.reviewDecide('a', 'on', null);
   assert.strictEqual(say.textContent, 'Sign in with an admin account in your browser to decide this.');
-  assert.match(d.doc.getElementById('st-review-top').innerHTML, /data-decision="on"/, 'nothing was repainted');
+  assert.match(d.doc.getElementById('st-review-list').innerHTML, /data-decision="on"/, 'nothing was repainted');
 });
 
 test('page: Details reveals the full section through stReveal', () => {
@@ -465,4 +465,46 @@ test('phone: wiring (load, settings_changed, 5 minutes) and the CSS only uses va
   assert.doesNotMatch(css, /#[0-9a-fA-F]{3,8}\b|rgba?\(|font-family/);
   for (const v of ['--error', '--on-error', '--warning', '--on-warning', '--accent', '--on-accent']) assert.match(html, new RegExp(`${v}:`), `${v} is defined on the phone page`);
   assert.match(html, /<button id="menu-settings">/);
+});
+
+// ── P4-6a: sources other modules plug in ──
+test('register(source): merged into build()\'s result; a failing source adds a "Could not check" note; unregister puts it back', async () => {
+  assert.strictEqual(typeof R.register, 'function');
+  const base = R.build({ readiness: { items: [item('w', 'warn')] }, now: NOW });
+  assert.strictEqual(R.register({ id: 'cap-source', load: async () => ({ problems: [{ id: 'cap:1', level: 'critical', title: 'Cap reached', text: 'Spending stopped.' }], features: [{ id: 'cap-new', title: 'Monthly cap', text: 'A cap you can set.' }] }) }), true);
+  assert.strictEqual(R.register({ id: 'bad-source', load: async () => { throw new Error('down'); } }), true);
+  assert.strictEqual(R.register({ id: '', load: async () => ({}) }), false, 'a source needs an id');
+  assert.strictEqual(R.register({ id: 'no-load' }), false, 'and a load function');
+  try {
+    const answers = await R.loadSources(async () => ({ ok: true }));
+    assert.deepStrictEqual(answers.map((a) => [a.id, !!a.failed]), [['cap-source', false], ['bad-source', true]]);
+    const r = R.merge(base, answers);
+    assert.deepStrictEqual(r.problems.map((p) => p.id), ['cap:1', 'ready:w'], 'critical first');
+    assert.deepStrictEqual(r.features.map((f) => [f.id, f.snoozed]), [['cap-new', false]]);
+    assert.deepStrictEqual([r.count, r.worst], [3, 'critical']);
+    assert.deepStrictEqual(r.notes, ['Could not check bad-source.']);
+    assert.deepStrictEqual([base.count, base.notes], [1, []], 'build()\'s own result is not changed');
+    assert.strictEqual(R.merge(base, []).count, 1, 'no sources: build() as it is');
+  } finally { R.unregister('cap-source'); R.unregister('bad-source'); }
+  assert.deepStrictEqual(await R.loadSources(async () => ({})), []);
+});
+
+test('page: reviewRefresh asks the registered sources and shows what they say; it is exported on window.hubReview', async () => {
+  assert.match(read('lib/ui-review.js'), /root\.hubReview = api/);
+  const d = desktop();
+  d.st.responses = answers();
+  R.register({ id: 'stop-source', load: async (f) => { assert.strictEqual(typeof f, 'function'); return { problems: [{ id: 'stop:1', level: 'warn', title: 'Agents are stopped', text: 'Press Resume.' }] }; } });
+  try {
+    await d.api.reviewRefresh();
+    assert.deepStrictEqual(d.api.last.problems.map((p) => p.id), ['stop:1']);
+    assert.strictEqual(d.api.last.count, 1);
+    d.api.reviewPaintGroup();
+    const h = d.doc.getElementById('st-review-list').innerHTML;
+    assert.match(h, /Agents are stopped/);
+    assert.doesNotMatch(h, /data-rv="details"/, 'a problem without a section has no Details button');
+    R.register({ id: 'stop-source', load: async () => { throw new Error('x'); } });
+    await d.api.reviewRefresh();
+    assert.deepStrictEqual(d.api.last.notes, ['Could not check stop-source.']);
+  } finally { R.unregister('stop-source'); }
+  assert.match(read('mobile.js'), /RV\.merge\(RV\.build\(input\), extra\)/, 'the phone count reads the same sources');
 });
