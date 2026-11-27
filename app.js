@@ -62,6 +62,7 @@
         }
         else if (r.status === 401) {
           try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }   // no session: the last person's theme must not stay on this browser
+          try { if (window.HubLooks) window.HubLooks.forgetBanner(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
           // No session. On a hub with no accounts at all (updated from before multi-user) /api/me is refused too, so
           // ask the public auth status; hubMe stays undefined so the rest of the page behaves as before.
           try { const a = await (await fetch('/api/auth/status', { credentials: 'include' })).json(); window.hubNoAccounts = a && a.setupNeeded === true && !a.signedIn; } catch {}
@@ -716,6 +717,7 @@
     async function signOut() {
       try { qsForgetRecents(null); } catch { /* the ⌘K switcher's recents leave with the person */ }
       try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
+      try { if (window.HubLooks) window.HubLooks.forgetBanner(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
       try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }); } catch (e) { /* go to login anyway */ }
       location.href = '/login';
     }
@@ -3658,6 +3660,20 @@
           b.insertBefore(d, spend || b.firstChild);
         }
       }
+      // Startup values (.env) and the memory limit for background work (lib/ui-settings-expert.js): admins only. The memory limit sits in
+      // Upkeep itself; the startup values join Expert values under Upkeep's More. Rows arrive after a fetch; the ⓘ help watches for them.
+      if (!stSingle && isHubAdmin() && window.hubSettingsExpert) {
+        const X = window.hubSettingsExpert;
+        const fj = async (u, o) => { const r = await fetch(u, { credentials: 'include', ...(o || {}) }); const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || 'Request failed'); return j; };
+        const up = body('upkeep'), exp = document.getElementById('st-expert-section');
+        // what the module draws is what the hub holds: the dialog guard takes it as saved (Close asks only about real edits)
+        const guardLoaded = (h, fields) => { try { dialogGuard.markLoaded(Array.isArray(fields) ? fields : [...h.querySelectorAll('input, select, textarea')]); } catch { /* no guard */ } };   // fields: what the module drew from the hub (a draft in another row is left out)
+        const recsP = window.hubSettingsHelp ? window.hubSettingsHelp.load(false) : fj('/api/settings-records');
+        recsP.then((recs) => {
+          if (up && !document.getElementById('st-mem-limit')) { const d = document.createElement('div'); d.id = 'st-mem-limit'; d.className = 'st-section'; up.insertBefore(d, up.firstChild); X.renderMemoryLimit(d, { records: recs, fetchJson: fj, toast: hubToast, loaded: guardLoaded }).catch(() => {}); }
+          if (exp && !document.getElementById('st-env-values')) { const d = document.createElement('div'); d.id = 'st-env-values'; exp.appendChild(d); X.render(d, { records: recs, fetchJson: fj, toast: hubToast, loaded: guardLoaded }).catch(() => {}); }
+        }).catch(() => {});
+      }
       document.dispatchEvent(new CustomEvent('hub-settings-drawn'));
     }
 
@@ -3678,6 +3694,10 @@
         return;
       }
       if (!RV || !me || !me.isAdmin || !me.user) { reviewLast = null; reviewPaintGear(); reviewPaintBanner(); return; }
+      // Saved startup values that wait for a restart (lib/ui-settings-expert.js): a source of its own, registered once and only for admins (the route is theirs)
+      if (window.hubSettingsExpert && !reviewRefresh.expertOn) {
+        reviewRefresh.expertOn = window.hubSettingsExpert.registerReview(RV, async (u, o) => { const r = await fetch(u, { credentials: 'include', ...(o || {}) }); const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || 'Request failed'); return j; });
+      }
       let input;
       try { input = await RV.load((u, o) => fetch(u, o), { accounts: { none: me.accounts === false } }); } catch { return; }
       if (seq !== reviewSeq) return;   // a newer read is on its way
@@ -3695,10 +3715,31 @@
     }
     // The ONE banner (P4-15): only while something is in "Fix now". "<first item> (and N more to fix). Open For your review" and that item's fix button.
     // It replaces the no-login, no-provider, setup, health, security and restore banners; pressing the link opens Settings at Fix now.
+    // The banner's place is held from the first paint by html.mm-rvb-cached (lib/ui-looks.js). Only a SETTLED call (the page knows who is signed in,
+    // or there are no accounts) may drop that placeholder or touch the remembered banner; an earlier call changes nothing.
+    let reviewBannerSettled = false;
+    const reviewBannerBackstop = setTimeout(() => {   // backstop: nothing settled in 15 s, so the placeholder must not stay
+      if (reviewBannerSettled) return;
+      document.documentElement.classList.remove('mm-rvb-cached');
+      try { if (window.HubLooks) window.HubLooks.rememberBanner(window.HubLooks.storageOf(window), 'desk', null); } catch { /* blocked storage */ }   // no answer: the next load reserves nothing
+      layoutBanners();
+    }, 15000);
+    if (reviewBannerBackstop && reviewBannerBackstop.unref) reviewBannerBackstop.unref();   // (Node tests only)
     function reviewPaintBanner() {
+      if (!(window.hubMe || window.hubNoAccounts === true)) return;   // not settled: leave the placeholder and the cache
+      reviewBannerSettled = true;
+      const html = document.documentElement;
+      const hadCached = html.classList.contains('mm-rvb-cached');
       let bar = document.getElementById('hub-review-banner');
       const b = reviewLast && RV ? RV.bannerOf(reviewLast) : null;
-      if (!b) { if (bar) { bar.remove(); layoutBanners(); } return; }
+      const store = () => { try { return window.HubLooks ? window.HubLooks.storageOf(window) : null; } catch { return null; } };
+      if (!b) {
+        html.classList.remove('mm-rvb-cached');
+        if (bar) bar.remove();
+        layoutBanners();
+        try { if (window.HubLooks) window.HubLooks.rememberBanner(store(), 'desk', null); } catch { /* blocked storage */ }
+        return;
+      }
       if (!bar) {
         bar = document.createElement('div');
         bar.id = 'hub-review-banner';
@@ -3710,6 +3751,11 @@
           if (e.preventDefault) e.preventDefault();
           openReviewAt('fix');
         });
+        if (!hadCached) {   // newly appearing: it slides in once (the page moves with it)
+          bar.classList.add('mm-rvb-enter');
+          html.classList.add('mm-rvb-anim');
+          setTimeout(() => { bar.classList.remove('mm-rvb-enter'); html.classList.remove('mm-rvb-anim'); }, 300);
+        }
         document.body.prepend(bar);
       }
       const first = reviewLast.fix[0];
@@ -3718,7 +3764,9 @@
         const btn = typeof ClaudeSignin !== 'undefined' ? ClaudeSignin.healthButton({ action: 'claude-signin' }) : null;
         if (btn) s.appendChild(btn);
       }
+      html.classList.remove('mm-rvb-cached');   // same task as the insert: the real bar replaces the placeholder
       layoutBanners();
+      try { if (window.HubLooks && bar.offsetHeight > 0) window.HubLooks.rememberBanner(store(), 'desk', { h: bar.offsetHeight }); } catch { /* blocked storage */ }
     }
     // "Ask me in a week" on a suggestion: kept in this browser (localStorage 'hub-review-snooze'), so a calm install can clear its suggestions. No request is made.
     function reviewSnooze(id) {
@@ -4166,6 +4214,13 @@
       </div>`;
         setTimeout(loadComponents, 0);
       }
+      // New agent (first in Agents and teams): the one way to make an agent on the phone; admins only. The same dialog as the sidebar's "+ New Agent".
+      if (isHubAdmin()) {
+        html += `<div class="st-section" id="st-newagent-section"><h4>New agent</h4>
+        <div class="st-row"><label style="flex-basis:150px">New agent</label><button type="button" class="st-test-btn" id="st-new-agent-btn" onclick="openCreateAgent(null)">Make a new agent…</button></div>
+        <div class="st-hint">Give it a name and describe its role; your Maestro sets it up. You can also ask your lead to make one for you.</div>
+      </div>`;
+      }
       // This Maestro (moved from the top-bar ⋯ menu): the things you do to the hub itself; the buttons call the same functions as before.
       html += `<div class="st-section" id="st-maestro-section"><h4>This Maestro</h4>
         <div class="st-hint">Things you do to the hub itself, right now.</div>
@@ -4362,6 +4417,17 @@
         <div class="st-hint" style="margin-left:0">How each agent turn is put together: pre-scan, lazy tools, SDK workers, team guidance and terse replies. Each one is saved as you change it. Reply length and message history sent are Max tokens and Context msgs under Agent Defaults.</div>
         <div id="st-tuning-slot"></div>
       </div>`;
+
+      // Expert values (phase 5c): one row for each settings.json number or switch that only a file edit changed. Admins only. Most rows are
+      // drawn here and moved to their own group by stPlaceRows (lib/ui-settings-groups P5C); each box saves on its own.
+      if (isHubAdmin()) {
+        p5cData = data;
+        html += `<div class="st-section" id="st-expert-section"><h4>Expert values</h4>
+        <div class="st-hint" style="margin-left:0">Numbers that tune your Maestro. Each box saves as you change it; Use default puts the built-in value back.</div>
+        ${STG.P5C.map(r => p5cRowHtml(r, data)).join('')}
+      </div>`;
+        setTimeout(p5cAfterDraw, 0);
+      }
 
       html += `<div class="st-section" id="st-emergency-section"><h4>Emergency</h4>
         <div class="st-row">
@@ -4732,7 +4798,12 @@
         n.style.top = `${top}px`;
         top += n.offsetHeight || 0;
       }
-      document.documentElement.style.setProperty('--banner-h', `${top}px`);
+      // the review banner's reserved place (html.mm-rvb-cached, lib/ui-looks.js) stays in the stack until the real bar takes it;
+      // the real bar's height is remembered again after every layout (a resize or a late font changes it)
+      const html = document.documentElement, rb = document.getElementById('hub-review-banner');
+      if (!rb && html.classList.contains('mm-rvb-cached')) top += parseFloat(html.style.getPropertyValue('--mm-rvb-h')) || 0;
+      if (rb && rb.offsetHeight > 0) { try { if (window.HubLooks) window.HubLooks.rememberBanner(window.HubLooks.storageOf(window), 'desk', { h: rb.offsetHeight }); } catch { /* blocked storage */ } }
+      html.style.setProperty('--banner-h', `${top}px`);
     }
     // A notice's height can change after it is drawn (the web font arrives, the window narrows and its text wraps).
     window.addEventListener('resize', () => layoutBanners());
@@ -6024,6 +6095,153 @@
         if (sel && researchReminderSaved !== null) sel.value = researchReminderSaved;
         hubToast('Could not save: ' + e.message);
       }
+    }
+
+    // ── Expert values (phase 5c, admins only): one row for each settings.json key that only a file edit changed ──
+    // The table is STG.P5C (lib/ui-settings-groups.js: name, OPT id, kind, limits, default words, home). Each row is drawn in the Expert values
+    // section and moved to its group by stPlaceRows. Each box saves on its own through POST /api/settings; a failure shows the hub's words and puts
+    // the box back. "Use default" sends null for every row so the hub removes the key and falls back to its built-in value.
+    let p5cData = {};     // the settings the dialog was drawn with, kept current as rows save
+    function p5cRowHtml(r, data) {
+      const di = `id="${r.id}" data-setting="${r.opt}"`;
+      const on = `onchange="p5cSave('${r.opt}')"`;
+      const dim = 'font-size:0.8rem;color:var(--text-dim)';
+      let ctl = '';
+      if (r.kind === 'num') ctl = `<input type="number" ${di} min="${r.min}" max="${r.max}" step="${r.step}" placeholder="default" style="max-width:110px" ${on}> <span style="${dim}">${esc(r.unit)}</span>`;
+      else if (r.kind === 'text') ctl = `<input type="text" ${di} placeholder="${esc(r.placeholder)}" autocomplete="off" spellcheck="false" style="max-width:110px" ${on}>`;
+      else if (r.kind === 'url') ctl = `<input type="text" ${di} placeholder="${esc(r.dflt)}" autocomplete="off" spellcheck="false" style="flex:1 1 220px;min-width:0;max-width:340px" ${on}>`;
+      else if (r.kind === 'switch') ctl = `<label class="toggle-switch"><input type="checkbox" ${di} ${on}><span class="toggle-slider"></span></label>`;
+      else if (r.kind === 'select') ctl = `<select ${di} ${on}>${r.options.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select>`;
+      else if (r.kind === 'model') ctl = `<select ${di} ${on}><option value="">Default</option></select>`;
+      else if (r.kind === 'models') ctl = `<div ${di} style="flex:1 1 260px;max-height:170px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:4px 8px">Loading…</div>`;
+      else if (r.kind === 'map') ctl = `<span ${di} style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${r.families.map(([f, l]) => `<span style="${dim}">${esc(l)} to <select id="${r.id}-${f}" ${on}><option value="">Default</option></select></span>`).join('')}</span>`;
+      else if (r.kind === 'images') ctl = `<span ${di} style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${r.providers.map(([p, l]) => ['fast', 'best'].map(w => `<span style="${dim}">${esc(l)} ${w === 'fast' ? 'quick' : 'best'} <input type="text" id="${r.id}-${p}-${w}" placeholder="built-in" autocomplete="off" spellcheck="false" style="max-width:150px" ${on}></span>`).join('')).join('')}</span>`;
+      else if (r.kind === 'cache') ctl = `<span ${di} style="display:flex;gap:10px;align-items:center"><label class="toggle-switch"><input type="checkbox" id="${r.id}-on" ${on}><span class="toggle-slider"></span></label><select id="${r.id}-ttl" ${on}><option value="5m">Remember for 5 minutes</option><option value="1h">Remember for 1 hour</option></select></span>`;
+      return `<div class="st-row" style="flex-wrap:wrap;row-gap:6px"><label style="flex-basis:150px"${r.kind === 'num' || r.kind === 'text' || r.kind === 'url' || r.kind === 'select' || r.kind === 'model' ? ` for="${r.id}"` : ''}>${esc(r.name)}</label>${ctl}
+        <span id="${r.id}-def" style="${dim}">${esc(STG.p5cDefaultText(r))}</span><button type="button" class="st-test-btn" id="${r.id}-use" hidden onclick="p5cSave('${r.opt}', true)">Use default</button></div>
+        <div class="st-hint">${esc(r.hint)}</div>`;
+    }
+    // Put one row's controls in line with the saved settings (and show Default: ... only while the key is unset).
+    function p5cPaint(r) {
+      const el = document.getElementById(r.id);
+      if (!el) return;
+      const set = STG.p5cValue(r, p5cData);
+      const byId = (s) => document.getElementById(`${r.id}-${s}`);
+      // every control of the row is put back, a focused one too; only this row (STG.p5cFill, lib/ui-settings-groups.js)
+      STG.p5cFill(r, set, (s) => (s ? byId(s) : el), (v) => new Option(v, v));
+      const unset = set === undefined;
+      const def = byId('def'), use = byId('use');
+      if (def) def.hidden = !unset;
+      if (use) use.hidden = unset;
+      // an address with no override of its own shows the one in effect (an address from the startup environment wins over the built-in one)
+      if (r.kind === 'url' && unset) {
+        const p = (p5cData && p5cData.providers && p5cData.providers[r.provider]) || {};
+        const effective = p.url || p.fallbackUrl || r.dflt;
+        el.placeholder = effective;
+        if (def) def.textContent = effective === r.dflt ? STG.p5cDefaultText(r) : `In use now: ${effective} (from the startup settings).`;
+      }
+      // the row now shows what the hub holds: its fields are saved as far as the dialog guard is concerned (Close and leaving the
+      // page ask only about real unsaved edits); only this row, so an edit in another row stays an edit
+      try {
+        const fields = [];
+        for (const c of [el, ...document.querySelectorAll(`[id^="${r.id}-"]`)]) {
+          if (/^(INPUT|SELECT|TEXTAREA)$/.test(c.tagName)) fields.push(c);
+          else fields.push(...c.querySelectorAll('input, select, textarea'));   // the member models list: a box of checkboxes
+        }
+        dialogGuard.markLoaded(fields);
+      } catch { /* no guard on this page */ }
+    }
+    // The model lists (member models, plan switch targets) come from the list the pickers use; then every row is painted.
+    // Every row is painted first from the saved settings (a row that does not need the model list never waits for it); when the list
+    // arrives only the controls that list models get their options, each keeping its selection; a control with focus and the picture
+    // model name boxes are left alone.
+    async function p5cAfterDraw() {
+      for (const r of STG.P5C) p5cPaint(r);
+      let ml = null;
+      try { ml = await modelList(); } catch { /* the rows still show what is saved */ }
+      const models = ml && ml.models || [], billing = ml && ml.billing || {};
+      const name = (m) => (billing[m] && billing[m].short) || billingDisplay(m, true);
+      const focused = (el) => !!el && (el === document.activeElement || el.contains(document.activeElement));
+      for (const r of STG.P5C) {
+        const el = document.getElementById(r.id);
+        if (!el) continue;
+        if (r.kind === 'model' || r.kind === 'map') STG.p5cFillModels(r, models, (s) => document.getElementById(s ? `${r.id}-${s}` : r.id), { name, mkOption: (v, t) => new Option(t, v), focused });
+        else if (r.kind === 'models' && !focused(el)) {
+          const have = el.querySelector('input[type=checkbox]');
+          const set = STG.p5cValue(r, p5cData);
+          const ticked = new Set(have ? [...el.querySelectorAll('input:checked')].map(c => c.value) : (Array.isArray(set) ? set : []));
+          const all = [...new Set([...models, ...ticked])];
+          el.innerHTML = all.length ? all.map(m => `<label style="display:flex;gap:6px;align-items:center;font-size:0.85rem"><input type="checkbox" value="${esc(m)}"${ticked.has(m) ? ' checked' : ''} onchange="p5cSave('${r.opt}')"> ${esc(name(m))}</label>`).join('') : '<span style="font-size:0.8rem;color:var(--text-dim)">No models yet.</span>';
+          try { dialogGuard.markLoaded([...el.querySelectorAll('input')]); } catch { /* no guard on this page */ }   // drawn by the page (each tick saves on its own)
+        }
+      }
+    }
+    function p5cRaw(r) {
+      const el = document.getElementById(r.id);
+      const byId = (s) => document.getElementById(`${r.id}-${s}`);
+      if (r.kind === 'switch') return el.checked;
+      if (r.kind === 'models') return [...el.querySelectorAll('input:checked')].map(c => c.value);
+      if (r.kind === 'map') return Object.fromEntries(r.families.map(([f]) => [f, byId(f).value]));
+      if (r.kind === 'images') return Object.fromEntries(r.providers.map(([p]) => [p, { fast: byId(`${p}-fast`).value, best: byId(`${p}-best`).value }]));
+      if (r.kind === 'cache') return { enabled: byId('on').checked, ttl: byId('ttl').value };
+      return el.value;
+    }
+    // While a row saves, all its controls are disabled (aria-busy) and a second save of it is ignored; when it ends the row is painted from
+    // the stored copy and enabled again, and focus returns to the control that had it. Only that row is touched.
+    const p5cFocus = {};   // row id -> the control that had focus when the row was locked
+    function p5cLock(r, on) {
+      const el = document.getElementById(r.id);
+      if (!el) return;
+      const all = new Set([el, ...document.querySelectorAll(`[id^="${r.id}-"]`), ...el.querySelectorAll('input,select')]);
+      const ctls = [...all].filter(c => /^(INPUT|SELECT|BUTTON)$/.test(c.tagName));
+      if (on) {
+        const a = document.activeElement;
+        p5cFocus[r.id] = a && ctls.includes(a) ? a : null;
+        el.setAttribute('aria-busy', 'true');
+        for (const c of ctls) { c.disabled = true; c.setAttribute('aria-busy', 'true'); }
+        const row = el.closest('.st-row');
+        if (row) {
+          row.classList.add('st-p5c-saving');
+          if (!document.getElementById(`${r.id}-saving`)) { const h = document.createElement('span'); h.id = `${r.id}-saving`; h.className = 'st-p5c-saving-hint'; h.setAttribute('role', 'status'); h.textContent = 'Saving…'; row.appendChild(h); }
+        }
+      } else {
+        el.removeAttribute('aria-busy');
+        for (const c of ctls) { c.disabled = false; c.removeAttribute('aria-busy'); }
+        const row = el.closest('.st-row');
+        if (row) row.classList.remove('st-p5c-saving');
+        const hint = document.getElementById(`${r.id}-saving`); if (hint) hint.remove();
+        const remembered = p5cFocus[r.id]; delete p5cFocus[r.id];
+        // focus goes back only when the person has not moved on; a hidden remembered control (Use default after a reset) gives it to the row's main control
+        const shown = (c) => c.isConnected && !c.disabled && !c.closest('[hidden]');
+        const main = (el.tagName === 'INPUT' || el.tagName === 'SELECT') ? el : ctls.find(c => c.tagName !== 'BUTTON');
+        const f = STG.p5cRefocus({ active: document.activeElement, body: document.body, remembered, ctls, main, shown });
+        if (f) f.focus();
+      }
+    }
+    // The saving (one save per row, no queue, read back after a save, the address question) lives in STG.p5cSaver
+    // (lib/ui-settings-groups.js) so a test can run it; here only the page's hands are given to it.
+    let p5cRunner = null;
+    function p5cSave(opt, useDefault = false) {
+      if (!p5cRunner) p5cRunner = STG.p5cSaver({
+        data: () => p5cData,
+        readRaw: p5cRaw,
+        lock: p5cLock,
+        post: async (body) => {
+          const resp = await stSaveFetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) });
+          if (resp.ok) return { ok: true };
+          const d = await resp.json().catch(() => ({}));
+          return { ok: false, error: d.error || `HTTP ${resp.status}` };
+        },
+        // 8 seconds at most: a read-back that does not come counts as a failed one (the saver says "saved, but ... could not be asked to confirm it")
+        readBack: async () => {
+          const ac = new AbortController(), timer = setTimeout(() => ac.abort(), 8000);
+          try { const r = await fetch('/api/settings', { credentials: 'include', signal: ac.signal }); return r.ok ? await r.json() : null; } finally { clearTimeout(timer); }
+        },
+        confirm: (t) => confirm(t),
+        toast: (t) => hubToast(t),
+        paint: p5cPaint,
+      });
+      return p5cRunner.save(opt, useDefault);
     }
 
     // Thorough deep research (admin): settings.researchThorough { maxSources, readersAtOnce, reviewRounds, timeLimitMinutes, pdf,
@@ -8307,7 +8525,7 @@
     }
 
     function openCreateAgent(event) {
-      event.stopPropagation();
+      if (event && event.stopPropagation) event.stopPropagation();   // Settings' "Make a new agent…" button passes none
       const overlay = document.createElement('div');
       overlay.className = 'question-overlay';
       overlay.innerHTML = `
@@ -8430,7 +8648,9 @@
         if (result.success) {
           input.closest('.question-overlay').remove();
           await loadAgents();
-          openAgentSettings(name, new Event('click'));
+          // in the phone's Settings frame the card would navigate the frame away from Settings: stay, and tell the page behind it
+          if (document.documentElement.classList.contains('mm-settings-only')) settingsOnlyPost('mm-agents-changed');
+          else openAgentSettings(name, new Event('click'));
         } else {
           errEl.textContent = result.error || 'Create failed';
           errEl.style.display = 'block';
@@ -10726,7 +10946,7 @@
       if (!chat) return;
       if (reset) {
         const panel0 = document.getElementById(`messages-${chatId}`);
-        if (panel0) panel0.textContent = '';
+        if (panel0) { try { window.FeatureCard && FeatureCard.historyDrawing(panel0); } catch { /* cosmetic */ } panel0.textContent = ''; }
         chat.messages = chat.messages.slice(0, 1);   // the system message stays
         chat.inProgress = null;
         // Live turns drawn in the cleared panel are gone from it: the status check below follows a running one again.
@@ -10825,6 +11045,7 @@
       }
       soloEarlierPaint(chatId);
       busyCardRefresh(chat);
+      try { window.FeatureCard && FeatureCard.historyDrawn(document.getElementById(`messages-${chatId}`)); } catch { /* cosmetic */ }   // the history is drawn: the new-features card may attach now
       if (reset) pollAgentStatus();   // a turn that was running before the redraw is followed again
     }
 
@@ -14628,7 +14849,7 @@
 
       const msgId = chat.lastMsgId || appendMessage(chatId, 'assistant', '⏳ Thinking...');
       chat.lastMsgId = msgId;
-      try { window.FeatureCard && FeatureCard.messageArrived(document.getElementById(`messages-${chatId}`)); } catch { /* cosmetic */ }   // a live send: the person's message and the reply bubble just landed
+      try { window.FeatureCard && FeatureCard.messageArrived(document.getElementById(`messages-${chatId}`), { own: true }); } catch { /* cosmetic */ }   // a live send: the person's message and the reply bubble just landed
       const sentAt = Date.now();   // after a lost connection, only history the hub saved since then can be this message
 
       try {

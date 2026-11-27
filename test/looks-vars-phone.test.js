@@ -16,7 +16,7 @@ const css = styleBlocks.join('\n');
 
 // Not defined anywhere on purpose: both are always used with a fallback
 // (var(--bg-secondary, var(--bg-input)) and var(--text-secondary, inherit)); a look may define them.
-const RUNTIME_VARS = new Set(['--bg-secondary', '--text-secondary']);
+const RUNTIME_VARS = new Set(['--bg-secondary', '--text-secondary', '--mm-rvb-text', '--mm-rvb-h']);   // the last two: set on <html> by lib/ui-looks.js applyCachedBanner
 
 function rootDefinitions() {
   const m = css.match(/:root\s*\{([\s\S]*?)\n\s{4}\}/);

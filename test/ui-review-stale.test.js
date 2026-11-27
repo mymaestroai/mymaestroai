@@ -180,6 +180,7 @@ function makeDoc(ids) {
   doc.createElement = () => makeEl(doc, '');
   doc.addEventListener = () => {};
   doc.body = { prepend: (el) => { if (el.id) doc.byId[el.id] = el; } };
+  doc.documentElement = { classList: { _s: new Set(), add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); }, contains(c) { return this._s.has(c); } } };
   for (const id of ids) doc.byId[id] = makeEl(doc, id);
   return doc;
 }

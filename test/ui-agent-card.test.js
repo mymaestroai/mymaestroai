@@ -796,7 +796,7 @@ test('the card CSS uses only variables the pages define and no colour literal; t
     assert.match(h, /\.ac-shield \{ margin-left: 6px; color: var\(--accent\); \}/);
     assert.ok(!/orange/i.test(rules.join('\n')));
   }
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v104'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v109'/);
 });
 
 test('the script has no invisible characters, sets text with textContent only and names no real person', () => {

@@ -6,6 +6,12 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
+// Leftover processes (scripts/stray-processes.js); without the module (a copy of this file alone) the check is skipped.
+let strayMod = null;
+try { strayMod = require(path.join(__dirname, 'stray-processes.js')); } catch { /* no check */ }
+// This process's own start time (clock ticks since boot): anything a test starts begins after it.
+const RUN_START = strayMod && process.platform === 'linux' ? strayMod.startTime('/proc', process.pid) : null;
 const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -45,7 +51,8 @@ for (const file of chosen) {
 }
 const run = chosen.length ? [...new Set(chosen)] : files;
 // No test reaches this computer's real Docker (its agent boxes): DOCKER_HOST points nowhere unless a run opts in.
-const env = { ...process.env, DOCKER_HOST: process.env.MM_TEST_REAL_DOCKER === '1' ? (process.env.DOCKER_HOST || '') : 'unix:///nonexistent/docker-for-tests.sock' };
+const RUN_ID = crypto.randomBytes(8).toString('hex');
+const env = { ...process.env, HUB_TEST_RUN: RUN_ID, DOCKER_HOST: process.env.MM_TEST_REAL_DOCKER === '1' ? (process.env.DOCKER_HOST || '') : 'unix:///nonexistent/docker-for-tests.sock' };
 // No test reaches this computer's real Claude folder, npm folders or npm's update check: they point at fresh folders under a temp root
 // made for this run. Only the policy-test batch below retains the operator’s HOME.
 const sealRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mm-tests-'));
@@ -81,11 +88,34 @@ for (const [selected, home] of [
     { cwd: ROOT, stdio: 'inherit', env: { ...env, HOME: home } });
   if (result.error || result.status !== 0) r = result;
 }
+// Every process of this run carries HUB_TEST_RUN=<id>; one still running after the tests ended is named and stopped (scanning
+// again after each pass, since a stray can start another as it stops). It never changes the exit code. Returns the number of
+// marked processes still running at the end.
+function stopStrays() {
+  if (!strayMod || process.platform !== 'linux' || !fs.existsSync('/proc/self/stat')) return 0;
+  const { found, stopped, survivors } = strayMod.stopMarked(RUN_ID);
+  for (const p of found) console.error(`run-tests: a test left process ${p.pid} (${p.name}) running`);
+  if (stopped > 0) console.error(`run-tests: ${stopped} stray process(es) stopped`);
+  for (const p of survivors) console.error(`run-tests: process ${p.pid} (${p.name}) is still running after the stop`);
+  // A leftover started with an environment of its own carries no marker: name those still in this run's cgroup (never stopped).
+  for (const p of strayMod.findInCgroup(RUN_START, { exclude: found.map((s) => s.pid) })) {
+    console.error(`run-tests: a process started during the tests is still running (not stopped): ${p.pid} (${p.name})`);
+  }
+  return survivors.length;
+}
+// Strays first: one still running could touch data/ (and be reported by the guard) or use the private folders until it stops.
+let survivors = 0;
+try { survivors = stopStrays(); } catch { /* best effort: never changes the result */ }
 let refused = [];
 try { refused = fs.readFileSync(env.MM_DATA_GUARD_REPORT, 'utf8').split('\n').filter(Boolean); }
 catch (e) { refused = [JSON.stringify({ test: 'run-tests', path: `the guard's report could not be read (${e.code || e.message})`, how: 'report' })]; }
-try { fs.rmSync(reportDir, { recursive: true, force: true }); } catch { /* best effort */ }
-try { fs.rmSync(sealRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+if (survivors > 0) {
+  // something of the run still runs: keep its private folders rather than pull them from under it
+  console.error(`run-tests: kept ${sealRoot} and ${reportDir} because ${survivors} process(es) of the run are still running`);
+} else {
+  try { fs.rmSync(reportDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  try { fs.rmSync(sealRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+}
 if (refused.length) {
   const seen = new Set();
   console.error(`\nrun-tests: FAILED, tests touched the install's own data/ (${refused.length} refused):`);

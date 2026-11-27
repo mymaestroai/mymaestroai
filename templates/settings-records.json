@@ -1,5 +1,5 @@
 {
-  "version": "7bbb3f6afb02fa6b87970a81ee7edab7132fccd4",
+  "version": "c64a05ef85559ef605d1936fe2eabad17743b697",
   "records": [
     {
       "id": "OPT-0001",
@@ -13818,12 +13818,12 @@
         "timeout"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > People and safety > More",
       "storedAs": "settings.approvalTimeoutMinutes",
       "anchors": [
         {
           "surface": "desktop",
-          "label": "Approval wait time"
+          "selector": "#st-p5c-approvalTimeoutMinutes"
         }
       ],
       "facts": "settings.approvalTimeoutMinutes, default 60, anything not a positive number falls back to 60 lib/sdk-chat.js:92; DEFAULT_TIMEOUT_MS 60 min lib/approvals.js:11. Shown in text at app.js:3924; no input exists on this screen (people ask Maestro). Read per request, so no restart after a change."
@@ -15963,12 +15963,12 @@
         "passphrase timeout"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "settings.connectorsUnlockMinutes",
       "anchors": [
         {
           "surface": "desktop",
-          "label": "connectorsUnlockMinutes"
+          "selector": "#st-p5c-connectorsUnlockMinutes"
         }
       ],
       "facts": "lib/connectors.js:920 setting is read once when the connector manager is first created (default 240; value must be a number of 0 or more); the audit said no restart, but nothing in the code re-reads it on change, so a restart is likely needed; not confirmed"
@@ -17465,7 +17465,7 @@
       "kind": "setting",
       "name": "Agents start quick research themselves",
       "labels": [
-        "Quick research for an agent's own work"
+        "Agents may start quick research for their own work, and a question nobody answers starts a quick run"
       ],
       "what": "Lets agents start a quick research run for their own work, and starts one if you do not answer a research question in time. Each run shows a notice with the question, the reason and the cost, and buttons to Stop or Make it thorough.",
       "when": "Turn it on for agents that do long tasks on their own. It does nothing unless Agents offer deep research is on.",
@@ -27818,9 +27818,14 @@
         "prompt before action"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "settings.confirmTools",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-confirmTools"
+        }
+      ],
       "facts": "Global flag settings.confirmTools, loaded at start-up lib/settings.js:293, toggled through POST /api/confirm_tools_toggle which saves at once server.js:2181-2190, reported in server.js:146. The per-agent tool policy replaced the old all-or-nothing confirm prompt lib/sdk-chat.js:3765, so the real effect of this flag today is NOT CONFIRMED. Default off (unset = false). No restart: changed at runtime."
     },
     {
@@ -27848,9 +27853,14 @@
         "port"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Models and money > More",
       "storedAs": "settings.providers.ninfer.url",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-providers-ninfer-url"
+        }
+      ],
       "facts": "default http://127.0.0.1:8080/v1 lib/settings.js:29; a saved providers.ninfer.url wins over the default lib/settings.js:120-124; no screen control (NO-CONTROL): people ask Maestro; changes to the stored settings are reloaded without a restart lib/settings.js:100-104 (whether open connections follow is not confirmed)."
     },
     {
@@ -27867,7 +27877,7 @@
       "restart": false,
       "danger": "everyday",
       "who": "admin",
-      "lead": "apply",
+      "lead": "confirm",
       "words": [
         "local",
         "url",
@@ -27878,7 +27888,7 @@
         "port"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Models and money > More",
       "storedAs": "settings.providers.local.url",
       "anchors": [],
       "facts": "code wins: the address always comes from the local-models port, so providers.local.url is not read lib/settings.js:122 and lib/local-models.js:213; audit default 18080 matches the default port lib/local-models.js:33; no screen control."
@@ -27897,7 +27907,7 @@
       "restart": false,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "anthropic",
         "claude",
@@ -27909,9 +27919,14 @@
         "proxy"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Models and money > More",
       "storedAs": "settings.providers.anthropic.url",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-providers-anthropic-url"
+        }
+      ],
       "facts": "default lib/settings.js:18; saved value wins lib/settings.js:123-125; no screen control; reload of settings file lib/settings.js:100-104; effect on a running connection not confirmed."
     },
     {
@@ -27928,7 +27943,7 @@
       "restart": false,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "openai",
         "gpt",
@@ -27940,9 +27955,14 @@
         "proxy"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Models and money > More",
       "storedAs": "settings.providers.openai.url",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-providers-openai-url"
+        }
+      ],
       "facts": "default lib/settings.js:19; saved value wins lib/settings.js:123-125; no screen control; reload lib/settings.js:100-104; effect on a running connection not confirmed."
     },
     {
@@ -27959,7 +27979,7 @@
       "restart": false,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "google",
         "gemini",
@@ -27971,9 +27991,14 @@
         "proxy"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Models and money > More",
       "storedAs": "settings.providers.google.url",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-providers-google-url"
+        }
+      ],
       "facts": "default lib/settings.js:20; saved value wins lib/settings.js:123-125; no screen control; reload lib/settings.js:100-104; whether the picture tool uses this address is not confirmed."
     },
     {
@@ -27990,7 +28015,7 @@
       "restart": false,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "perplexity",
         "url",
@@ -28002,9 +28027,14 @@
         "search"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Models and money > More",
       "storedAs": "settings.providers.perplexity.url",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-providers-perplexity-url"
+        }
+      ],
       "facts": "default lib/settings.js:21; saved value wins lib/settings.js:123-125; no screen control; reload lib/settings.js:100-104; whether web search reads this address is not confirmed."
     },
     {
@@ -28021,7 +28051,7 @@
       "restart": false,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "openrouter",
         "url",
@@ -28033,9 +28063,14 @@
         "many models"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Models and money > More",
       "storedAs": "settings.providers.openrouter.url",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-providers-openrouter-url"
+        }
+      ],
       "facts": "default lib/settings.js:23; saved value wins lib/settings.js:123-125; no screen control; reload lib/settings.js:100-104; effect on a running connection not confirmed."
     },
     {
@@ -28052,7 +28087,7 @@
       "restart": false,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "elevenlabs",
         "voice",
@@ -28064,9 +28099,14 @@
         "gateway"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Models and money > More",
       "storedAs": "settings.providers.elevenlabs.url",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-providers-elevenlabs-url"
+        }
+      ],
       "facts": "default lib/settings.js:25; saved value wins lib/settings.js:123-125; no screen control; reload lib/settings.js:100-104; whether the voice code reads this address is not confirmed."
     },
     {
@@ -28174,7 +28214,7 @@
       "labels": [
         "updateCheck.hours"
       ],
-      "what": "How many hours pass between looks for a new version. It is not on the settings screen: ask Maestro to change it for you.",
+      "what": "How many hours pass between looks for a new version.",
       "when": "Change it only if once a day is too often or too rare.",
       "risk": "Very short intervals make needless requests to GitHub. A startup-file value overrides it, and 0 there turns checking off.",
       "def": "Default: every 24 hours. We recommend leaving it.",
@@ -28193,9 +28233,14 @@
         "GitHub"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "settings.updateCheck.hours",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-updateCheck-hours"
+        }
+      ],
       "facts": "settings.updateCheck.hours default 24; HUB_UPDATE_CHECK_HOURS in the startup file overrides it and 0 turns the schedule off lib/update-check.js:9, 54-56, 158; the timer is set when the schedule starts (at start, and when the switch is flipped) lib/update-check.js:154-161, server.js:3421-3423, so a change most likely needs a restart (not tested). No screen control today: people ask Maestro."
     },
     {
@@ -28251,9 +28296,14 @@
         "plan used"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Models and money > More",
       "storedAs": "settings.planFallback.at",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-planFallback-at"
+        }
+      ],
       "facts": "default 90; accepted above 0 and up to 100, otherwise 90 lib/plan-usage.js:28, 245-248; read each turn, no restart lib/plan-usage.js:245; no screen control (ask Maestro); the fallback itself defaults to off lib/plan-usage.js:28."
     },
     {
@@ -28284,9 +28334,14 @@
         "haiku"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Models and money > More",
       "storedAs": "settings.planFallback.map",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-planFallback-map"
+        }
+      ],
       "facts": "default map fable -> claude-sdk/claude-opus-5-5, opus -> claude-sdk/claude-sonnet-5-5, sonnet -> claude-sdk/claude-haiku-5-5 lib/plan-usage.js:28; your entries are merged over the defaults lib/plan-usage.js:245; read each turn; no screen control."
     },
     {
@@ -28341,9 +28396,14 @@
         "dictation quality"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Voice and calls > More",
       "storedAs": "settings.voice.sttModel",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-voice-sttModel"
+        }
+      ],
       "facts": "Choices tiny.en or small.en, empty means automatic lib/voice/manifest.js:137, 148, 155; automatic picks small.en with 8+ cores and enough free memory, else tiny.en lib/voice/engine.js:165; a chosen one is stored and installed lib/voice/engine.js:286-287. Whether a change needs a restart is not confirmed (install runs at once; no restart code found). Local, no per-use cost. No control on the page today."
     },
     {
@@ -28373,9 +28433,14 @@
         "fresh start"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep",
       "storedAs": "settings.compactionMode",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-compactionMode"
+        }
+      ],
       "facts": "modes off / dry / on / assisted, default dry; local models default assisted; an agent's own choice wins lib/compaction.js:10-12, 25-26, 132; read each time, no restart; no screen control for the hub-wide value (the per-agent one is on the agent)."
     },
     {
@@ -28404,9 +28469,14 @@
         "limit"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep",
       "storedAs": "settings.compactionAt",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-compactionAt"
+        }
+      ],
       "facts": "default 0.75, local models 0.6; must be above 0 and below 1 or the default is used lib/compaction.js:18, 134; an agent's own value wins; read each time; no screen control."
     },
     {
@@ -28434,9 +28504,14 @@
         "size cap"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "settings.filesMaxUploadMb",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-filesMaxUploadMb"
+        }
+      ],
       "facts": "lib/files.js:15 DEFAULT_MAX_UPLOAD 512 MB; server.js:348, 1064 read from settings.filesMaxUploadMb at each upload (minimum 1, empty or invalid falls back to 512), so no restart"
     },
     {
@@ -28464,9 +28539,14 @@
         "bundle"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "settings.filesZipMaxMb",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-filesZipMaxMb"
+        }
+      ],
       "facts": "lib/files.js:86-90 default 2048, never above 3900 (ZIP_MAX_BYTES_CAP lib/files.js:53); an empty or bad value falls back to 2048; read per download per the zipLimits helper (not traced to the caller)"
     },
     {
@@ -28494,9 +28574,14 @@
         "bundle"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "settings.filesZipMaxFiles",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-filesZipMaxFiles"
+        }
+      ],
       "facts": "lib/files.js:86-90 default 2000; cap 65535 (ZIP_MAX_FILES_CAP lib/files.js:53); read per download per the zipLimits helper (not traced to the caller)"
     },
     {
@@ -28525,9 +28610,14 @@
         "hub-wide"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "settings.recordsMaxBytes",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-recordsMaxBytes"
+        }
+      ],
       "facts": "settings.recordsMaxBytes, default 256 KB: lib/records.js:9-10, 17, 28-33; read each turn, no restart. No control on screen today (audit flag NO-CONTROL). The agent's own limit (OPT-0081) overrides it."
     },
     {
@@ -28539,7 +28629,7 @@
       ],
       "what": "How much memory each agent's closed box may use.",
       "when": "Raise it if an agent's work fails because it runs out of memory. Lower it on a small computer running many agents.",
-      "risk": "Too high can slow your whole computer. Too low makes jobs fail. It is not on the settings screen: ask Maestro to change it for you.",
+      "risk": "Too high can slow your whole computer. Too low makes jobs fail.",
       "def": "Default: 4g (4 gigabytes). We recommend leaving it.",
       "restart": false,
       "danger": "dangerous",
@@ -28556,9 +28646,14 @@
         "4g"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > People and safety > More",
       "storedAs": "settings.sandboxMemory",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-sandboxMemory"
+        }
+      ],
       "facts": "lib/sandbox.js:209 --memory = settings.sandboxMemory or '4g'; read each time a box is made via getSetting (lib/settings.js:249), file re-read when changed lib/settings.js:65-69; the value is part of the hash that marks a box current lib/sandbox.js:214, 265-270, so an older box is treated as out of date and replaced when next used; the exact moment it is replaced was not traced (not confirmed). No settings-screen control found."
     },
     {
@@ -28570,7 +28665,7 @@
       ],
       "what": "How many processor cores each agent's closed box may use.",
       "when": "Raise it for heavy work such as big builds. Lower it if agents slow down the rest of your computer.",
-      "risk": "Too high can slow your whole computer. It is not on the settings screen: ask Maestro to change it for you.",
+      "risk": "Too high can slow your whole computer.",
       "def": "Default: 2. We recommend leaving it.",
       "restart": false,
       "danger": "dangerous",
@@ -28588,9 +28683,14 @@
         "speed"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > People and safety > More",
       "storedAs": "settings.sandboxCpus",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-sandboxCpus"
+        }
+      ],
       "facts": "lib/sandbox.js:209 --cpus = settings.sandboxCpus or '2'; same live read and stale-box handling as sandboxMemory (lib/sandbox.js:214, 265-270); replacement timing not confirmed."
     },
     {
@@ -28602,7 +28702,7 @@
       ],
       "what": "How long your Maestro waits while moving an agent's home folder into its closed box before it gives up.",
       "when": "Raise it if a move fails with a time-out message, usually because the agent has a very large home folder.",
-      "risk": "A longer wait can leave the agent unavailable for longer. It is not on the settings screen: ask Maestro to change it for you.",
+      "risk": "A longer wait can leave the agent unavailable for longer.",
       "def": "Default: 10 minutes. We recommend leaving it unless a move times out.",
       "restart": false,
       "danger": "dangerous",
@@ -28619,9 +28719,14 @@
         "copy"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > People and safety > More",
       "storedAs": "settings.sandboxHomeMoveMinutes",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-sandboxHomeMoveMinutes"
+        }
+      ],
       "facts": "lib/sandbox-homes.js:152 moveTimeoutMs = settings.sandboxHomeMoveMinutes if a positive number, else 10; the time-out hint names this setting lib/sandbox-homes.js:327; read live."
     },
     {
@@ -28650,9 +28755,14 @@
         "assistant"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > People and safety > More",
       "storedAs": "settings.memberDefaultModel",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-memberDefaultModel"
+        }
+      ],
       "facts": "default claude-sdk/claude-sonnet-5-5 lib/teams.js:213; read only when a member's default assistant is created lib/teams.js:205-213, so existing agents keep their model; no screen control."
     },
     {
@@ -28681,9 +28791,14 @@
         "limit members"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > People and safety > More",
       "storedAs": "settings.memberModels",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-memberModels"
+        }
+      ],
       "facts": "empty or unset means members may choose none lib/member-models.js:3-5, 8-11 (the audit's 'unknown' default is resolved here); used when a member changes their agent's model and for their temporary workers lib/member-models.js:2-4, 21-26; read each time; no screen control."
     },
     {
@@ -28712,9 +28827,14 @@
         "context"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "settings.hubBrief",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-hubBrief"
+        }
+      ],
       "facts": "CODE DISAGREES WITH AUDIT: settings.hubBrief is not free text; it is an on/off switch, on unless === false: lib/hub-map.js:8, 418-424; the brief is built from live facts, only for the lead agent, not temporary workers lib/hub-map.js:1-16. Read on each turn so no restart. Not a control on screen today (audit flag NO-CONTROL)."
     },
     {
@@ -28744,9 +28864,14 @@
         "dall-e"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Tools and connections > More",
       "storedAs": "settings.imageProvider",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-imageProvider"
+        }
+      ],
       "facts": "default google lib/image-gen.js:43; only google and openai lib/image-gen.js:12-14; needs that service's key or the tool refuses lib/image-gen.js:47-49; an agent's request for a provider overrides it; read per picture, no restart; no screen control."
     },
     {
@@ -28776,9 +28901,14 @@
         "gpt image"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Tools and connections > More",
       "storedAs": "settings.imageModels",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-imageModels"
+        }
+      ],
       "facts": "built-in defaults per provider lib/image-gen.js:12-15; your values are merged over them lib/image-gen.js:38-41; read per picture; no screen control."
     },
     {
@@ -28807,9 +28937,14 @@
         "memory time"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "settings.promptCache",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-p5c-promptCache"
+        }
+      ],
       "facts": "settings.promptCache { enabled default true, ttl '5m' or '1h' default 5m }: lib/gateway-client.js:554-560, 583; applies to the gateway route to Claude (cache marks) lib/gateway-client.js:563-575; read on each call, no restart; no control on screen today (audit flags NO-CONTROL, EXPERT). Not confirmed: price of the 1 hour option."
     },
     {
@@ -28821,7 +28956,7 @@
       ],
       "what": "The master switch for the rules that decide what agents may do with tools: allow it, ask you first, or refuse. When it is off, those rules are not applied.",
       "when": "Leave it on. Turn it off only for a short test, and only if you fully understand the effect.",
-      "risk": "Off removes the checks on what agents do, so a mistake or a bad request could change files, send things or spend money without any guard. It is not on the settings screen: ask Maestro to change it for you.",
+      "risk": "Off removes the checks on what agents do, so a mistake or a bad request could change files, send things or spend money without any guard. It can only be changed in the settings file on this computer, not on the screen and not by Maestro.",
       "def": "Default: on. We recommend leaving it on.",
       "restart": false,
       "danger": "care",
@@ -28838,9 +28973,14 @@
         "turn off safety"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Protected settings",
       "storedAs": "settings.toolPolicy",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-toolPolicy"
+        }
+      ],
       "facts": "lib/sdk-chat.js:360 enabled = getSetting('toolPolicy', true) !== false (only the value false turns it off), read each time so no restart; the audit's 'anything but false = on' is correct. Approval cards themselves are a separate setting, off by default lib/sdk-chat.js:361-362."
     },
     {
@@ -28867,9 +29007,14 @@
         "member teams"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Protected settings",
       "storedAs": "settings.teamTemplates",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-teamTemplates"
+        }
+      ],
       "facts": "settings.teamTemplates, shape { name: { folder, members, head } } lib/teams.js:18-24; kept out of the on-screen settings lib/settings.js:66; no screen control (NO-CONTROL); restart not confirmed."
     },
     {
@@ -28880,7 +29025,7 @@
         "walletAgents"
       ],
       "what": "The list of agents allowed to use the wallet tools. No other agent can.",
-      "when": "Name only the one agent you trust with money. It cannot be changed from the settings screen: ask Maestro how it is set.",
+      "when": "Name only the one agent you trust with money. It is shown on the settings screen and can only be changed in the settings file on this computer, not by Maestro.",
       "risk": "Any agent on the list can ask the wallet to act. Member-owned agents should not be on it.",
       "def": "Default: nobody. We recommend one trusted agent at most.",
       "restart": false,
@@ -28896,9 +29041,14 @@
         "money"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Protected settings",
       "storedAs": "settings.walletAgents",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-walletAgents"
+        }
+      ],
       "facts": "settings.walletAgents, default [] (none) lib/wallet/tools.js:6, 16; a comment in lib/sdk-chat.js:20 still says 'default: trader', the code wins; the settings page refuses to change it (server.js:3018), so people ask Maestro; read at turn time (no restart, not tested); flagged by the security check lib/security-check.js:632-637. No screen control today."
     },
     {
@@ -28926,9 +29076,14 @@
         "destination"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Protected settings",
       "storedAs": "settings.walletOwner (or HUB_WALLET_OWNER)",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-walletOwner"
+        }
+      ],
       "facts": "HUB_WALLET_OWNER (+ _LABEL) first, else settings.walletOwner {address,label} lib/wallet/firewall.js:11, 47-52; the settings page ignores it server.js:3019-3020; the startup-file value is read only at start lib/security-check.js:562 (restart needed for that route; the settings-file route restart not confirmed). Security check warns when it comes from the settings file."
     },
     {
@@ -28940,7 +29095,7 @@
       ],
       "what": "Short web addresses that outside services can send information to without signing in, each pointing at one connector that receives it. For example a camera service sending an event.",
       "when": "Set one only if a connector's setup tells you to, and only if you understand who can reach it.",
-      "risk": "These addresses work for anyone on the internet who can reach your Maestro, without a password. Each request is checked and limited, but every address you add is another door. It is not a wallet setting; it cannot be changed from the settings screen, so ask Maestro.",
+      "risk": "These addresses work for anyone on the internet who can reach your Maestro, without a password. Each request is checked and limited, but every address you add is another door. It is not a wallet setting. It can only be changed in the settings file on this computer, not on the screen and not by Maestro.",
       "def": "Default: none. We recommend leaving it empty unless a connector needs it.",
       "restart": false,
       "danger": "care",
@@ -28957,9 +29112,14 @@
         "no sign-in"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Protected settings",
       "storedAs": "settings.receiverAliases",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-receiverAliases"
+        }
+      ],
       "facts": "lib/modules/receivers.js:3, 40-57 maps /<alias>/ to a module id; the settings screen refuses to save it server.js:3023-3024 (no screen control: people ask Maestro); no sign-in on these paths, rate limited (120 per minute per sender, 600 per module) lib/modules/receivers.js:30-31. The audit's new name 'Names for wallet addresses' is wrong: it has nothing to do with wallets. Read per request so no restart (the stored settings are re-read when they change lib/settings.js:65-69)."
     },
     {
@@ -29177,7 +29337,7 @@
       "restart": true,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "port",
         "8888",
@@ -29188,9 +29348,14 @@
         "connection"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Set in the .env file",
       "storedAs": "env:PORT",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-PORT"
+        }
+      ],
       "facts": "server.js:211 PORT from the environment, default 8888, read once at start-up so a restart is needed; set as environment setting PORT, not on a screen"
     },
     {
@@ -29207,7 +29372,7 @@
       "restart": true,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "bind",
         "host",
@@ -29220,9 +29385,14 @@
         "open to network"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Protected settings",
       "storedAs": "env:HUB_BIND_HOST",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-HUB_BIND_HOST"
+        }
+      ],
       "facts": "server.js:201-205, lib/bind-host.js:5-14, 29-33 default is loopback 127.0.0.1 (audit said unknown); a non-local address is honoured only when sign-in is set up (HUB_AUTH_USERNAME and password) lib/bind-host.js:10-12; read once at start-up"
     },
     {
@@ -29239,7 +29409,7 @@
       "restart": true,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "allowed hosts",
         "domain",
@@ -29251,9 +29421,14 @@
         "blocked"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Protected settings",
       "storedAs": "env:HUB_ALLOWED_HOSTS",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-HUB_ALLOWED_HOSTS"
+        }
+      ],
       "facts": "lib/origin-guard.js:19-21, 33-37 list separated by commas, compared with the host a browser sent; localhost, 127.0.0.1 and names ending in .ts.net always allowed; read from the environment at each check but the environment itself is set at start, so a restart is needed (not confirmed that it cannot be changed live)"
     },
     {
@@ -29270,7 +29445,7 @@
       "restart": true,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "tailscale",
         "tailnet",
@@ -29282,9 +29457,14 @@
         "serve"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Protected settings",
       "storedAs": "env:HUB_TAILNET_USERS",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-HUB_TAILNET_USERS"
+        }
+      ],
       "facts": "server.js:467-472 and lib/bind-host.js:102-113: comma-separated logins from the HUB_TAILNET_USERS environment value, case-insensitive; unset = no filter; requests from the computer itself (localhost) are allowed; others only when coming through Tailscale Serve with a listed login. Environment values are read at start-up, so a restart is needed (the audit says yes)."
     },
     {
@@ -29312,9 +29492,14 @@
         "http auth"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Protected settings",
       "storedAs": "env:HUB_AUTH_USERNAME",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-HUB_AUTH_USERNAME"
+        }
+      ],
       "facts": "server.js:268, 302-313: accepted only when a username is set and no accounts exist; a warning is printed when it is set but accounts exist server.js:270; read from hub secrets at start-up lib/hub-secrets (env or secrets file, not opened here), so a restart is needed (audit says yes)."
     },
     {
@@ -29342,9 +29527,14 @@
         "http auth"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Protected settings",
       "storedAs": "env:HUB_AUTH_PASSWORD",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-HUB_AUTH_PASSWORD"
+        }
+      ],
       "facts": "server.js:269, 302-313; compared in constant time; ignored once accounts exist server.js:270, 379, 510; start-up value, restart needed (audit says yes)."
     },
     {
@@ -29372,9 +29562,14 @@
         "lock down"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Protected settings",
       "storedAs": "env:HUB_REQUIRE_LOGIN",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-HUB_REQUIRE_LOGIN"
+        }
+      ],
       "facts": "server.js:4118 only the value 1 turns it on (process.env.HUB_REQUIRE_LOGIN === '1'); applies to the main page and the phone page when nobody is signed in; read from the environment, which is loaded at start, so a restart is needed (audit says yes). Setup code printed at start-up server.js:4240-4246."
     },
     {
@@ -29402,9 +29597,14 @@
         "dangerous mode"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Protected settings",
       "storedAs": "env:HUB_AGENT_PERMISSION_MODE",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-HUB_AGENT_PERMISSION_MODE"
+        }
+      ],
       "facts": "lib/sdk-chat.js:50-51: HUB_AGENT_PERMISSION_MODE accepts acceptEdits or bypassPermissions; anything else becomes acceptEdits; read once when the program loads, so a restart is needed (audit says yes). The tool safety rules (lib/policy-gate) still run on every call per lib/sdk-chat.js:80-88 comments; not traced for every path."
     },
     {
@@ -29433,9 +29633,14 @@
         "env"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "env:HUB_WORKER_DEFAULT_SCOPE",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-env-HUB_WORKER_DEFAULT_SCOPE"
+        }
+      ],
       "facts": "HUB_WORKER_DEFAULT_SCOPE read from the environment once when the file loads lib/temporal-workers.js:26-29 (read, full or none; anything else becomes read), so a restart is needed; set in the .env file, no screen control (not opened here); a caller may still ask for more per job lib/temporal-workers.js:29, 32."
     },
     {
@@ -29463,31 +29668,41 @@
         "region"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "env:HUB_TZ",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-env-HUB_TZ"
+        }
+      ],
       "facts": "lib/timezone.js:51-56 order: the first admin's zone, else HUB_TZ if valid, else this computer's zone; lib/scheduled-tasks.js:29 defaultZone; read from the environment so it is only picked up at start-up (not confirmed that nothing re-reads it)"
     },
     {
       "id": "OPT-0992",
       "kind": "setting",
-      "name": "HUB_SELFCHECK",
+      "name": "Self-check at start",
       "labels": [
         "HUB_SELFCHECK"
       ],
-      "what": "",
+      "what": "Set to off to stop your Maestro checking itself, both a minute after it starts and each night.",
       "when": "",
       "risk": "",
-      "def": "",
+      "def": "Default: not set, so the self-check runs.",
       "restart": true,
       "danger": "care",
       "who": "admin",
       "lead": "confirm",
       "words": [],
       "scope": "install",
-      "home": "Settings > Upkeep",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "env:HUB_SELFCHECK",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-env-HUB_SELFCHECK"
+        }
+      ],
       "mergedInto": "OPT-0270"
     },
     {
@@ -29515,9 +29730,14 @@
         "disable check"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "env:HUB_MEMORY_HEALTH",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-env-HUB_MEMORY_HEALTH"
+        }
+      ],
       "facts": "server.js:4258-4259 HUB_MEMORY_HEALTH=off skips scheduling at start-up; any other value keeps it on; Check now still works per the code comment"
     },
     {
@@ -29546,31 +29766,41 @@
         "hours"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "env:HUB_SECURITY_CHECK_HOURS",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-env-HUB_SECURITY_CHECK_HOURS"
+        }
+      ],
       "facts": "server.js:4251: HUB_SECURITY_CHECK_HOURS unset = 24, 0 = off; read once when the program starts (schedule call), so a restart is needed (audit says yes). The check can still be run by hand per lib/security-check.js:13-14."
     },
     {
       "id": "OPT-0995",
       "kind": "setting",
-      "name": "HUB_UPDATE_CHECK_HOURS",
+      "name": "Hours between update checks (startup setting)",
       "labels": [
         "HUB_UPDATE_CHECK_HOURS"
       ],
-      "what": "",
+      "what": "How many hours pass between looks for a new version, read when your Maestro starts. When set, it is used instead of the update-check hours in Upkeep; 0 turns the scheduled checks off.",
       "when": "",
       "risk": "",
-      "def": "",
+      "def": "Default: not set, so the update-check hours in Upkeep decide (every 24 hours).",
       "restart": true,
       "danger": "care",
       "who": "admin",
       "lead": "confirm",
       "words": [],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "env:HUB_UPDATE_CHECK_HOURS",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-env-HUB_UPDATE_CHECK_HOURS"
+        }
+      ],
       "mergedInto": "OPT-0943"
     },
     {
@@ -29599,9 +29829,14 @@
         "check"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "env:HUB_UPDATE_CHECK_FIRST_SECONDS",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-env-HUB_UPDATE_CHECK_FIRST_SECONDS"
+        }
+      ],
       "facts": "env HUB_UPDATE_CHECK_FIRST_SECONDS, default 90 s lib/update-check.js:10, 18, 160 (audit said unknown); read at start, so a restart is needed. No screen control today."
     },
     {
@@ -29618,7 +29853,7 @@
       "restart": true,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "update channel",
         "stable",
@@ -29629,9 +29864,14 @@
         "git"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Set in the .env file",
       "storedAs": "env:HUB_STABLE_BRANCH",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-HUB_STABLE_BRANCH"
+        }
+      ],
       "facts": "lib/git-sync.js:278 CHANNELS built when the file loads, default main; the other channel (experimental) is dev (HUB_EXPERIMENTAL_BRANCH); read once at start-up"
     },
     {
@@ -29660,9 +29900,14 @@
         "chat apps"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "env:HUB_COMMS_DISABLED",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-env-HUB_COMMS_DISABLED"
+        }
+      ],
       "facts": "environment variable HUB_COMMS_DISABLED=1 read once at start-up server.js:4338-4339 (so a restart is needed); no control on screen today (audit NO-CONTROL)"
     },
     {
@@ -29679,7 +29924,7 @@
       "restart": true,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "keys",
         ".env",
@@ -29692,53 +29937,68 @@
         "key file"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Protected settings",
       "storedAs": "env:HUB_KEEP_ENV_KEYS",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-HUB_KEEP_ENV_KEYS"
+        }
+      ],
       "facts": "code wins: it keeps keys in .env instead of moving them into Settings (audit name 'Settings kept for agents' commands' does not match) lib/settings.js:149, 185; the move runs at start-up server.js:106-111, so a change needs a restart; value 1, true, yes or on; set in the environment, no screen control."
     },
     {
       "id": "OPT-1000",
       "kind": "setting",
-      "name": "HUB_WALLET_OWNER",
+      "name": "Wallet owner address (startup setting)",
       "labels": [
         "HUB_WALLET_OWNER"
       ],
-      "what": "",
+      "what": "The wallet owner address your Maestro reads when it starts. It is shown here only.",
       "when": "",
       "risk": "",
-      "def": "",
+      "def": "Default: not set.",
       "restart": true,
       "danger": "dangerous",
       "who": "admin",
       "lead": "screen",
       "words": [],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Protected settings",
       "storedAs": "env:HUB_WALLET_OWNER",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-HUB_WALLET_OWNER"
+        }
+      ],
       "mergedInto": "OPT-0967"
     },
     {
       "id": "OPT-1001",
       "kind": "setting",
-      "name": "HUB_SDK_AUTO_COMPACT_WINDOW",
+      "name": "Long-chat point for Claude agents",
       "labels": [
         "HUB_SDK_AUTO_COMPACT_WINDOW"
       ],
-      "what": "",
+      "what": "The number of tokens at which Claude agents shorten a long chat, read when your Maestro starts.",
       "when": "",
       "risk": "",
-      "def": "",
+      "def": "Default: not set, so each model decides from its own size.",
       "restart": true,
       "danger": "care",
       "who": "admin",
       "lead": "confirm",
       "words": [],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "env:HUB_SDK_AUTO_COMPACT_WINDOW",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-env-HUB_SDK_AUTO_COMPACT_WINDOW"
+        }
+      ],
       "mergedInto": "OPT-0950"
     },
     {
@@ -29766,9 +30026,14 @@
         "codex not starting"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "env:HUB_CODEX_TRANSPORT",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-env-HUB_CODEX_TRANSPORT"
+        }
+      ],
       "facts": "Env HUB_CODEX_TRANSPORT: exec selects the old way, anything else app-server lib/codex-cli/app-server.js:30-32; also falls back to exec when the app server fails to start lib/sdk-chat.js:6775-6779. Environment variable read from the hub's own environment, so it takes effect after a restart (not re-checked whether it is read per turn). No control on the page."
     },
     {
@@ -29798,9 +30063,14 @@
         "commands"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Protected settings",
       "storedAs": "env:HUB_CODEX_APPROVALS",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-HUB_CODEX_APPROVALS"
+        }
+      ],
       "facts": "lib/codex-cli/index.js:351-358 HUB_CODEX_APPROVALS accepts never / untrusted / on-request / on-failure; anything else becomes untrusted; read from the environment when Codex runs, but the environment file is loaded at start, so a restart is needed (audit says yes; the per-turn read itself is not a restart)."
     },
     {
@@ -29829,9 +30099,14 @@
         "openai"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Protected settings",
       "storedAs": "env:HUB_CODEX_SANDBOX",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-HUB_CODEX_SANDBOX"
+        }
+      ],
       "facts": "lib/codex-cli/index.js:75-87: values read-only / workspace-write / danger-full-access; unset or anything else = danger-full-access (full host access), so the audit's default 'off' means no box; read-only workers always get read-only. lib/sdk-chat.js:6986-6992 a member's agent may not run with full access. The audit says it makes the box work 'for hub-hands agents'; the code says it is for Codex's own shell, hub-hands agents use the Maestro's box instead (code wins). Environment value, restart needed (audit says yes). lib/security-check.js:624-626 warns when Codex agents run without it."
     },
     {
@@ -29860,9 +30135,14 @@
         "delay"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "env:HUB_CONSULT_BUSY_WAIT_MS",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-env-HUB_CONSULT_BUSY_WAIT_MS"
+        }
+      ],
       "facts": "lib/sdk-chat.js:7257 default 20000 ms read once when the file loads; waits briefly then queues, see lib/consult-queue.js per the comment above it"
     },
     {
@@ -29891,9 +30171,14 @@
         "too many"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "env:HUB_DELIVERY_COOLDOWN_MS",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-env-HUB_DELIVERY_COOLDOWN_MS"
+        }
+      ],
       "facts": "lib/sdk-chat.js:7507 default 60000 ms read once when the file loads; _lastDelivery per caller line 7508; exact scope (per agent or global) the code comment says per caller, not traced in deliverMailboxes"
     },
     {
@@ -29922,9 +30207,14 @@
         "phone notices"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "env:HUB_PUSH_SUBJECT",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-env-HUB_PUSH_SUBJECT"
+        }
+      ],
       "facts": "HUB_PUSH_SUBJECT read when push starts lib/push.js:32, default 'mailto:agent-hub@example.com', deliberately not the owner's address lib/push.js:20 (so a restart is needed); no control on screen today (audit NO-CONTROL)"
     },
     {
@@ -29941,7 +30231,7 @@
       "restart": true,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "home",
         "hub home",
@@ -29953,9 +30243,14 @@
         "drive"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Set in the .env file",
       "storedAs": "env:HUB_HOME",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-HUB_HOME"
+        }
+      ],
       "facts": "lib/hub-home.js:12, 51, 62 order: HUB_HOME, then <install>/hub-home if it exists, then the folder above the install; read once at start-up; lib/hub-home.js:135 when it is set the shared folders stay where it points; the audit said default unknown"
     },
     {
@@ -29972,7 +30267,7 @@
       "restart": true,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "gateway",
         "proxy",
@@ -29983,31 +30278,41 @@
         "company proxy"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Set in the .env file",
       "storedAs": "env:LLM_GATEWAY_URL",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-LLM_GATEWAY_URL"
+        }
+      ],
       "facts": "Env LLM_GATEWAY_URL, read once when the file loads: const GATEWAY_URL = process.env.LLM_GATEWAY_URL || '' lib/gateway-client.js:57; used as the fallback when a model cannot be mapped to a known provider lib/gateway-client.js:56. So a restart is needed. No control on the page."
     },
     {
       "id": "OPT-1010",
       "kind": "setting",
-      "name": "GATEWAY_PROMPT_CACHE",
+      "name": "Reuse earlier text (startup setting)",
       "labels": [
         "GATEWAY_PROMPT_CACHE"
       ],
-      "what": "",
+      "what": "No part of your Maestro reads this older startup switch any more: Reuse earlier text in Upkeep decides whether earlier text is reused.",
       "when": "",
       "risk": "",
-      "def": "",
+      "def": "Default: not set. Setting it changes nothing.",
       "restart": true,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Set in the .env file",
       "storedAs": "env:GATEWAY_PROMPT_CACHE",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-GATEWAY_PROMPT_CACHE"
+        }
+      ],
       "mergedInto": "OPT-0963"
     },
     {
@@ -30024,7 +30329,7 @@
       "restart": true,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "connections",
         "gateway",
@@ -30036,9 +30341,14 @@
         "limit"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Set in the .env file",
       "storedAs": "env:GATEWAY_MAX_CONNECTIONS",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-GATEWAY_MAX_CONNECTIONS"
+        }
+      ],
       "facts": "default 16 lib/http-agent.js:48, read once when the file loads, so a change needs a restart; set in the environment as GATEWAY_MAX_CONNECTIONS, no screen control."
     },
     {
@@ -30055,7 +30365,7 @@
       "restart": true,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "keepalive",
         "keep alive",
@@ -30066,9 +30376,14 @@
         "connection errors"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Set in the .env file",
       "storedAs": "env:GATEWAY_KEEPALIVE",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-GATEWAY_KEEPALIVE"
+        }
+      ],
       "facts": "lib/http-agent.js:47 ENABLED unless GATEWAY_KEEPALIVE is exactly 0; kill switch comment line 37; read once when the file loads"
     },
     {
@@ -30085,7 +30400,7 @@
       "restart": true,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "netwatch",
         "network watcher",
@@ -30096,9 +30411,14 @@
         "monitor"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Set in the .env file",
       "storedAs": "env:GATEWAY_NETWATCH",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-GATEWAY_NETWATCH"
+        }
+      ],
       "facts": "lib/http-agent.js:58 enabled unless GATEWAY_NETWATCH is exactly 0; check interval 5000 ms line 59; file header (lines 30-38) says it rotates the connection pool; read once when the file loads"
     },
     {
@@ -30137,7 +30457,7 @@
       "restart": true,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "claude sdk",
         "toolkit",
@@ -30148,9 +30468,14 @@
         "sdk path"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Set in the .env file",
       "storedAs": "env:CLAUDE_SDK_PATH",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-CLAUDE_SDK_PATH"
+        }
+      ],
       "facts": "lib/sdk-loader.js:81, 113 CLAUDE_SDK_PATH is used first when it points to a valid folder with a package.json (lib/sdk-loader.js:9), else hub-local or global copies; loaded at start-up"
     },
     {
@@ -30167,7 +30492,7 @@
       "restart": true,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "claude cli",
         "claude program",
@@ -30178,9 +30503,14 @@
         "binary"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Set in the .env file",
       "storedAs": "env:CLAUDE_CLI_PATH",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-CLAUDE_CLI_PATH"
+        }
+      ],
       "facts": "lib/sdk-loader.js:182-186 used first when set, may point at the package folder or the program itself; otherwise the global or hub-local copy line 187-189; read when the program is looked up; restart assumed from the audit, not confirmed"
     },
     {
@@ -30197,7 +30527,7 @@
       "restart": true,
       "danger": "care",
       "who": "admin",
-      "lead": "confirm",
+      "lead": "screen",
       "words": [
         "codex",
         "codex cli",
@@ -30208,9 +30538,14 @@
         "openai"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Set in the .env file",
       "storedAs": "env:CODEX_CLI_PATH",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-ro-CODEX_CLI_PATH"
+        }
+      ],
       "facts": "lib/codex-cli/index.js:36, 44 used first when set and the file can be run, else the global install, then the search path; if set but not runnable it returns nothing; read from the environment at lookup, restart assumed from the audit, not confirmed"
     },
     {
@@ -30282,9 +30617,14 @@
         "voice engines"
       ],
       "scope": "install",
-      "home": "Settings > Upkeep > More",
+      "home": "Settings > Upkeep > More > Expert values",
       "storedAs": "env:MM_VOICE_NO_AUTO_INSTALL",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-env-MM_VOICE_NO_AUTO_INSTALL"
+        }
+      ],
       "facts": "Env MM_VOICE_NO_AUTO_INSTALL=1 skips both start-up steps, the resume of a cut download (10 s after start) and the first fetch (20 s after start) server.js:4188-4192; also stops installs through the voice routes lib/voice/routes.js:412. Read at start-up, so a restart is needed. No control on the page."
     },
     {
@@ -32004,7 +32344,12 @@
       "scope": "install",
       "home": "Settings > Upkeep",
       "storedAs": "settings.jobMemoryLimitGb",
-      "anchors": [],
+      "anchors": [
+        {
+          "surface": "desktop",
+          "selector": "#st-mem-limit-in"
+        }
+      ],
       "facts": "settings.jobMemoryLimitGb read by lib/mem-limit.js limitBytes (auto 25% of RAM, 4-64 GB); MemoryMax + MemorySwapMax=0 on job scopes lib/jobs.js and on agents' command scopes lib/scope-wrap.js; best-effort watchdog without systemd lib/mem-watch.js (ps every 2 s, descendants + process group)."
     }
   ]

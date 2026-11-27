@@ -28,6 +28,7 @@ require('./lib/claude-signin-guard').allowRealEffects();
 // child process the hub starts carries them in its start environment.
 const hubSecrets = require('./lib/hub-secrets');
 try { hubSecrets.loadEnvFile(path.join(__dirname, '.env')); } catch {}
+try { require('./lib/env-file'); } catch {}   // notes what the hub started with, so Settings can say which saved startup values wait for a restart
 
 // Agents' boxes a backup paused and couldn't let go (the process stopped mid-copy): let them go now, after .env (it may say
 // how to reach Docker). Their record sits in .restore/, which a restore never moves; it stays until each box is let go.
@@ -3097,6 +3098,27 @@ async function handleHttpRequest(req, res) {
         }
       });
       return;
+    }
+
+    // The startup file (.env) values the Settings page shows and, for an allow-list, changes (lib/env-file). Admins only, from a signed-in
+    // browser or the owner of an install with no accounts. A change is journaled (Settings > Recent changes, with Restore) and takes
+    // effect after a restart; a secret is only ever "set" / "not set".
+    if (pathname === '/api/settings/env' && (req.method === 'GET' || req.method === 'POST')) {
+      const isAdmin = (access.isAdmin(req.hubUser) || (!hubAuth.hasUsers() && !req.hubToken)) && !req.hubPendingTotp;
+      if (!isAdmin) return jsonResponse(res, 403, { error: 'admin_only' });
+      if (req.method === 'GET') {
+        const r = require('./lib/env-file').read();
+        return jsonResponse(res, 200, r.error ? { rows: r.rows, error: r.error } : { rows: r.rows });
+      }
+      let b;
+      try { b = JSON.parse((await readBody(req)) || '{}'); } catch { return jsonResponse(res, 400, { error: 'invalid JSON' }); }
+      if (!b || typeof b !== 'object' || Array.isArray(b) || typeof b.key !== 'string') return jsonResponse(res, 400, { error: 'key is needed' });
+      if (!Object.prototype.hasOwnProperty.call(b, 'value')) return jsonResponse(res, 400, { error: 'value is needed (null or empty to go back to the default)' });
+      // expect (optional): the value the page showed; a save that arrives after the file changed is refused with 409
+      const expect = Object.prototype.hasOwnProperty.call(b, 'expect') ? (b.expect === null || b.expect === '' ? null : String(b.expect)) : undefined;
+      const w = require('./lib/settings-apply').setEnv(b.key, b.value, { expect });
+      if (!w.ok) return jsonResponse(res, w.conflict ? 409 : 400, { error: w.error });
+      return jsonResponse(res, 200, { ok: true, key: w.key, value: w.after, restartNeeded: true });
     }
 
     if (pathname === '/api/settings/test-provider' && req.method === 'POST') {

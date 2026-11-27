@@ -215,19 +215,53 @@ test('jobs: a boxed job\'s wrapper gets the Docker endpoint on top of envFor (an
   const bin = path.join(dir, 'bin'); fs.mkdirSync(bin);
   const out = path.join(dir, 'docker-env.txt');
   // a fake docker: records the endpoint it was started with, then exits
-  fs.writeFileSync(path.join(bin, 'docker'), `#!/bin/bash\necho "[$DOCKER_HOST][$DOCKER_CONTEXT][$HUB_SECRET_X]" >> ${out}\n`, { mode: 0o755 });
+  // `inspect` answers like Docker does for a box that does not exist, so even a late cancel loop in the wrapper ends.
+  fs.writeFileSync(path.join(bin, 'docker'), `#!/bin/bash\necho "[$DOCKER_HOST][$DOCKER_CONTEXT][$HUB_SECRET_X]" >> ${out}\n[ "$1" = inspect ] && { echo "Error: No such container: box-test" >&2; exit 1; }\nexit 0\n`, { mode: 0o755 });
   const saved = { h: process.env.DOCKER_HOST, c: process.env.DOCKER_CONTEXT, s: process.env.HUB_SECRET_X };
   process.env.DOCKER_HOST = 'tcp://192.0.2.7:2375'; process.env.DOCKER_CONTEXT = 'ctx-test'; process.env.HUB_SECRET_X = 'sk-test-123';
+  const sleep = (ms) => new Promise(x => setTimeout(x, ms));
+  let r = null, job = null;
   try {
-    const r = new JobRunner({ dataDir: path.join(dir, 'a'), spawnMode: 'setsid', pollMs: 50, log: () => {}, defaultCwd: async () => dir, notify: async () => {}, agentExists: async () => true,
+    r = new JobRunner({ dataDir: path.join(dir, 'a'), spawnMode: 'setsid', pollMs: 50, log: () => {}, defaultCwd: async () => dir, notify: async () => {}, agentExists: async () => true,
       boxFor: async () => ({ name: 'box-test', mounts: [dir] }), envFor: () => ({ PATH: `${bin}:${process.env.PATH}` }) });
-    await r.run({ owner: 'sam', name: 'b', command: 'true', cwd: dir });
-    for (let i = 0; i < 100 && !fs.existsSync(out); i++) await new Promise(x => setTimeout(x, 50));
+    job = await r.run({ owner: 'sam', name: 'b', command: 'true', cwd: dir });
+    // the file exists as soon as the fake docker starts writing: wait for a complete line
+    const complete = () => { try { return fs.readFileSync(out, 'utf8').endsWith('\n'); } catch { return false; } };
+    for (let i = 0; i < 100 && !complete(); i++) await sleep(50);
     assert.strictEqual(fs.readFileSync(out, 'utf8').trim().split('\n')[0], '[tcp://192.0.2.7:2375][ctx-test][]', 'endpoint kept, hub secret not');
-    r.cancelAll && r.cancelAll();
   } finally {
+    // Cancel first; the fake docker (in `dir`) must stay until the job's wrapper is gone, or its cancel loop would run the
+    // real docker and never end.
+    try { r && r.cancelAll && r.cancelAll(); } catch { /* ignore */ }
+    let confirmed = !job;   // the fake docker may be deleted only once the job's wrapper is known to be gone
+    if (job) {
+      const jobDir = path.join(dir, 'a', 'jobs', job.id);
+      // read again on every check: the wrapper may write its pid file only after the cancel
+      const wrapperPid = () => { try { return parseInt(fs.readFileSync(path.join(jobDir, 'pid'), 'utf8'), 10) || null; } catch { return null; } };
+      // 'gone' only on proof: no such process, a zombie, or a pid now running something else; any other read error is not proof
+      const wrapperState = (pid) => {
+        let cmd, stat;
+        try { cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8'); stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); }
+        catch (e) { return e && e.code === 'ENOENT' ? 'gone' : 'unknown'; }
+        if (!cmd.includes('wrapper.sh')) return 'gone';
+        return (stat.slice(stat.lastIndexOf(')') + 2)[0] === 'Z') ? 'gone' : 'alive';
+      };
+      const terminal = () => { try { return !['running', 'cancelling', 'stopping'].includes(r.status(job.id, 'sam').status); } catch { return false; } };
+      const ended = () => {
+        const pid = wrapperPid();
+        if (pid) return wrapperState(pid) === 'gone' && (fs.existsSync(path.join(jobDir, 'exit')) || terminal());
+        return terminal();   // no pid file: the wrapper never started, if the job is over
+      };
+      for (let i = 0; i < 100 && !ended(); i++) await sleep(100);   // up to 10 s
+      // last resort: the wrapper was started with setsid, so its pid is its process group
+      const wpid = wrapperPid();
+      if (wpid && wpid > 1 && wrapperState(wpid) === 'alive') { try { process.kill(-wpid, 'SIGKILL'); } catch { /* gone */ } await sleep(300); }
+      confirmed = ended() || (!!wpid && wrapperState(wpid) === 'gone');
+    }
     for (const [k, v] of [['DOCKER_HOST', saved.h], ['DOCKER_CONTEXT', saved.c], ['HUB_SECRET_X', saved.s]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
-    fs.rmSync(dir, { recursive: true, force: true });
+    // Without proof the wrapper is gone, the folder (and its fake docker) is kept: deleting it is what made a late cancel loop
+    // run the real docker forever.
+    if (confirmed) fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 

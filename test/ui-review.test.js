@@ -191,6 +191,7 @@ function makeEl(doc, id) {
 }
 function makeDoc(ids) {
   const doc = { byId: {}, hiddenFlag: false, listeners: {} };
+  doc.documentElement = { classList: { _s: new Set(), add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); }, contains(c) { return this._s.has(c); } } };
   doc.getElementById = (id) => doc.byId[id] || null;
   doc.createElement = () => makeEl(doc, '');
   doc.addEventListener = (t, fn) => { (doc.listeners[t] = doc.listeners[t] || []).push(fn); };
@@ -441,7 +442,7 @@ test('page: the first group is the list on top, then Recent changes; the full ch
   const G = require('../lib/ui-settings-groups.js');
   const review = G.GROUPS.find((g) => g.id === 'review');
   assert.deepStrictEqual(review.sections, ['st-emergency-section', 'st-recent-section']);
-  assert.deepStrictEqual(review.more, ['st-ready-section', 'st-health-section', 'st-sec-section']);
+  assert.deepStrictEqual(review.more, ['st-ready-section', 'st-health-section']);   // the security check moved to People and safety (phase 6); Details still opens it
   const app = read('app.js');
   assert.match(app, /body\.insertBefore\(top, body\.firstChild\);/, 'the list goes above the group\'s sections');
   assert.match(app, /Nothing needs your review\./);

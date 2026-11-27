@@ -10,6 +10,13 @@ const W = require('../lib/client-watch');
 
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+// Whatever a case asserts, the processes it started must not outlive it: kill the client and everything under it (while the
+// client is still the parent, so the tree can be walked), then the client itself.
+const stopTree = async (w, child) => {
+  try { w.clear(); } catch { /* ignore */ }
+  try { await w.killAll(); } catch { /* ignore */ }
+  try { child.kill('SIGKILL'); } catch { /* ignore */ }
+};
 // Process trees take a moment to appear under load: poll instead of trusting a fixed delay.
 const until = async (fn, ms = 4000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await fn()) return true; await sleep(100); } return false; };
 
@@ -19,6 +26,7 @@ test('spawn returns the live child, consumes stderr, and reports exit; descendan
   // a "client" that starts a grandchild and keeps running
   const child = w.spawn({ command: 'bash', args: ['-c', 'echo oops 1>&2; sleep 7391 & sleep 7392'], cwd: process.cwd(), env: process.env });
   let exit = null;
+  try {
   child.on('exit', (code, signal) => { exit = { code, signal }; });
   assert.ok(child.pid > 0 && w.pid() === child.pid);
   // Wait for the sleepers themselves, as the client's own children. A bash child that has forked but not yet exec'd
@@ -36,6 +44,7 @@ test('spawn returns the live child, consumes stderr, and reports exit; descendan
   assert.ok(killed.some(k => k.args === '(client)'), why('the client is reported killed'));
   assert.ok(await until(async () => !alive(child.pid)), why('client killed'));
   assert.ok(await until(async () => !kids.some(k => alive(k.pid))), why('grandchildren killed too'));
+  } finally { await stopTree(w, child); }
 });
 
 test('expectExit: after the grace period, processes still under the client are killed, logged and reported', async () => {
@@ -43,6 +52,7 @@ test('expectExit: after the grace period, processes still under the client are k
   const w = W.forTurn({ agentName: 'gp', log: (m) => logs.push(m), graceMs: 300, onLingering: (e) => events.push(e) });
   // bash stays the parent (a lone command would exec into sleep and look like a client with no children)
   const child = w.spawn({ command: 'bash', args: ['-c', 'sleep 7393 & wait'], cwd: process.cwd(), env: process.env });
+  try {
   assert.ok(await until(async () => (await w.descendants()).length === 1), 'the sleeper appeared');
   w.expectExit();
   assert.ok(await until(async () => events.length === 1), 'the lingering sleeper was killed after the grace period');
@@ -51,6 +61,7 @@ test('expectExit: after the grace period, processes still under the client are k
   // the "client" (bash -c) exits once its only child is gone
   assert.ok(await until(async () => !alive(child.pid)), 'the client could exit after the lingering command died');
   w.clear();
+  } finally { await stopTree(w, child); }
 });
 
 test('clear() before the grace period means nothing is touched; the abort signal kills the whole tree', async () => {
@@ -58,6 +69,7 @@ test('clear() before the grace period means nothing is touched; the abort signal
   const w = W.forTurn({ agentName: 'x', log: () => {}, graceMs: 200, onLingering: (e) => events.push(e) });
   const ac = new AbortController();
   const child = w.spawn({ command: 'bash', args: ['-c', 'sleep 7394 & sleep 7395'], cwd: process.cwd(), env: process.env, signal: ac.signal });
+  try {
   assert.ok(await until(async () => (await w.descendants()).length >= 2), 'sleepers appeared');
   w.expectExit(); w.clear();
   await sleep(500);
@@ -66,6 +78,7 @@ test('clear() before the grace period means nothing is touched; the abort signal
   const kids = await w.descendants();
   ac.abort();
   assert.ok(await until(async () => !alive(child.pid) && !kids.some(k => alive(k.pid))), 'abort killed client and children');
+  } finally { await stopTree(w, child); }
 });
 
 test('shortArgs trims the Claude shell-snapshot preamble', () => {
@@ -90,12 +103,20 @@ test('hub Bash kills the whole process group on timeout, so nothing outlives the
   // other processes that happen to run the same text (another copy of this file, for one)
   let group = null;
   const spawnImpl = (...a) => { const c = spawn(...a); group = c.pid; return c; };
+  try {
   const r = await runShell('sleep 7396 & sleep 7397', { timeoutMs: 400, spawnImpl });
   assert.strictEqual(r.timedOut, true);
   assert.ok(group > 0);
   const members = () => execFileSync('ps', ['-eo', 'pid=,pgid=,stat=,args=']).toString().split('\n')
     .map(l => l.trim().split(/\s+/)).filter(f => Number(f[1]) === group && !/^Z/.test(f[2] || '')).map(f => f.slice(3).join(' '));
   assert.ok(await until(async () => members().length === 0), `no process of the call survived the timeout: ${JSON.stringify(members())}`);
+  } finally {
+    // whatever failed above: the call's own process group (the shell was started detached) must not keep running
+    // (only while members are left: an emptied group's id may already belong to someone else)
+    const left = () => execFileSync('ps', ['-eo', 'pgid=,stat=,args=']).toString().split('\n').map(l => l.trim().split(/\s+/))
+      .some(f => Number(f[0]) === group && !/^Z/.test(f[1] || '') && /sleep 739[67]/.test(f.slice(2).join(' ')));
+    if (group > 0 && left()) { try { process.kill(-group, 'SIGKILL'); } catch { /* already gone */ } }
+  }
   const ok = await runShell('echo hi; echo err 1>&2; exit 2', { timeoutMs: 5000 });
   assert.deepStrictEqual([ok.stdout.trim(), ok.stderr.trim(), ok.code, ok.timedOut], ['hi', 'err', 2, false]);
 });

@@ -14,6 +14,7 @@ import signal
 import stat
 import struct
 import sys
+import tempfile
 import threading
 import time
 
@@ -146,7 +147,31 @@ def validate(prof):
         if type(mx) is not int or not 1 <= mx <= 1000:
             raise Fail("bad profile: log.max")
         out["log"] = {"path": log["path"], "max": mx}
+    out["test"] = validate_test(prof.get("test", {}))
     return out
+
+# Test-only switches: they come ONLY from the profile (built by tests; the hub never sets it), never from the environment,
+# because in watch mode the command runs with the agent's own environment.
+TEST_BOOLS = ("noSeccomp", "forceProbe", "noReader")
+TEST_INTS = ("graceMs", "slowJudgeMs", "pausePublishMs", "ctimeGraceMs")
+
+def validate_test(t):
+    if not isinstance(t, dict):
+        raise Fail("bad profile: test")
+    for k, v in t.items():
+        if k == "strace":
+            ok = is_path(v)
+        elif k in TEST_BOOLS:
+            ok = isinstance(v, bool)
+        elif k == "noPunch":
+            ok = v is False or v in ("default", "all")
+        elif k in TEST_INTS:
+            ok = type(v) is int and 0 <= v <= 600000
+        else:
+            ok = False
+        if not ok:
+            raise Fail("bad profile: test")
+    return dict(t)
 
 def make_env(prof):
     cur = os.environ
@@ -468,6 +493,7 @@ class Judge:
         self.dev = [real(d) for d in prof["devWrites"]]
         self.cwds, self.pending, self.seen, self.entries, self.rcache = {}, {}, set(), [], {}
         self.more = 0
+        self.slow_ms = prof["test"].get("slowJudgeMs", 0)   # test-only: sleep per judged line
         self.max = prof["log"]["max"] if prof["log"] else 50
         self.lock = threading.Lock()
 
@@ -534,6 +560,8 @@ class Judge:
 
     # -- parsing
     def feed(self, line):
+        if self.slow_ms:
+            time.sleep(self.slow_ms / 1000.0)
         line = line.rstrip("\n")
         m = RESUMED_RE.match(line)
         if m:
@@ -628,7 +656,7 @@ def iso_now():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 def write_log(prof, entries, more):
-    if not entries:
+    if not entries and not more:
         return
     base = {"agent": prof["agent"], "tool": prof["tool"], "mode": "watch", "cmd": prof["label"]}
     if more:
@@ -653,9 +681,18 @@ def write_log(prof, entries, more):
         reason = errname(ex.errno) if isinstance(ex, OSError) and ex.errno else type(ex).__name__
         sys.stderr.write("lockbox: watch log not written (%s)\n" % reason)
 
-def strace_works():
+def trace_bin(prof):
+    """The strace to run; the profile's test.strace (test-only) replaces it."""
+    return prof["test"].get("strace") or STRACE
+
+def strace_works(prof, seccomp=True):
+    if seccomp and prof["test"].get("noSeccomp"):
+        return False   # test-only switch: pretend --seccomp-bpf does not work here
+    if prof["test"].get("forceProbe"):
+        return True   # test-only switch: skip the probe (lets a test reach the refused-attach path)
     true_bin = next((p for p in ("/usr/bin/true", "/bin/true") if os.path.exists(p)), None)
-    if not os.access(STRACE, os.X_OK) or not true_bin:
+    sbin = trace_bin(prof)
+    if not os.access(sbin, os.X_OK) or not true_bin:
         return False
     pid = os.fork()
     if pid == 0:
@@ -663,8 +700,9 @@ def strace_works():
             dn = os.open("/dev/null", os.O_RDWR)
             for i in (0, 1, 2):
                 os.dup2(dn, i)
-            os.execv(STRACE, [STRACE, "--seccomp-bpf", "-f", "-qq", "-o", "/dev/null", "-e", "trace=none",
-                              "--", true_bin])
+            # the exact options of the real run: an strace without -DDD, or a refused -DDD attach, fails here
+            os.execv(sbin, [sbin, "-DDD", "-I2"] + (["--seccomp-bpf"] if seccomp else []) +
+                     ["-f", "-qq", "-o", "/dev/null", "-e", "trace=none", "--", true_bin])
         finally:
             os._exit(127)
     _, status = os.waitpid(pid, 0)
@@ -673,11 +711,407 @@ def strace_works():
 def exit_like(status):
     if os.WIFSIGNALED(status):
         sig = os.WTERMSIG(status)
-        signal.signal(sig, signal.SIG_DFL)
-        signal.pthread_sigmask(signal.SIG_UNBLOCK, {sig})
+        # SIGKILL and SIGSTOP cannot have a handler set (EINVAL): killing ourselves with them still works
+        try:
+            signal.signal(sig, signal.SIG_DFL)
+        except (OSError, ValueError):
+            pass
+        try:
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, {sig})
+        except (OSError, ValueError):
+            pass
         os.kill(os.getpid(), sig)
         sys.exit(128 + sig)
     sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1)
+
+WATCH_GRACE = 10.0
+
+def watch_grace(prof):
+    """Seconds to wait for strace to end after the command did. The profile's test.graceMs may only lower it."""
+    ms = prof["test"].get("graceMs")
+    return WATCH_GRACE if ms is None else min(WATCH_GRACE, ms / 1000.0)
+
+def proc_start(pid):
+    """Start time (field 22 of /proc/<pid>/stat) and state, or None when the process is gone."""
+    try:
+        with open("/proc/%d/stat" % pid, "rb") as f:
+            data = f.read().decode("utf-8", "replace")
+        rest = data.rsplit(")", 1)[1].split()
+        return rest[19], rest[0]
+    except (OSError, IndexError):
+        return None
+
+def exe_of(pid):
+    """The real path of a process's program; a program file replaced on disk reads '... (deleted)', which is dropped."""
+    p = os.readlink("/proc/%d/exe" % pid)
+    if p.endswith(" (deleted)"):
+        p = p[:-len(" (deleted)")]
+    return os.path.realpath(p)
+
+class Strace:
+    """Our strace process, found by its exact trace file name; pid plus start time so a reused pid never matches."""
+    def __init__(self, trace_path, not_pid, sbin):
+        self.trace_path = trace_path.encode("utf-8", "surrogateescape")
+        self.not_pid = not_pid
+        self.pid = None
+        self.start = None
+        self.tracee = "unknown"   # what from_tracee found: 'traced', 'untraced' or 'unknown'
+        self.exe = os.path.realpath(sbin)
+        self.py = os.path.realpath(sys.executable)
+
+    def check(self, pid):
+        """True (and remembered) when pid is our strace: its exe and its trace path, the same process before and after."""
+        try:
+            before = proc_start(pid)   # the start time is read before and after the checks: same process both times
+            if not before:
+                return False
+            if exe_of(pid) != self.exe:
+                return False
+            with open("/proc/%d/cmdline" % pid, "rb") as f:
+                args = f.read().split(b"\0")
+            if self.trace_path not in args:
+                return False
+            after = proc_start(pid)
+            if after and after[0] == before[0]:
+                self.pid, self.start = pid, after[0]
+                return True
+        except (OSError, ValueError):
+            pass
+        return False
+
+    def from_tracee(self, child, limit=2.0):
+        """The cheap way: strace attaches to our child before the command starts, so the child's TracerPid names it.
+        Returns 'traced' (our strace found), 'untraced' (the child runs the command and our strace is not its tracer: the
+        attach failed) or 'unknown' (the child is gone, or the limit was reached). Right after the fork the child is
+        still a copy of this helper (the interpreter) and then strace itself: both mean "not started yet"."""
+        end = time.monotonic() + limit
+        while time.monotonic() < end:
+            try:
+                with open("/proc/%d/status" % child, "rb") as f:
+                    st = f.read()
+            except OSError:
+                return "unknown"
+            tp = next((l for l in st.split(b"\n") if l.startswith(b"TracerPid:")), b"TracerPid:\t0")
+            try:
+                tracer = int(tp.split(b":")[1].strip() or b"0")
+            except ValueError:
+                return "unknown"
+            if tracer and self.check(tracer):
+                return "traced"
+            state = next((l for l in st.split(b"\n") if l.startswith(b"State:")), b"")
+            if b"Z" in state.split(b":")[-1][:3]:
+                return "unknown"
+            try:
+                exe = exe_of(child)
+            except OSError:
+                return "unknown"
+            if exe != self.exe and exe != self.py:
+                return "untraced"   # the command runs and our strace is not tracing it
+            time.sleep(0.0005)
+        return "unknown"
+
+    def scan(self):
+        """The fallback: every process is looked at (only when the cheap way found nothing)."""
+        if self.pid is not None:
+            return True
+        for name in os.listdir("/proc"):
+            if not name.isdigit() or int(name) == self.not_pid:
+                continue
+            try:
+                if exe_of(int(name)) != self.exe:
+                    continue
+            except OSError:
+                continue
+            if self.check(int(name)):
+                return True
+        return False
+
+    def alive(self):
+        if self.pid is None:
+            return False
+        st = proc_start(self.pid)
+        return bool(st) and st[0] == self.start and st[1] not in ("Z", "X")
+
+PUNCH_STEP = 1 << 20
+
+def punch_hole(fd, upto, start=0):
+    """Free the disk space of bytes [start, upto) of the file (size kept); True only when the call returned 0."""
+    if upto <= start:
+        return True
+    try:
+        fa = libc().fallocate
+        fa.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int64, ctypes.c_int64]
+        fa.restype = ctypes.c_int
+        return fa(fd, 0x02 | 0x01, start, upto - start) == 0   # FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE
+    except Exception:
+        return False
+
+def remove_dir(d):
+    """Remove a watch folder: only the files we put there, then the folder; any failure is ignored."""
+    for name in ("trace", "probe"):
+        try:
+            os.unlink(os.path.join(d, name))
+        except OSError:
+            pass
+    try:
+        os.rmdir(d)
+    except OSError:
+        pass
+
+def punch_works(prof, d, tag):
+    """Does hole punching work in folder d? tag: "default" or "shm" (only the test switch looks at it)."""
+    sw = prof["test"].get("noPunch")
+    if sw == "all" or (sw == "default" and tag == "default"):
+        return False
+    fd, p = None, os.path.join(d, "probe")
+    try:
+        fd = os.open(p, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
+        os.write(fd, b"x" * 8192)
+        return punch_hole(fd, 4096)
+    except Exception:
+        return False
+    finally:
+        if fd is not None:
+            os.close(fd)
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
+
+def watch_parent(base):
+    """The private folder that holds this user's trace folders under base (made 0700 when missing); None when it is
+    not safe to use (not a real folder of ours, or open to others). Keeping every trace folder in it means the sweep of
+    old ones lists one small folder, never a crowded /tmp."""
+    p = os.path.join(base, "lockbox-watch-%d" % os.getuid())
+    try:
+        os.mkdir(p, 0o700)
+    except FileExistsError:
+        pass
+    except OSError:
+        return None
+    try:
+        st = os.lstat(p)
+    except OSError:
+        return None
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
+        return None
+    return p
+
+def make_trace_dir(base):
+    parent = watch_parent(base)
+    if parent:
+        return tempfile.mkdtemp(prefix="w-", dir=parent)
+    return tempfile.mkdtemp(prefix="lockbox-watch-", dir=base)
+
+SHM_MIN_FREE = 256 << 20
+
+def choose_trace_dir(prof):
+    """The trace folder: in the default temp dir if hole punching works there, else in /dev/shm if it works there and has
+    256 MiB free. With neither, nothing is left behind and OSError(ENOTSUP) is raised: a trace that cannot give back disk
+    space is never run unbounded."""
+    try:
+        base = make_trace_dir(tempfile.gettempdir())   # a full or read-only temp dir falls through to /dev/shm
+    except OSError:
+        base = None
+    if base and punch_works(prof, base, "default"):
+        return base
+    shm = None
+    try:
+        sv = os.statvfs("/dev/shm")
+        if sv.f_bavail * sv.f_frsize >= SHM_MIN_FREE:
+            shm = make_trace_dir("/dev/shm")
+            if punch_works(prof, shm, "shm"):
+                if base:
+                    remove_dir(base)
+                return shm
+    except OSError:
+        pass
+    if shm:
+        remove_dir(shm)
+    if base:
+        remove_dir(base)
+    raise OSError(errno.ENOTSUP, "no trace folder here can give back disk space")
+
+def sweep_old(prof):
+    """Remove trace folders of ours, older than a day (the newest of the folder's and its trace file's mtime), that no
+    live process names in its command line. A folder whose ctime is under 60 s old is never touched, so a clock jump
+    cannot remove a new one. Only the private lockbox-watch-<uid> folders are listed (a crowded /tmp is never listed)."""
+    now, uid, old = time.time(), os.getuid(), []
+    ctime_grace = prof["test"].get("ctimeGraceMs", 60000) / 1000.0
+    for base in {tempfile.gettempdir(), "/dev/shm"}:
+        parent = os.path.join(base, "lockbox-watch-%d" % uid)
+        try:
+            st = os.lstat(parent)
+            if not stat.S_ISDIR(st.st_mode) or st.st_uid != uid or st.st_mode & 0o077:
+                continue
+            names = os.listdir(parent)
+        except OSError:
+            continue
+        base = parent
+        for n in names:
+            if not n.startswith("w-"):
+                continue
+            p = os.path.join(base, n)
+            try:
+                st = os.lstat(p)
+                if not (stat.S_ISDIR(st.st_mode) and st.st_uid == uid) or now - st.st_ctime < ctime_grace:
+                    continue
+                newest = st.st_mtime
+                try:
+                    newest = max(newest, os.lstat(os.path.join(p, "trace")).st_mtime)
+                except OSError:
+                    pass
+                if now - newest > 86400:
+                    old.append(p)
+            except OSError:
+                pass
+    if not old:
+        return
+    cmdlines = []
+    for name in os.listdir("/proc"):
+        if name.isdigit():
+            try:
+                with open("/proc/%s/cmdline" % name, "rb") as f:
+                    cmdlines.append(f.read())
+            except OSError:
+                pass
+    for p in old:
+        pb = p.encode("utf-8", "surrogateescape")
+        if not any(pb in c for c in cmdlines):
+            remove_dir(p)
+
+def tail_trace(trace_path, judge, finish, now, state, start=0):
+    """Feed the complete lines of the trace file to the judge. `finish`: read to the end of the file, then return;
+    `now`: return after the line being judged. state["pos"] is the offset just past the last line that was judged."""
+    fd = None
+    while fd is None:
+        for flags in (os.O_RDWR, os.O_RDONLY):   # read-write so judged parts can be given back to the disk
+            try:
+                fd = os.open(trace_path, flags | os.O_CLOEXEC)
+                break
+            except OSError:
+                pass
+        if fd is None:
+            if finish.is_set() or now.is_set():
+                return
+            finish.wait(0.002)   # strace has not created the file yet (wakes at once when the command has ended)
+    try:
+        buf = b""             # bytes from state["pos"] on that are not judged yet
+        read_at = start       # next byte to read
+        cur = start           # offset just past the last judged line
+        punched = start
+        punched_al = start & ~4095
+        state["pos"] = cur
+        while True:
+            final = finish.is_set()
+            while True:
+                if now.is_set():
+                    return
+                try:
+                    chunk = os.pread(fd, 65536, read_at)
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    break
+                read_at += len(chunk)
+                buf += chunk
+                i = 0
+                while True:
+                    j = buf.find(b"\n", i)
+                    if j < 0:
+                        break
+                    try:
+                        judge.feed(buf[i:j].decode("utf-8", "surrogateescape") + "\n")
+                    except Exception:
+                        pass
+                    cur += j + 1 - i
+                    i = j + 1
+                    state["pos"] = cur   # moved only past a line that was judged
+                    if now.is_set():
+                        return
+                buf = buf[i:]
+                if cur - punched >= PUNCH_STEP:
+                    ca = cur & ~4095
+                    if punch_hole(fd, ca, punched_al):   # only the new range; a failed one is tried again next time
+                        punched_al = ca
+                    punched = cur
+            if final:
+                return
+            finish.wait(0.05)
+    finally:
+        os.close(fd)
+
+def list_tracees(spid):
+    names = set()
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return 0, []
+    count = 0
+    for name in entries:
+        if not name.isdigit():
+            continue
+        try:
+            with open("/proc/%s/status" % name, "rb") as f:
+                tp = next((l for l in f.read().split(b"\n") if l.startswith(b"TracerPid:")), b"")
+            if tp.split(b":")[1].strip() != str(spid).encode():
+                continue
+            count += 1
+            with open("/proc/%s/comm" % name, "rb") as f:
+                names.add(f.read().decode("utf-8", "replace").strip())
+        except (OSError, IndexError):
+            continue
+    return count, sorted(names)[:10]
+
+def remove_trace(trace_path, tmpdir):
+    for fn, p in ((os.unlink, trace_path), (os.rmdir, tmpdir)):
+        try:
+            fn(p)
+        except OSError:
+            pass
+
+NOT_REVIEWED = "the job's command ended; these processes are still running; their later actions are not reviewed"
+
+def continue_watching(prof, judge, trace_path, tmpdir, strace, count, start, gate, leftovers=True, logged=0, more0=0):
+    """Runs in a detached child: reads the trace on from the cursor until strace is gone and the file is read to its end.
+    The helper already logged judge.entries[:logged] and a 'more' count of more0: only what came after is written."""
+    try:
+        os.setsid()
+        dn = os.open("/dev/null", os.O_RDWR)
+        for i in (0, 1, 2):
+            os.dup2(dn, i)
+        try:
+            os.read(gate, 1)   # the helper writes its own log lines first; this is released when it closes its end
+        except OSError:
+            pass
+        close_inherited()
+        for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            signal.signal(s, signal.SIG_DFL)
+        finish, now = threading.Event(), threading.Event()
+        # the helper's judge is kept as it is (its folders per process, its entries): the cap of log.max entries holds
+        # for the whole command. What the helper already judged is not judged again: start where it stopped
+        th = threading.Thread(target=tail_trace, args=(trace_path, judge, finish, now, {}, start), daemon=True)
+        th.start()
+        while strace.alive():
+            time.sleep(0.2)
+        finish.set()
+        th.join()   # strace is gone, so the file is finite
+        write_log(prof, list(judge.entries[logged:]), max(0, judge.more - more0))
+        if leftovers:
+            write_log(prof, [{"op": "watch", "path": "", "rule": "watch-leftovers-ended", "count": count}], 0)
+        remove_trace(trace_path, tmpdir)
+    except BaseException:
+        pass
+    finally:
+        os._exit(0)
+
+def run_unwatched(argv, env):
+    sys.stdout.flush()
+    restore_signals()
+    try:
+        os.execvpe(argv[0], argv, env)
+    except OSError as ex:
+        raise Fail("cannot run %s: %s" % (argv[0], errname(ex.errno)))
 
 def run_watch(prof, argv):
     # Watch runs the command as today: today's environment, not the allow-list enforce would use (UV_USE_IO_URING=0
@@ -686,46 +1120,214 @@ def run_watch(prof, argv):
     if prof["cwdFile"]:
         env["LOCKBOX_CWD_FILE"] = prof["cwdFile"]
     env["UV_USE_IO_URING"] = "0"
-    if not strace_works():
-        write_log(prof, [{"op": "watch", "path": "", "rule": "watch-unavailable"}], 0)
-        sys.stdout.flush()
-        restore_signals()
-        try:
-            os.execvpe(argv[0], argv, env)
-        except OSError as ex:
-            raise Fail("cannot run %s: %s" % (argv[0], errname(ex.errno)))
-    judge = Judge(prof, os.getcwd())
-    r, w = os.pipe()
-    os.set_inheritable(w, True)
-    target = {"pid": None}
+    fallback = False
+    seccomp = strace_works(prof, True)
+    if not seccomp:
+        if strace_works(prof, False):
+            fallback = True
+        else:
+            write_log(prof, [{"op": "watch", "path": "", "rule": "watch-unavailable"}], 0)
+            run_unwatched(argv, env)
+    if fallback:
+        write_log(prof, [{"op": "watch", "path": "", "rule": "watch-fallback",
+                          "reason": "seccomp-bpf tracing is not available here, so this job is watched in the slower mode"}], 0)
+    target = {"pid": None, "pidfd": None}
+    sigstate = {"hit": False}
+    sigs = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
 
     def forward(sig, _frame):
-        if target["pid"]:
-            try:
-                os.kill(target["pid"], sig)
-            except OSError:
-                pass
+        sigstate["hit"] = True   # a cancel at any time also ends the grace wait
+        try:
+            if target["pidfd"] is not None:
+                signal.pidfd_send_signal(target["pidfd"], sig)   # fails safely (ESRCH) once the child is reaped
+            elif target["pid"]:
+                os.kill(target["pid"], sig)                      # no pidfd: only while the child is not reaped
+        except (OSError, AttributeError):
+            pass
 
-    for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(s, forward)
-    cmd = [STRACE, "--seccomp-bpf", "-f", "-qq", "-y", "-s", "4096", "-e", "signal=none", "-e",
-           "trace=" + TRACE_SET, "-o", "/dev/fd/%d" % w, "--"] + argv
-    pid = os.fork()
+    # Watching must never fail the job: whatever goes wrong before the command started, it runs unwatched.
+    tmpdir = trace_path = None
+    try:
+        judge = Judge(prof, os.getcwd())
+        tmpdir = choose_trace_dir(prof)
+        trace_path = os.path.join(tmpdir, "trace")
+        # blocked from here to just after the fork: a cancel that arrives meanwhile waits and is then forwarded
+        signal.pthread_sigmask(signal.SIG_BLOCK, sigs)
+        for s in sigs:
+            signal.signal(s, forward)
+        # -DDD: strace in a session of its own, so a cancel that signals the command's process group cannot reach it
+        # (with seccomp-bpf, strace ending ends everything it traces)
+        sbin = trace_bin(prof)
+        cmd = [sbin, "-DDD", "-I2"] + (["--seccomp-bpf"] if seccomp else []) + [
+            "-f", "-qq", "-y", "-s", "4096", "-e", "signal=none", "-e", "trace=" + TRACE_SET, "-o", trace_path, "--"] + argv
+        pid = os.fork()
+    except Exception as ex:
+        if tmpdir:
+            remove_trace(trace_path, tmpdir)
+        write_log(prof, [{"op": "watch", "path": "", "rule": "watch-failed",
+                          "reason": "the watch could not be set up (%s), so this job ran unwatched" % type(ex).__name__}], 0)
+        # a cancel must never be swallowed by our own handler: default actions back, then unblock (a cancel that is
+        # already pending then ends the helper before the command runs, which is right)
+        for s in sigs:
+            try:
+                signal.signal(s, signal.SIG_DFL)
+            except Exception:
+                pass
+        try:
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, sigs)
+        except Exception:
+            pass
+        run_unwatched(argv, env)   # clears the signal mask before exec
     if pid == 0:
         try:
-            os.close(r)
-            restore_signals()
-            os.execve(STRACE, cmd, env)
+            for s in sigs:
+                signal.signal(s, signal.SIG_DFL)   # no handler of ours can run in the child
+            restore_signals()                      # clears the mask
+            os.execve(sbin, cmd, env)
         finally:
             os._exit(127)
-    target["pid"] = pid
-    os.close(w)
-    th = threading.Thread(target=read_stream, args=(r, judge), daemon=True)
-    th.start()
-    _, status = os.waitpid(pid, 0)  # Python retries after a signal handler ran
-    th.join(5)  # the command may have left a background process holding the pipe open
-    write_log(prof, list(judge.entries), judge.more)
+    # From here on the command is running: nothing below may fail the job or start it again.
+    pidfd = None
+    try:
+        pidfd = os.pidfd_open(pid)   # a zombie child still works
+    except Exception:
+        pidfd = None
+    try:
+        ms = prof["test"].get("pausePublishMs", 0)
+        if ms > 0:
+            time.sleep(ms / 1000.0)   # test-only: widens the window between the fork and the publishing, signals blocked
+    except Exception:
+        pass
+    target["pidfd"], target["pid"] = pidfd, pid
+    try:
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, sigs)   # a signal that came meanwhile is delivered (forwarded) now
+    except Exception:
+        pass
+    strace = reader = None
+    finish, now = threading.Event(), threading.Event()
+    state = {"pos": 0}
+    try:
+        strace = Strace(trace_path, pid, sbin)
+        if not prof["test"].get("noReader"):   # test-only switch: the reader never starts
+            reader = threading.Thread(target=tail_trace, args=(trace_path, judge, finish, now, state), daemon=True)
+            reader.start()
+    except Exception:
+        reader = None
+    try:
+        if strace is not None:
+            strace.tracee = strace.from_tracee(pid)
+    except Exception:
+        pass
+    status = 1 << 8
+    if pidfd is None:
+        # without a pidfd: keep the ended child unreaped until forwarding by pid is switched off, so a reused pid is never hit
+        try:
+            os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
+        except Exception:
+            pass
+        target["pid"] = None
+    while True:
+        try:
+            _, status = os.waitpid(pid, 0)  # Python retries after a signal handler ran
+            break
+        except InterruptedError:
+            continue
+        except Exception:
+            break
+    target["pid"] = None            # the pid is reaped: never signal it again (the pidfd fails safely too)
+    try:
+        sweep_old(prof)   # old folders of earlier runs; after the command, so a huge temp dir never delays its start
+    except Exception:
+        pass
+    try:
+        if strace is None:
+            raise RuntimeError("no strace lookup")
+        watch_end(prof, judge, strace, finish, now, reader, trace_path, tmpdir, state, sigstate)
+    except Exception:
+        # whatever went wrong, the folder does not stay (unlinking is safe even while strace still writes)
+        remove_trace(trace_path, tmpdir)
+    target["pidfd"] = None
+    if pidfd is not None:
+        try:
+            os.close(pidfd)
+        except OSError:
+            pass
     exit_like(status)
+
+def watch_end(prof, judge, strace, finish, now, reader, trace_path, tmpdir, state, sigstate):
+    # strace is found once, now that the command has ended: alive means leftovers keep it running (with -D the command
+    # only starts after strace attached, so a strace that was there and has gone is simply finished)
+    deadline = time.monotonic() + watch_grace(prof)
+    strace.scan()
+    t0 = time.monotonic()
+    while strace.alive() and time.monotonic() < deadline and not sigstate["hit"]:
+        # strace usually ends a few ms after the command: look often at first, so a normal command is not held up
+        time.sleep(0.001 if time.monotonic() - t0 < 0.1 else 0.02)
+    leftovers = strace.alive()
+    # "watch-failed" only when sure: the child ran the command and our strace was never its tracer, and the scan found none
+    failed = []
+    if strace.tracee == "untraced" and strace.pid is None:
+        failed = [{"op": "watch", "path": "", "rule": "watch-failed",
+                   "reason": "strace could not attach (the job may already be traced), so this job ran unwatched"}]
+    if not leftovers:
+        # strace is gone: the reader reads the trace to its end
+        finish.set()
+        if reader is not None:
+            reader.join(1.5)
+        if reader is not None and not reader.is_alive():
+            write_log(prof, list(judge.entries) + failed, judge.more)
+            remove_trace(trace_path, tmpdir)
+            return
+    # Leftovers keep strace running, a backlog of lines is still being judged, or no reader ever started: the reader (if
+    # any) stops after the current line (the cursor is exact) and a continuation reads on from there.
+    now.set()
+    if reader is not None:
+        reader.join(1.0)
+    reader_alive = reader is not None and reader.is_alive()
+    entries = list(judge.entries)
+    logged, more0 = len(entries), judge.more
+    entries = entries + failed
+    entry = None
+    count = 0
+    if leftovers:
+        count, names = list_tracees(strace.pid)
+        entry = {"op": "watch", "path": "", "rule": "watch-leftovers", "count": count, "names": names}
+
+    def give_up():
+        # nothing more can be reviewed: say what is known, free the files (strace, if still running, keeps its open file)
+        if entry is not None:
+            entry["note"] = NOT_REVIEWED
+            write_log(prof, entries + [entry], more0)
+        else:
+            write_log(prof, entries + [{"op": "watch", "path": "", "rule": "watch-incomplete",
+                                        "reason": "the end of the trace could not be reviewed in time"}], more0)
+        remove_trace(trace_path, tmpdir)
+
+    if reader_alive:
+        give_up()   # forking while another thread may hold a lock could deadlock the child
+        return
+    sys.stdout.flush()
+    sys.stderr.flush()
+    r = w = None
+    try:
+        r, w = os.pipe()
+        cpid = os.fork()
+    except OSError:
+        for fd in (r, w):
+            if fd is not None:
+                os.close(fd)
+        give_up()
+        return
+    if cpid == 0:
+        os.close(w)
+        continue_watching(prof, judge, trace_path, tmpdir, strace, count, state["pos"], r, leftovers, logged, more0)
+    os.close(r)
+    if entry is not None:
+        entry["note"] = "the job's command ended; these processes are still running and are still being watched until they end"
+    try:
+        write_log(prof, entries + ([entry] if entry is not None else []), more0)
+    finally:
+        os.close(w)   # releases the continuation
 
 # ---------------------------------------------------------------- main
 def parse_args(args):

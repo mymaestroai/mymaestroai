@@ -351,5 +351,5 @@ test('phone voice sheet: the same, and the call screen gets it through createCal
 // removed (P4-2): 'agent settings: the default call display lists downloadable characters with their size and saves pack:<id>' ran the old page's callDisplayOptions;
 // the card's Call display row lists the installed and downloadable characters ('Owl · downloads 4 MB') and saves PATCH {callDisplay} - test/ui-agent-card-basics.test.js.
 test('the phone service worker cache is bumped for the new mobile.js', () => {
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v104'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v109'/);
 });

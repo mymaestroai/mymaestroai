@@ -62,7 +62,7 @@ test('3. Models and money: subscriptions and plan usage, spend and caps, then th
 test('4. the phone group page hides the dialog title and sentence and shows Save only where the shared Save has something to write', () => {
   assert.match(idx, /\.st-modal:has\(#st-groups\[data-page="group"\]\) > h3, \.st-modal:has\(#st-groups\[data-page="group"\]\) > \.st-sub \{ display: none; \}/);
   assert.match(idx, /\.st-modal\[data-save-here="no"\] \.st-actions \.st-save-main \{ display: none; \}/);
-  assert.match(idx, /\.st-phone-title::before \{ content: "\\00b7\\00a0";/, '"‹ Settings · Group title"');
+  assert.ok(!/\.st-phone-title::before/.test(idx), '"‹ Settings" then the title: no separator dot (P6)');
   assert.ok(app.includes('<button class="st-btn st-save-main" onclick="saveSettings()">Save</button>'), 'the shared Save is findable');
   assert.deepStrictEqual(G.SHARED_SAVE_GROUPS.slice().sort(), ['agents', 'money'], 'provider keys and limits (money), workers at once (agents)');
   for (const g of G.GROUPS) assert.strictEqual(G.usesSharedSave(g.id), g.id === 'money' || g.id === 'agents', g.id);

@@ -18,17 +18,17 @@ function dom() {
   const focused = { el: null };
   let deliveries = 0; let runaway = false; let queued = false;
   const pending = new Map();   // observer -> the nodes added since its last delivery
-  function notify(target, added = []) {
-    for (const o of observers) if (o.targets.includes(target)) pending.set(o, (pending.get(o) || []).concat(added));
+  function notify(target, added = [], removed = []) {
+    for (const o of observers) if (o.targets.includes(target)) { const p = pending.get(o) || { addedNodes: [], removedNodes: [] }; p.addedNodes = p.addedNodes.concat(added); p.removedNodes = p.removedNodes.concat(removed); pending.set(o, p); }
     if (queued || !pending.size) return;
     queued = true;
     queueMicrotask(() => {
       queued = false;
       const now = [...pending]; pending.clear();
-      for (const [o, addedNodes] of now) {
+      for (const [o, rec] of now) {
         if (deliveries >= MAX_DELIVERIES) { runaway = true; return; }
         deliveries++;
-        o.f([{ addedNodes }]);
+        o.f([{ addedNodes: rec.addedNodes, removedNodes: rec.removedNodes }]);
       }
     });
   }
@@ -42,8 +42,8 @@ function dom() {
         if (c.parentNode) c.parentNode.removeChild(c, true);
         const i = this.children.indexOf(ref); c.parentNode = this; this.children.splice(i < 0 ? this.children.length : i, 0, c); notify(this, [c]); return c;
       },
-      removeChild(c, quiet) { this.children = this.children.filter((x) => x !== c); c.parentNode = null; if (!quiet) notify(this); return c; },
-      replaceChildren(...c) { this.children.forEach((x) => { x.parentNode = null; }); this.children = []; c.forEach((x) => { x.parentNode = this; this.children.push(x); }); notify(this, c); },
+      removeChild(c, quiet) { this.children = this.children.filter((x) => x !== c); c.parentNode = null; if (!quiet) notify(this, [], [c]); return c; },
+      replaceChildren(...c) { const old = this.children.slice(); this.children.forEach((x) => { x.parentNode = null; }); this.children = []; c.forEach((x) => { x.parentNode = this; this.children.push(x); }); notify(this, c, old); },
       setAttribute(k, v) { this.attrs[k] = String(v); },
       getAttribute(k) { return this.attrs[k]; },
       hasAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k); },
@@ -75,6 +75,8 @@ function load({ deferGet = false } = {}) {
   const mod = { exports: {} };
   const ctx = { module: mod, document: d, fetch, location: { search: '', assign(u) { ctx.assigned.push(u); } }, assigned: [], encodeURIComponent, JSON, Promise, console, MutationObserver: D.MO, Date: { now: () => CLOCK.t }, setTimeout, clearTimeout, queueMicrotask };
   vm.runInNewContext(SRC, ctx, { filename: FILE });
+  // these tests model a page whose saved history is already drawn (a page that signals nothing is the done test's business)
+  { const ex = mod.exports, shown = ex.chatShown; ex.chatShown = (a, l, o) => { shown(a, l, o); if (l && !ex.noAutoDrawn) ex.historyDrawn(l); }; }
   return { FC: mod.exports, D, d, ctx, card, gets };
 }
 // The phone's busy card as mobile.js paints it: appended last, and its own observer puts it back at the end after anything else is added.
@@ -259,7 +261,7 @@ test('(b) adding a busy card or a keep-last element does not fold the card', asy
 
 test('(c) messageArrived for another list does nothing', async () => {
   const { FC, D } = load();
-  const list = D.node('div'); const other = D.node('div');
+  const list = D.node('div'); const other = D.node('div'); list.appendChild(D.node('div'));
   FC.chatShown('harbor', list); await settle();
   FC.messageArrived(other); await settle();
   assert.ok(!toggleOf(cardIn(list)), 'not folded');
@@ -292,7 +294,7 @@ test('(d) pressing the header unfolds (rows back, aria-expanded true, focus on t
 
 test('a chat switch away and back does not unfold; a new message while unfolded after a fold folds again', async () => {
   const { FC, D } = load();
-  const a = D.node('div'); const b = D.node('div');
+  const a = D.node('div'); const b = D.node('div'); a.appendChild(D.node('div'));
   FC.chatShown('harbor', a); await settle();
   a.appendChild(D.node('div')); FC.messageArrived(a); await settle();
   assert.ok(toggleOf(cardIn(a)));
@@ -320,7 +322,7 @@ test('(e0) with every row owner-locked, unfolding keeps focus on the toggle', as
 test('(e) the Settings page copy from renderInto never folds', async () => {
   const { FC, D } = load();
   const box = D.node('div'); D.node('div');
-  const list = D.node('div');
+  const list = D.node('div'); list.appendChild(D.node('div'));
   await FC.renderInto(box);
   FC.chatShown('harbor', list); await settle();
   list.appendChild(D.node('div')); FC.messageArrived(list); box.appendChild(D.node('div')); await settle();
@@ -333,15 +335,18 @@ test('(e) the Settings page copy from renderInto never folds', async () => {
 
 test('(e) the closing line says "on the Changes page" and its link goes to API.openChanges, else location.assign(/changes)', async () => {
   for (const mode of ['fn', 'assign', 'nothing']) {
-    const { FC, D, ctx } = load();
+    const { FC, D, ctx, card: cardBody } = load();
+    cardBody.entries = []; cardBody.notices = [{ id: 'quiet-fix', title: 'Faster history search', line: 'Nothing for you to do.' }];   // a notice answered OK leaves no done line: the closing line shows
     let n = 0;
     if (mode === 'fn') FC.openChanges = () => { n++; };
     if (mode === 'nothing') ctx.location = {};   // no assign at all: nothing happens, nothing throws
-    const list = D.node('div');
+    const list = D.node('div'); list.appendChild(D.node('div'));
     FC.chatShown('harbor', list); await settle();
-    buttonsIn(cardIn(list)).find((b) => b.textContent === 'Leave off').click();
+    const box = D.node('div'); await FC.renderInto(box);   // the closing line is the Settings copy's (the chat copy of a notice-only answer goes away)
+    buttonsIn(box).find((b) => b.textContent === 'OK').click();
     await settle();
-    const card = cardIn(list);
+    assert.strictEqual(cardIn(list), undefined, mode + ': the chat copy goes');
+    const card = box;
     const closing = allNodes(card).find((x) => /\bfc-closing\b/.test(x.className));
     assert.ok(closing, mode);
     const text = (x) => (x.textContent || '') + x.children.map(text).join('');
@@ -404,7 +409,7 @@ test('a live message before the card first answers: the card arrives folded in t
 
 test('phone shared list: a live message in another agent\'s chat before the GET does not fold the lead\'s card', async () => {
   const { FC, D, gets } = load({ deferGet: true });
-  const list = D.node('div');
+  const list = D.node('div'); list.appendChild(D.node('div'));
   FC.chatShown('someone', list);
   FC.messageArrived(list);   // a live message in someone else's chat
   FC.chatShown('harbor', list);   // then the lead's chat on the same list

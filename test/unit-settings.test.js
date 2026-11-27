@@ -166,7 +166,7 @@ test('getForUI never returns a raw key: masked hint, hasKey flag, unknown provid
   process.env.PERPLEXITY_API_KEY = 'pplx-env-SECRET-ENV-KEY';
   const { s } = load({ providers: { anthropic: { apiKey: longKey }, openai: { apiKey: 'short' }, custom: { apiKey: 'custom-SECRET-KEY' } }, theme: 'dark' });
   const ui = s.getForUI();
-  assert.deepStrictEqual(ui.providers.anthropic, { hasKey: true, keyHint: 'sk-a...wxyz', keySource: 'settings', url: 'https://api.anthropic.com', defaultUrl: 'https://api.anthropic.com' });
+  assert.deepStrictEqual(ui.providers.anthropic, { hasKey: true, keyHint: 'sk-a...wxyz', keySource: 'settings', url: 'https://api.anthropic.com', defaultUrl: 'https://api.anthropic.com', hasUrlOverride: false, fallbackUrl: 'https://api.anthropic.com' });   // fallbackUrl: where a reset of the address leads (phase 5c)
   assert.deepStrictEqual(ui.providers.openai.keyHint, '****', 'keys of 8 chars or fewer are fully masked');
   assert.strictEqual(ui.providers.google.hasKey, false);
   assert.strictEqual(ui.providers.google.keyHint, '');
@@ -178,6 +178,18 @@ test('getForUI never returns a raw key: masked hint, hasKey flag, unknown provid
   const json = JSON.stringify(ui);
   for (const secret of ['SECRETSECRETSECRET', 'SECRET-ENV-KEY', 'custom-SECRET-KEY', 'apiKey']) assert.ok(!json.includes(secret), `leaked ${secret}`);
   assert.ok(s.get().providers.anthropic.apiKey === longKey, 'the stored key itself is untouched');
+});
+
+test('getForUI: hasUrlOverride is true for a stored address (even the built-in one), false for none, empty or a non-string', () => {
+  const { s } = load({ providers: { anthropic: { url: 'https://api.anthropic.com' }, openai: { url: 'https://proxy.example.com/v1' }, google: { url: '' }, perplexity: { url: 5 } } });
+  const ui = s.getForUI();
+  assert.strictEqual(ui.providers.anthropic.hasUrlOverride, true, 'a stored address equal to the built-in one is still an override');
+  assert.strictEqual(ui.providers.openai.hasUrlOverride, true);
+  assert.strictEqual(ui.providers.google.hasUrlOverride, false, 'empty string');
+  assert.strictEqual(ui.providers.perplexity.hasUrlOverride, false, 'not a string');
+  assert.strictEqual(ui.providers.openrouter.hasUrlOverride, false, 'nothing stored');
+  process.env.OLLAMA_URL = 'http://10.0.0.9:11434';
+  assert.strictEqual(load().s.getForUI().providers.ollama.hasUrlOverride, false, 'an env address is not a stored override');
 });
 
 test('globals bridge: updateSettings refreshes the legacy global.__* flags with their defaults', () => {

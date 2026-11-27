@@ -62,6 +62,7 @@ async function api(path, opts = {}) {
   if (res.status === 401 && !redirectingToLogin && !OWN_401.includes(String(path).split('?')[0])) {
     redirectingToLogin = true;
     try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }   // no session: the last person's theme must not stay here
+    try { if (window.HubLooks) window.HubLooks.forgetBanner(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
     location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
   }
   return res;
@@ -8477,6 +8478,7 @@ function paintSaved(bubble, m) {
 
 function renderHistory() {
   const box = chatEl();
+  try { window.FeatureCard && FeatureCard.historyDrawing(box); } catch { /* cosmetic */ }   // the new-features card waits for historyDrawn
   box.innerHTML = '';
   const start = 0;   // the whole loaded list is drawn; older entries come from the hub, a page per tap (loadEarlier)
   if (chatNext != null) {
@@ -8500,6 +8502,7 @@ function renderHistory() {
   if (!chatHistory.length && chatNext == null) addNote('No messages yet');
   if (typeof simpleEmptyPaint === 'function') simpleEmptyPaint(!chatHistory.length && chatNext == null);   // Simple: greeting and starter buttons
   paintBusyCard();   // the redraw cleared the chat, the busy card goes back at the bottom
+  try { window.FeatureCard && FeatureCard.historyDrawn($('messages'), { fresh: true }); } catch { /* cosmetic */ }   // the history is drawn (every caller scrolls or restores the place next): the new-features card may attach now
 }
 
 // Turns the hub starts by itself fold into closed cards; the setting is per device ('off' turns it off).
@@ -8788,7 +8791,7 @@ async function openChat(name) {
   current = name; if (typeof voiceHintSync === 'function') voiceHintSync();   // a chat switch takes the hint down
   try { if (window.HandOffCard && typeof HandOffCard.follow === 'function') HandOffCard.follow(); } catch { /* the timer tick follows */ }   // the "Working on" panel follows the chat at once
   teamSetupSlotPaint();   // the lead's chat: the Set up teams offer, the Undo for a team just set up
-  try { window.FeatureCard && FeatureCard.chatShown(name, $('messages')); } catch { /* cosmetic */ }   // the lead's chat: the new-features card at the end of the list
+  try { window.FeatureCard && FeatureCard.chatShown(name, $('messages'), { redraw: true }); } catch { /* cosmetic */ }   // the lead's chat: the new-features card at the end of the list
   localStorage.setItem('hub-mobile-last', name);
   voiceStatusRefresh();   // the mic button shows only while the hub voice is on and ready
   researchLinePaint(); researchLineLoad(name);   // the deep research progress line
@@ -8804,7 +8807,7 @@ async function openChat(name) {
   // Back from another tab while this chat's own reply is still painting into the page: keep it.
   const rec = streams.get(name);
   const ra = reattaches.get(name);
-  if (same && ((rec && bubbleLive(rec)) || (ra && bubbleLive(ra)))) { paintChatStatus(); return; }
+  if (same && ((rec && bubbleLive(rec)) || (ra && bubbleLive(ra)))) { paintChatStatus(); try { window.FeatureCard && FeatureCard.historyDrawn($('messages')); } catch { /* cosmetic */ } return; }   // the list keeps its messages: drawn
   pendingImages = [];
   draftGen++;   // a new draft: pictures and sends that started in the old one do not carry over
   // The old draft's pictures still being prepared are retired: a send in the new draft must not wait for them.
@@ -13229,7 +13232,7 @@ async function sendMessage(fallback) {
   const userEl = fallback ? fallback.userEl : addUserBubble(text, images);
   if (!fallback) setBubbleTime(userEl, msgTimeLabel(Date.now()));
   const bubble = addAssistantBubble();
-  try { window.FeatureCard && FeatureCard.messageArrived($('messages')); } catch { /* cosmetic */ }   // a live send: the person's message and the reply bubble just landed
+  try { window.FeatureCard && FeatureCard.messageArrived($('messages'), { own: true }); } catch { /* cosmetic */ }   // a live send: the person's message and the reply bubble just landed
   bubble.body.innerHTML = '<span style="opacity:.6">⏳ Thinking…</span>';
   scrollChat(true);
 
@@ -15752,11 +15755,26 @@ function reviewPaint(r) {
 }
 // The ONE notice at the top of the agent list: only while something is in "Fix now" (red). "<first item> (and N more to fix). Open For your review"
 // and the first item's fix button; the link opens Settings at the review group (its page starts with Fix now).
+// html.mm-rvb-cached (lib/ui-looks.js) holds the banner's place from the first paint; only a SETTLED call (hubMe known, or the no-accounts build)
+// may drop it or touch the remembered banner.
+let reviewBannerSettled = false;
+const reviewBannerBackstop = setTimeout(() => { if (reviewBannerSettled) return; document.documentElement.classList.remove('mm-rvb-cached'); try { if (window.HubLooks) window.HubLooks.rememberBanner(window.HubLooks.storageOf(window), 'phone', null); } catch { /* blocked */ } }, 15000);   // backstop: no answer, so the next load reserves nothing
+if (reviewBannerBackstop && reviewBannerBackstop.unref) reviewBannerBackstop.unref();   // (Node tests only)
 function reviewPaintBanner(r) {
   const bar = $('review-banner');
   if (!bar) return;
+  if (!(hubMe || window.hubNoAccounts === true)) return;   // not settled: leave the placeholder and the cache
+  reviewBannerSettled = true;
+  const html = document.documentElement;
+  const hadCached = html.classList.contains('mm-rvb-cached'), wasHidden = bar.hidden;
+  const store = () => { try { return window.HubLooks ? window.HubLooks.storageOf(window) : null; } catch { return null; } };
   const RV = window.hubReview, b = r && RV ? RV.bannerOf(r) : null;
-  if (!b) { bar.hidden = true; bar.textContent = ''; return; }
+  if (!b) {
+    bar.hidden = true; bar.textContent = '';
+    html.classList.remove('mm-rvb-cached');
+    try { if (window.HubLooks) window.HubLooks.rememberBanner(store(), 'phone', null); } catch { /* blocked storage */ }
+    return;
+  }
   const f = b.fix;
   bar.innerHTML = `<span class="rvb-text">${esc(b.title)}${b.more > 0 ? ` (and ${b.more} more to fix)` : ''}.</span> <a href="#" class="rvb-open">Open For your review</a>`
     + (f && f.href ? ` <a href="${esc(f.href)}" class="rvb-fix">${esc(f.label)}</a>` : f && f.api ? ` <button type="button" class="rvb-fix" data-api="${esc(f.api)}" data-method="${esc(f.method || 'POST')}">${esc(f.label)}</button>` : f && f.kind === 'claude-signin' ? ' <span class="rvb-signin"></span>' : '');
@@ -15770,7 +15788,10 @@ function reviewPaintBanner(r) {
   });
   const slot = bar.querySelector('.rvb-signin');
   if (slot) { const s = typeof ClaudeSignin !== 'undefined' ? ClaudeSignin.healthButton({ action: 'claude-signin' }) : null; if (s) slot.appendChild(s); }
+  if (!hadCached && wasHidden) { bar.classList.add('mm-rvb-enter'); setTimeout(() => bar.classList.remove('mm-rvb-enter'), 300); }   // newly appearing: slides in once
   bar.hidden = false;
+  html.classList.remove('mm-rvb-cached');
+  try { if (window.HubLooks && bar.offsetHeight > 0) window.HubLooks.rememberBanner(store(), 'phone', { h: bar.getBoundingClientRect().height }); } catch { /* blocked storage */ }   // fractional height: the list sits at 47.1 px, not 47
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) reviewRefresh().catch(() => {}); });
 setInterval(() => reviewRefresh().catch(() => {}), 5 * 60 * 1000);
@@ -16208,6 +16229,7 @@ async function paintMenuCredit() {
 
 async function signOut() {
   try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
+  try { if (window.HubLooks) window.HubLooks.forgetBanner(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
   try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
   location.href = '/login';
 }
@@ -16416,6 +16438,7 @@ function settingsSheetMessage(e) {
   const type = e.data && e.data.type;
   if (type === 'mm-settings-ready') { s.ready = true; s.away = false; clearTimeout(s.timer); s.el.classList.add('ready'); s.el.querySelector('.ssh-bar').hidden = true; }   // back on Settings (after signing in again)
   else if (type === 'mm-settings-closed') settingsSheetClosed();
+  else if (type === 'mm-agents-changed') Promise.resolve().then(loadAgents).catch(() => { /* the list refreshes on its next event */ });   // an agent made in Settings > Agents and teams > New agent
   else if (type === 'mm-settings-kept' || type === 'mm-settings-asking' || type === 'mm-settings-popped') { clearTimeout(s.closeTimer); settingsSheetKeepWaiting(); dialogGuard.open(s.el); }   // a late answer also clears "isn't answering"   // "Discard changes?", a save running or an inner box closed: the sheet stays, Back works again
 }
 function settingsSheetClosed() {

@@ -84,6 +84,20 @@ test('the committed records: label anchors are non-empty words, doors and action
   assert.ok(byLabel > 0);
 });
 
+let generatedIdSet = null;
+function generatedIds() {
+  if (generatedIdSet) return generatedIdSet;
+  const G = require(path.join(ROOT, 'lib/ui-settings-groups.js'));
+  const X = require(path.join(ROOT, 'lib/ui-settings-expert.js'));
+  const EF = require(path.join(ROOT, 'lib/env-file.js'));
+  const xsrc = fs.readFileSync(path.join(ROOT, 'lib/ui-settings-expert.js'), 'utf8');
+  const s = new Set(G.P5C.map((r) => r.id));
+  if (xsrc.includes('id="st-env-${k}"')) for (const k of Object.keys(X.KEYS)) s.add(`st-env-${k}`);
+  if (xsrc.includes('id="st-ro-${esc(m.key)}"')) for (const k of [...EF.ENV_READONLY, ...EF.ENV_DANGER, ...X.DANGER_SETTINGS]) s.add(`st-ro-${k}`);
+  if (xsrc.includes('id="st-mem-limit-in"')) s.add('st-mem-limit-in');
+  return (generatedIdSet = s);
+}
+
 test('every anchor selector id appears literally in its surface\'s files', () => {
   const text = {};
   const read = (f) => (text[f] = text[f] || fs.readFileSync(path.join(ROOT, f), 'utf8'));
@@ -108,6 +122,9 @@ test('every anchor selector id appears literally in its surface\'s files', () =>
         const door = /^st-door-([a-z-]+)$/.exec(id);
         if (!found && door) found = files.some((f) => read(f).includes('id="st-door-${name}"') && read(f).includes(`stDoorHtml('${door[1]}',`));
         if (!found && prov) found = files.some((f) => read(f).includes('id="st-' + prov[1] + '-${p.id}"') && read(f).includes(`{ id: '${prov[2]}',`));
+        // rows drawn from a module's own list: the Settings rows of lib/ui-settings-groups.js P5C (id st-p5c-<key>), and the startup values
+        // of lib/ui-settings-expert.js (st-env-<KEY> for a value the page changes, st-ro-<KEY> for one it only shows, st-mem-limit-in)
+        if (!found && a.surface === 'desktop') found = generatedIds().has(id);
       }
       assert.ok(found, `${r.id}: ${a.selector} is not in ${files.join(' / ')} (renamed?)`);
       n++;
@@ -368,8 +385,9 @@ test('no record tells people to edit a settings or data file by hand', () => {
     assert.ok(!stale.test(v), `${r.id} ${r.name} ${f}: "${(stale.exec(v) || [''])[0]}"`);
   }
   // the people are pointed to the screen or to Maestro instead
-  assert.match(records.byId('OPT-0966').when, /ask Maestro/);
-  assert.match(records.byId('OPT-0943').what, /ask Maestro/);
+  // (since phase 5c both have a row on the screen: the update-check hours a control, the wallet agents a read-only row)
+  assert.match(records.byId('OPT-0966').when, /shown on the settings screen/);
+  assert.doesNotMatch(records.byId('OPT-0943').what, /ask Maestro|not on the settings screen/);
 });
 
 test('secret records are screen and dangerous; device records are never apply or confirm', () => {

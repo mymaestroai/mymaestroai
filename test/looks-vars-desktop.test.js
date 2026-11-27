@@ -37,7 +37,7 @@ const declaredAnywhere = new Set([...stripComments(html).matchAll(/(--[\w-]+)\s*
 //    to its inherited value). Defining them would CHANGE today's look, so they stay undefined:
 //    --bg-hover, --bg-secondary, --bg-primary, --text-muted, --danger, --green, --border-color
 //  - defined only by the Simple-mode blocks (html.mm-simple): --text-primary, --text-secondary, --bg-tertiary, --sm-*
-const RUNTIME_OR_UNDEFINED = new Set(['--banner-h', '--gs-dock-width', '--bg-hover', '--bg-secondary', '--bg-primary',
+const RUNTIME_OR_UNDEFINED = new Set(['--banner-h', '--gs-dock-width', '--mm-rvb-text', '--mm-rvb-h', '--mm-rvb-top', '--bg-hover', '--bg-secondary', '--bg-primary',
   '--text-muted', '--danger', '--green', '--border-color']);
 
 // ---- 1. every var(--x) has a definition
