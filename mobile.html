@@ -321,11 +321,14 @@
     #review-banner a { color: var(--on-accent); text-decoration: underline; }
     #review-banner button.rvb-fix, #review-banner a.rvb-fix { margin-left: 4px; padding: 2px 10px; border-radius: 4px; border: 1px solid var(--on-health-notice); background: transparent; color: var(--on-health-notice); font: inherit; cursor: pointer; }
     /* the fix as a link (e.g. Open the Welcome page) is a button like the desktop's, never a second run of underlined text */
-    #review-banner a.rvb-fix { display: inline-block; text-decoration: none; max-width: 100%; box-sizing: border-box; white-space: normal; }
+    #review-banner a.rvb-fix { display: inline-block; text-decoration: none; max-width: 100%; box-sizing: border-box; white-space: normal; margin-top: 4px; }
     #review-banner a.rvb-open { white-space: nowrap; }   /* "Open For your review" never splits across two lines */
-    /* a thumb-sized tap area (40 px tall) for the link and the fix, wider than neither by more than 2 px; the outline keeps its size */
+    /* thumb-sized tap areas (40 px tall), each within its own control's width; the outline keeps its size. The link's area reaches up
+       from its text and the fix's down from its outline, so when the fix drops below the link (narrow phones) neither covers the other. */
     #review-banner a.rvb-open, #review-banner .rvb-fix { position: relative; }
-    #review-banner a.rvb-open::after, #review-banner .rvb-fix::after { content: ''; position: absolute; left: -2px; right: -2px; top: 50%; height: 40px; transform: translateY(-50%); }
+    #review-banner a.rvb-open::after, #review-banner .rvb-fix::after { content: ''; position: absolute; left: 0; right: 0; height: 40px; }
+    #review-banner a.rvb-open::after { bottom: -3px; }
+    #review-banner .rvb-fix::after { top: -3px; }
     .pacing-bar { display: none; width: 100%; flex-shrink: 0; padding: 4px 12px; background: var(--pacing-bar-bg); color: var(--on-pacing); font-size: 12px; font-weight: 600; text-align: left; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     #pacing-text { white-space: pre-line; }
     .pacing-bar.on { display: block; }

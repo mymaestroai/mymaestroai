@@ -24,6 +24,8 @@ test('phone: the fix as a link is drawn as a button (border, padding, no underli
   assert.ok(mob.indexOf('#review-banner a {') < /\n\s*#review-banner a\.rvb-fix \{/.exec(mob).index);
   assert.ok(rule(mob, '#review-banner a.rvb-open').includes('white-space: nowrap'), 'Open For your review never splits');
   const tapArea = rule(mob, '#review-banner a.rvb-open::after, #review-banner .rvb-fix::after');
+  assert.ok(rule(mob, '#review-banner a.rvb-open::after').includes('bottom: -3px') && rule(mob, '#review-banner .rvb-fix::after').includes('top: -3px'), 'the link area reaches up, the fix area down');
+  assert.ok(tapArea.includes('left: 0; right: 0'), 'tap areas stay within their control width');
   assert.ok(/height: (3[6-9]|[4-9]\d)px/.test(tapArea) && tapArea.includes('position: absolute'), 'a tap area of 36 px or more around both controls');
 });
 
