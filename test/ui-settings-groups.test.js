@@ -41,7 +41,7 @@ test('eight groups in the designed order, titles, icons and sub-lines as in word
 test('every section openSettings draws is in exactly one group (or its More); nothing is lost', () => {
   const app = read('app.js');
   const drawn = drawnSections(app);
-  assert.strictEqual(drawn.length, 35, 'all 35 sections carry an id (33 + This Maestro in Upkeep + the Users door in People)');
+  assert.strictEqual(drawn.length, 36, 'all 36 sections carry an id (33 + This Maestro in Upkeep + the Users door in People + Expert values)');
   const listed = G.allSectionIds();
   assert.strictEqual(new Set(listed).size, listed.length, 'no section in two groups');
   assert.deepStrictEqual([...listed].sort(), [...drawn].sort(), 'the groups name exactly the sections drawn');

@@ -3658,6 +3658,18 @@
           b.insertBefore(d, spend || b.firstChild);
         }
       }
+      // Startup values (.env) and the memory limit for background work (lib/ui-settings-expert.js): admins only. The memory limit sits in
+      // Upkeep itself; the startup values join Expert values under Upkeep's More. Rows arrive after a fetch; the ⓘ help watches for them.
+      if (!stSingle && isHubAdmin() && window.hubSettingsExpert) {
+        const X = window.hubSettingsExpert;
+        const fj = async (u, o) => { const r = await fetch(u, { credentials: 'include', ...(o || {}) }); const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || 'Request failed'); return j; };
+        const up = body('upkeep'), exp = document.getElementById('st-expert-section');
+        const recsP = window.hubSettingsHelp ? window.hubSettingsHelp.load(false) : fj('/api/settings-records');
+        recsP.then((recs) => {
+          if (up && !document.getElementById('st-mem-limit')) { const d = document.createElement('div'); d.id = 'st-mem-limit'; d.className = 'st-section'; up.insertBefore(d, up.firstChild); X.renderMemoryLimit(d, { records: recs, fetchJson: fj, toast: hubToast }).catch(() => {}); }
+          if (exp && !document.getElementById('st-env-values')) { const d = document.createElement('div'); d.id = 'st-env-values'; exp.appendChild(d); X.render(d, { records: recs, fetchJson: fj, toast: hubToast }).catch(() => {}); }
+        }).catch(() => {});
+      }
       document.dispatchEvent(new CustomEvent('hub-settings-drawn'));
     }
 
@@ -3678,6 +3690,10 @@
         return;
       }
       if (!RV || !me || !me.isAdmin || !me.user) { reviewLast = null; reviewPaintGear(); reviewPaintBanner(); return; }
+      // Saved startup values that wait for a restart (lib/ui-settings-expert.js): a source of its own, registered once and only for admins (the route is theirs)
+      if (window.hubSettingsExpert && !reviewRefresh.expertOn) {
+        reviewRefresh.expertOn = window.hubSettingsExpert.registerReview(RV, async (u, o) => { const r = await fetch(u, { credentials: 'include', ...(o || {}) }); const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || 'Request failed'); return j; });
+      }
       let input;
       try { input = await RV.load((u, o) => fetch(u, o), { accounts: { none: me.accounts === false } }); } catch { return; }
       if (seq !== reviewSeq) return;   // a newer read is on its way
@@ -4362,6 +4378,17 @@
         <div class="st-hint" style="margin-left:0">How each agent turn is put together: pre-scan, lazy tools, SDK workers, team guidance and terse replies. Each one is saved as you change it. Reply length and message history sent are Max tokens and Context msgs under Agent Defaults.</div>
         <div id="st-tuning-slot"></div>
       </div>`;
+
+      // Expert values (phase 5c): one row for each settings.json number or switch that only a file edit changed. Admins only. Most rows are
+      // drawn here and moved to their own group by stPlaceRows (lib/ui-settings-groups P5C); each box saves on its own.
+      if (isHubAdmin()) {
+        p5cData = data;
+        html += `<div class="st-section" id="st-expert-section"><h4>Expert values</h4>
+        <div class="st-hint" style="margin-left:0">Numbers that tune your Maestro. Each box saves as you change it; Use default puts the built-in value back.</div>
+        ${STG.P5C.map(r => p5cRowHtml(r, data)).join('')}
+      </div>`;
+        setTimeout(p5cAfterDraw, 0);
+      }
 
       html += `<div class="st-section" id="st-emergency-section"><h4>Emergency</h4>
         <div class="st-row">
@@ -6023,6 +6050,106 @@
       } catch (e) {
         if (sel && researchReminderSaved !== null) sel.value = researchReminderSaved;
         hubToast('Could not save: ' + e.message);
+      }
+    }
+
+    // ── Expert values (phase 5c, admins only): one row for each settings.json key that only a file edit changed ──
+    // The table is STG.P5C (lib/ui-settings-groups.js: name, OPT id, kind, limits, default words, home). Each row is drawn in the Expert values
+    // section and moved to its group by stPlaceRows. Each box saves on its own through POST /api/settings; a failure shows the hub's words and puts
+    // the box back. "Use default" sends null (a provider address: empty) so the hub falls back to its built-in value.
+    let p5cData = {};     // the settings the dialog was drawn with, kept current as rows save
+    const p5cBusy = {};   // OPT id -> a save is in flight
+    function p5cRowHtml(r, data) {
+      const di = `id="${r.id}" data-setting="${r.opt}"`;
+      const on = `onchange="p5cSave('${r.opt}')"`;
+      const dim = 'font-size:0.8rem;color:var(--text-dim)';
+      let ctl = '';
+      if (r.kind === 'num') ctl = `<input type="number" ${di} min="${r.min}" max="${r.max}" step="${r.step}" placeholder="default" style="max-width:110px" ${on}> <span style="${dim}">${esc(r.unit)}</span>`;
+      else if (r.kind === 'text') ctl = `<input type="text" ${di} placeholder="${esc(r.placeholder)}" autocomplete="off" spellcheck="false" style="max-width:110px" ${on}>`;
+      else if (r.kind === 'url') ctl = `<input type="text" ${di} placeholder="${esc(r.dflt)}" autocomplete="off" spellcheck="false" style="flex:1 1 220px;min-width:0;max-width:340px" ${on}>`;
+      else if (r.kind === 'switch') ctl = `<label class="toggle-switch"><input type="checkbox" ${di} ${on}><span class="toggle-slider"></span></label>`;
+      else if (r.kind === 'select') ctl = `<select ${di} ${on}>${r.options.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select>`;
+      else if (r.kind === 'model') ctl = `<select ${di} ${on}><option value="">Default</option></select>`;
+      else if (r.kind === 'models') ctl = `<div ${di} style="flex:1 1 260px;max-height:170px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:4px 8px">Loading…</div>`;
+      else if (r.kind === 'map') ctl = `<span ${di} style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${r.families.map(([f, l]) => `<span style="${dim}">${esc(l)} to <select id="${r.id}-${f}" ${on}><option value="">Default</option></select></span>`).join('')}</span>`;
+      else if (r.kind === 'images') ctl = `<span ${di} style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">${r.providers.map(([p, l]) => ['fast', 'best'].map(w => `<span style="${dim}">${esc(l)} ${w === 'fast' ? 'quick' : 'best'} <input type="text" id="${r.id}-${p}-${w}" placeholder="built-in" autocomplete="off" spellcheck="false" style="max-width:150px" ${on}></span>`).join('')).join('')}</span>`;
+      else if (r.kind === 'cache') ctl = `<span ${di} style="display:flex;gap:10px;align-items:center"><label class="toggle-switch"><input type="checkbox" id="${r.id}-on" ${on}><span class="toggle-slider"></span></label><select id="${r.id}-ttl" ${on}><option value="5m">Remember for 5 minutes</option><option value="1h">Remember for 1 hour</option></select></span>`;
+      return `<div class="st-row" style="flex-wrap:wrap;row-gap:6px"><label style="flex-basis:150px"${r.kind === 'num' || r.kind === 'text' || r.kind === 'url' || r.kind === 'select' || r.kind === 'model' ? ` for="${r.id}"` : ''}>${esc(r.name)}</label>${ctl}
+        <span id="${r.id}-def" style="${dim}">${esc(STG.p5cDefaultText(r))}</span><button type="button" class="st-test-btn" id="${r.id}-use" hidden onclick="p5cSave('${r.opt}', true)">Use default</button></div>
+        <div class="st-hint">${esc(r.hint)}</div>`;
+    }
+    // Put one row's controls in line with the saved settings (and show Default: ... only while the key is unset).
+    function p5cPaint(r) {
+      const el = document.getElementById(r.id);
+      if (!el) return;
+      const set = STG.p5cValue(r, p5cData);
+      const byId = (s) => document.getElementById(`${r.id}-${s}`);
+      const k = r.kind;
+      if (k === 'num' || k === 'text' || k === 'url') el.value = set === undefined ? '' : String(set);
+      else if (k === 'switch') el.checked = set === undefined ? r.on : (r.on ? set !== false : !!set);
+      else if (k === 'select' || k === 'model') {
+        const want = set === undefined ? (k === 'select' ? r.dflt : '') : String(set);
+        if (![...el.options].some(o => o.value === want)) el.add(new Option(want, want));
+        el.value = want;
+      } else if (k === 'models') { const have = new Set(Array.isArray(set) ? set : []); for (const c of el.querySelectorAll('input')) c.checked = have.has(c.value); }
+      else if (k === 'map') for (const [f] of r.families) { const s = byId(f); if (!s) continue; const want = (set && set[f]) || ''; if (![...s.options].some(o => o.value === want)) s.add(new Option(want, want)); s.value = want; }
+      else if (k === 'images') for (const [p] of r.providers) for (const w of ['fast', 'best']) { const i = byId(`${p}-${w}`); if (i) i.value = (set && set[p] && set[p][w]) || ''; }
+      else if (k === 'cache') { byId('on').checked = !set || set.enabled !== false; byId('ttl').value = (set && set.ttl) || '5m'; }
+      const unset = set === undefined;
+      const def = byId('def'), use = byId('use');
+      if (def) def.hidden = !unset;
+      if (use) use.hidden = unset;
+    }
+    // The model lists (member models, plan switch targets) come from the list the pickers use; then every row is painted.
+    async function p5cAfterDraw() {
+      let ml = null;
+      try { ml = await modelList(); } catch { /* the rows still show what is saved */ }
+      const models = ml ? ml.models : [], billing = ml ? (ml.billing || {}) : {};
+      const name = (m) => (billing[m] && billing[m].short) || billingDisplay(m, true);
+      for (const r of STG.P5C) {
+        const el = document.getElementById(r.id);
+        if (!el) continue;
+        const set = STG.p5cValue(r, p5cData);
+        if (r.kind === 'model') el.innerHTML = `<option value="">Default</option>` + models.map(m => `<option value="${esc(m)}">${esc(name(m))}</option>`).join('');
+        else if (r.kind === 'models') {
+          const all = [...new Set([...models, ...(Array.isArray(set) ? set : [])])];
+          el.innerHTML = all.length ? all.map(m => `<label style="display:flex;gap:6px;align-items:center;font-size:0.85rem"><input type="checkbox" value="${esc(m)}" onchange="p5cSave('${r.opt}')"> ${esc(name(m))}</label>`).join('') : '<span style="font-size:0.8rem;color:var(--text-dim)">No models yet.</span>';
+        } else if (r.kind === 'map') for (const [f] of r.families) {
+          const s = document.getElementById(`${r.id}-${f}`);
+          if (s) s.innerHTML = `<option value="">Default</option>` + models.filter(m => /^claude-sdk\//.test(m)).map(m => `<option value="${esc(m)}">${esc(name(m))}</option>`).join('');
+        }
+        p5cPaint(r);
+      }
+    }
+    function p5cRaw(r) {
+      const el = document.getElementById(r.id);
+      const byId = (s) => document.getElementById(`${r.id}-${s}`);
+      if (r.kind === 'switch') return el.checked;
+      if (r.kind === 'models') return [...el.querySelectorAll('input:checked')].map(c => c.value);
+      if (r.kind === 'map') return Object.fromEntries(r.families.map(([f]) => [f, byId(f).value]));
+      if (r.kind === 'images') return Object.fromEntries(r.providers.map(([p]) => [p, { fast: byId(`${p}-fast`).value, best: byId(`${p}-best`).value }]));
+      if (r.kind === 'cache') return { enabled: byId('on').checked, ttl: byId('ttl').value };
+      return el.value;
+    }
+    async function p5cSave(opt, useDefault = false) {
+      const r = STG.p5cByOpt(opt);
+      if (!r || p5cBusy[opt]) return;
+      const c = STG.p5cClean(r, useDefault ? null : p5cRaw(r));
+      if (!c.ok) { hubToast(c.error); p5cPaint(r); return; }
+      const before = STG.p5cValue(r, p5cData);
+      if (c.value === null ? before === undefined : JSON.stringify(c.value) === JSON.stringify(r.mult && typeof before === 'number' ? before * r.mult : before)) { p5cPaint(r); return; }   // nothing changed
+      if (r.kind === 'url' && c.value !== null && !confirm(`Keys and prompts for ${r.label} go to this address. Change it?`)) { p5cPaint(r); return; }
+      p5cBusy[opt] = true;
+      try {
+        const resp = await stSaveFetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(STG.p5cPatch(r, c.value, p5cData)) });
+        if (!resp.ok) { const d = await resp.json().catch(() => ({})); throw new Error(d.error || `HTTP ${resp.status}`); }
+        STG.p5cStore(r, c.value, p5cData);
+        hubToast(c.value === null ? `${r.name}: back to the default.` : `${r.name}: saved.`);
+      } catch (e) {
+        hubToast('Could not save: ' + e.message);
+      } finally {
+        p5cBusy[opt] = false;
+        p5cPaint(r);
       }
     }
 

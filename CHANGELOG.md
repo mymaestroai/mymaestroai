@@ -6,6 +6,8 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Every setting that used to need a file edit now has a place in Settings.** Upload and zip limits, box sizes, how long an approval waits, provider addresses, the long-chat default, the models members may use, picture models and the plan's lighter model all have their own row with help. The memory limit for background work sits in Upkeep.
+- **Startup values your Maestro reads when it starts are shown in Settings.** Under Upkeep, More, Expert values lets an admin change a short list of them, such as the time zone or how often the security check runs. Each change is listed in Recent changes with Restore, and For your review reminds you to restart. Values that decide where your conversations go, which code an update installs, or who may reach your Maestro are shown there too, but only for reading; passwords only say whether one is set.
 - **Cancelling an agent's background job always finishes.** When an agent works in its own box and Docker can't answer (it is down, stuck or unreachable), cancelling one of its background jobs used to wait forever and the job stayed "cancelling". Now it tries for a minute, then ends the job and says plainly that the command may still be running inside the box.
 
 - **A watched job ends when its command ends.** With the command watch on, a job no longer stays open until its time limit because its command left a process running: it ends at most 10 seconds after the command, with the command's own result, and the leftover processes are still watched until they end. A job whose watching cannot start now runs unwatched instead of failing. If the watching stops in the middle of a job, the job stops with it.
