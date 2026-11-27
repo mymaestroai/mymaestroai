@@ -524,9 +524,9 @@ test('register(source): merged into build()\'s result; a failing source adds a "
     const answers = await R.loadSources(async () => ({ ok: true }));
     assert.deepStrictEqual(answers.map((a) => [a.id, !!a.failed]), [['cap-source', false], ['bad-source', true]]);
     const r = R.merge(base, answers);
-    assert.deepStrictEqual(r.problems.map((p) => [p.id, p.tier]), [['cap:1', 'fix'], ['cap:2', 'worth'], ['ready:w', 'worth']], 'by tier; a source problem without a tier is Worth doing');
+    assert.deepStrictEqual(r.problems.map((p) => [p.id, p.tier]), [['cap:1', 'fix'], ['cap:2', 'fix'], ['ready:w', 'worth']], 'by tier; a source critical without a tier is Fix now');
     assert.deepStrictEqual(r.features.map((f) => [f.id, f.snoozed]), [['cap-new', false]]);
-    assert.deepStrictEqual([r.count, r.worst], [1, 'critical']);
+    assert.deepStrictEqual([r.count, r.worst], [2, 'critical']);
     assert.deepStrictEqual(r.notes, ['Could not check bad-source.']);
     assert.deepStrictEqual([base.count, base.notes], [0, []], 'build()\'s own result is not changed');
     assert.strictEqual(R.merge(base, []).problems.length, 1, 'no sources: build() as it is');

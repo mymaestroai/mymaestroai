@@ -78,12 +78,45 @@ test('readiness drops provider and health-* rows only when setup / system-health
   assert.deepStrictEqual(r.problems.map((p) => p.id).sort(), ['health:health-mem', 'provider', 'ready:health-disk']);
 });
 
-test('a failed source whose last items are carried does not also list the readiness row', () => {
+test('a failed source whose last items are carried is listed once with the fresh readiness row (fresh beats stale)', () => {
   const rd = { items: [item('provider', 'critical')] };
   const prev = R.build({ readiness: rd, setup: { setupNeeded: true }, now: NOW });
   const r = R.build({ readiness: rd, setup: null, failed: ['setup'], previous: prev, now: NOW + 1 });
-  assert.deepStrictEqual(r.problems.map((p) => p.id), ['provider']);
-  assert.strictEqual(r.problems[0].stale, true);
+  assert.deepStrictEqual(r.problems.map((p) => p.id), ['ready:provider']);
+  assert.notStrictEqual(r.problems[0].stale, true);
+  // the readiness read has nothing about the provider: the carried one stays
+  const r2 = R.build({ readiness: { items: [] }, setup: null, failed: ['setup'], previous: prev, now: NOW + 1 });
+  assert.deepStrictEqual(r2.problems.map((p) => [p.id, p.stale]), [['provider', true]]);
+});
+
+// ---- P4 r6: one item per condition: fresh beats stale, then the higher severity; a source critical with no tier is Fix now -------------
+test('r6 health: a carried stale health:health-disk (warn) loses to the fresh ready:health-disk (critical); never drops a fresh critical', () => {
+  const prev = R.build({ health: { items: [item('health-disk', 'warn')] }, now: NOW });
+  assert.strictEqual(prev.problems[0].id, 'health:health-disk');
+  const r = R.build({ readiness: { items: [item('health-disk', 'critical')] }, health: null, failed: ['health'], previous: prev, now: NOW + 1 });
+  assert.deepStrictEqual(r.problems.map((p) => [p.id, p.tier, p.stale === true]), [['ready:health-disk', 'fix', false]]);
+  assert.strictEqual(r.count, 1);
+});
+
+test('r6 health: both fresh: the higher severity wins, whichever source it came from; equal ones list the health row once', () => {
+  let r = R.build({ readiness: { items: [item('health-disk', 'critical')] }, health: { items: [item('health-disk', 'warn')] }, now: NOW });
+  assert.deepStrictEqual(r.problems.map((p) => [p.id, p.tier]), [['ready:health-disk', 'fix']]);
+  r = R.build({ readiness: { items: [item('health-disk', 'warn')] }, health: { items: [item('health-disk', 'critical')] }, now: NOW });
+  assert.deepStrictEqual(r.problems.map((p) => [p.id, p.tier]), [['health:health-disk', 'fix']]);
+  r = R.build({ readiness: { items: [item('health-disk', 'critical')] }, health: { items: [item('health-disk', 'critical')] }, now: NOW });
+  assert.deepStrictEqual(r.problems.map((p) => p.id), ['health:health-disk']);
+});
+
+test('r6 reverse: a stale carried ready:health-* / ready:provider does not sit next to the fresh health:* / provider', () => {
+  const prev = R.build({ readiness: { items: [item('health-disk', 'warn'), item('provider', 'critical')] }, now: NOW });
+  const r = R.build({ readiness: null, health: { items: [item('health-disk', 'warn')] }, setup: { setupNeeded: true }, failed: ['readiness'], previous: prev, now: NOW + 1 });
+  assert.deepStrictEqual(r.problems.map((p) => [p.id, p.stale === true]).sort(), [['health:health-disk', false], ['provider', false]]);
+});
+
+test('r6 merge: a source critical item with no tier is Fix now (counts); a warn one is Worth doing', () => {
+  const r = R.merge(R.build({ now: NOW }), [{ id: 's', problems: [{ id: 's:1', title: 'Red', level: 'critical' }, { id: 's:2', title: 'Amber', level: 'warn' }, { id: 's:3', title: 'None' }] }]);
+  assert.deepStrictEqual(r.problems.map((p) => [p.id, p.tier]), [['s:1', 'fix'], ['s:2', 'worth'], ['s:3', 'worth']]);
+  assert.strictEqual(r.count, 1);
 });
 
 // ---- 4 and 5. critical is always Fix now ------------------------------------------------------------------------------------------

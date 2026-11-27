@@ -49,8 +49,8 @@ test('0 data connectors is not a problem at all; backups that are not set up are
   assert.deepStrictEqual(R.build({ backups: { key: { configured: false } }, now: NOW }).suggestions.map((p) => p.id), ['backup:off']);
   const base = R.build({ now: NOW });
   const r = R.merge(base, [{ id: 'm', problems: [{ id: 'm:1', title: 'A', level: 'critical' }, { id: 'm:2', title: 'B', tier: 'suggest' }, { id: 'm:3', title: 'C', tier: 'nonsense' }] }]);
-  assert.deepStrictEqual(r.problems.map((p) => [p.id, p.tier]), [['m:1', 'worth'], ['m:3', 'worth'], ['m:2', 'suggest']]);
-  assert.deepStrictEqual([r.count, r.worst], [0, 'none']);
+  assert.deepStrictEqual(r.problems.map((p) => [p.id, p.tier]), [['m:1', 'fix'], ['m:3', 'worth'], ['m:2', 'suggest']]);
+  assert.deepStrictEqual([r.count, r.worst], [1, 'critical']);
 });
 
 test('count is the Fix now items; worst is critical or none (amber never colours the gear); the line starts with the red part', () => {
