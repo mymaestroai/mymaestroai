@@ -17805,6 +17805,37 @@
       "facts": "behaviour id own-code-guidance templates/behaviour-changes.json:104-115; read per lead turn lib/sdk-chat.js:277; fresh install on, install with agents 'pending' off lib/behaviour-changes.js:3, 101; the separate 'Protect your Maestro's own code' change can still refuse edits (same file)."
     },
     {
+      "id": "OPT-1083",
+      "kind": "setting",
+      "name": "Agents split complex work",
+      "labels": [
+        "Primary agents split complex work across parallel workers, never at the cost of quality"
+      ],
+      "what": "Main agents split a complex job into independent parts and run them at the same time without being asked, with a fitting model for each part, and check every part before using it. Work that is better done in one thread, such as one piece of writing or a chain of decisions, stays in one thread.",
+      "when": "Turn it on if you find yourself asking your agents to work in parallel. Leave it off if you want each job done step by step by one agent.",
+      "risk": "Complex jobs start several runs at once, so they use more of a plan's allowance or pay-per-use budget at the same time. The agents' instructions get about 170 words longer.",
+      "def": "Default: on for a new Maestro; off and waiting for your decision on one that already has agents. We recommend turning it on.",
+      "restart": false,
+      "danger": "care",
+      "who": "admin",
+      "lead": "confirm",
+      "words": [
+        "parallel",
+        "split work",
+        "workers",
+        "at the same time",
+        "faster",
+        "complex task",
+        "quality",
+        "fan out"
+      ],
+      "scope": "install",
+      "home": "Settings > For your review while undecided (then Settings > Agents and teams > More)",
+      "storedAs": "behaviour:parallel-work",
+      "anchors": [],
+      "facts": "Behaviour change id parallel-work templates/behaviour-changes.json (after hand-off-guidance); on a new install it starts on, on an install with agents it starts pending lib/behaviour-changes.js:3, 101-114; read per turn lib/sdk-chat.js workPracticesTextFor, text lib/work-practices.js parallelText (primary agents; the lead also may create another lead). Costs text from the manifest (about 170 words). No restart."
+    },
+    {
       "id": "OPT-0554",
       "kind": "setting",
       "name": "Agents offer deep research",

@@ -351,7 +351,7 @@ test('records that raise recurring spending or download/build/install software a
     assert.ok(['care', 'dangerous'].includes(r.danger), `${id} ${name}: danger ${r.danger}`);
   }
   // paid-per-use limits and behaviour changes that start more runs: at least care
-  for (const id of ['OPT-0414', 'OPT-0415', 'OPT-0416', 'OPT-0417', 'OPT-0418', 'OPT-0545', 'OPT-0546', 'OPT-0552']) assert.notEqual(records.byId(id).danger, 'everyday', id);
+  for (const id of ['OPT-0414', 'OPT-0415', 'OPT-0416', 'OPT-0417', 'OPT-0418', 'OPT-0545', 'OPT-0546', 'OPT-0552', 'OPT-1083']) assert.notEqual(records.byId(id).danger, 'everyday', id);
 });
 
 test('the generator refuses an apply record whose risk text says it costs more, spends, downloads, builds or installs; the shipped records pass', () => {

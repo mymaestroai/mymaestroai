@@ -32,10 +32,10 @@ const setup = () => {
 const put = (f, doc) => fs.writeFileSync(f, typeof doc === 'string' ? doc : JSON.stringify(doc));
 const ent = (state, by = 'owner') => ({ state, by, at: '2026-01-01T00:00:00.000Z' });
 
-test('manifest: the shipped file has the twelve entries with every field; invalid ids are dropped', () => {
+test('manifest: the shipped file has the thirteen entries with every field; invalid ids are dropped', () => {
   const real = bc.manifest(path.join(REAL, 'templates', 'behaviour-changes.json'));
-  // Owner, 06:09: work-check-ins and work-suggestions joined the five. deep-research (lib/research) joined the ten. research-own-work joined the eleven (agents' own quick research; leadMay false: it spends).
-  assert.deepStrictEqual(real.map((e) => e.id), ['team-guidance', 'starter-team', 'member-worker-models', 'worker-proposals', 'ask-lead-for-workers', 'work-check-ins', 'work-suggestions', 'hand-off-guidance', 'protect-own-code', 'own-code-guidance', 'deep-research', 'research-own-work']);   // ten entries: protect-own-code and own-code-guidance (lib/code-protect) joined the eight;   // hand-offs (lib/hand-offs): the rule to hand long work to a build partner
+  // Owner, 06:09: work-check-ins and work-suggestions joined the five. deep-research (lib/research) joined the ten. research-own-work joined the eleven (agents' own quick research; leadMay false: it spends). parallel-work joined the twelve (primary agents split complex work; leadMay true: guidance like work-check-ins, not a limit).
+  assert.deepStrictEqual(real.map((e) => e.id), ['team-guidance', 'starter-team', 'member-worker-models', 'worker-proposals', 'ask-lead-for-workers', 'work-check-ins', 'work-suggestions', 'hand-off-guidance', 'parallel-work', 'protect-own-code', 'own-code-guidance', 'deep-research', 'research-own-work']);   // ten entries: protect-own-code and own-code-guidance (lib/code-protect) joined the eight;   // hand-offs (lib/hand-offs): the rule to hand long work to a build partner
   assert.equal(real.find((e) => e.id === 'research-own-work').leadMay, false);
   for (const e of real) for (const k of ['title', 'changes', 'benefits', 'costs', 'check', 'on', 'off']) assert.ok(e[k], `${e.id}.${k}`);
   assert.deepStrictEqual(bc.manifest(setup().manifestFile).map((e) => e.id), ['alpha', 'beta-two']);
