@@ -214,9 +214,11 @@ test('sdk-chat: behaviour_change is offered only with connector_access (the lead
   const gated = sdk.split('...(connectorAccessOffered(agentName, consultationDepth)').slice(1).map((s) => s.slice(0, 1600));
   assert.equal(gated.length, 2);
   for (const g of gated) assert.match(g.split(': []),')[0], /behaviourSwitchLib\.TOOL\.name/);
-  assert.equal((sdk.match(/behaviourSwitchLib\.TOOL\.name/g) || []).length, 3, 'the gateway list once, the SDK list twice (name and extras)');
+  assert.equal((sdk.match(/behaviourSwitchLib\.TOOL\.name/g) || []).length, 6, 'the owner-turn gate: the gateway list once, the SDK list twice (name and extras); the hub review turn (recommend only): the same again');
   const body = sdk.match(/async function runBehaviourSwitch\([\s\S]*?\n\}/)[0];
-  assert.match(body, /^async function runBehaviourSwitch\(agentName, sseRes, args, consultationDepth, signal\) \{\n  if \(!connectorAccessOffered\(agentName, consultationDepth\)\) return CONNECTOR_ACCESS_NOT_OFFERED;/);
+  assert.match(body, /^async function runBehaviourSwitch\(agentName, sseRes, args, consultationDepth, signal\) \{\n  const review = connectorAccessOffered\(agentName, consultationDepth\) \? null : behaviourReviewTurn\(agentName, consultationDepth\); if \(!review && !connectorAccessOffered\(agentName, consultationDepth\)\) return CONNECTOR_ACCESS_NOT_OFFERED;[^\n]*\n  if \(inTeamSetupTurn\(agentName\)\) return NOT_IN_SETUP_TURN;/);
+  // outside the owner's turn only the hub's own review turn gets the tool (list and recommend, no question: it switches nothing)
+  assert.match(body, /if \(review\) return behaviourSwitchLib\.runTool\(behaviourSwitchLib\.getBehaviourSwitch\(\), args, agentName, null, null, review\);/);
   assert.match(body, /runAskUser\(agentName, sseRes, \{ question, options: \[yesLabel, 'Leave as is'\], header: 'Changes to how agents behave', adminOnly: true \}/);
   assert.match(body, /const stillAllowed = \(\) => connectorAccessOffered\(agentName, consultationDepth\) && !\(signal && signal\.aborted\);/);
 });

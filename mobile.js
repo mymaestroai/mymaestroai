@@ -8810,6 +8810,7 @@ async function openChat(name) {
   current = name; if (typeof voiceHintSync === 'function') voiceHintSync();   // a chat switch takes the hint down
   try { if (window.HandOffCard && typeof HandOffCard.follow === 'function') HandOffCard.follow(); } catch { /* the timer tick follows */ }   // the "Working on" panel follows the chat at once
   teamSetupSlotPaint();   // the lead's chat: the Set up teams offer, the Undo for a team just set up
+  try { window.FeatureCard && FeatureCard.chatShown(name, $('messages')); } catch { /* cosmetic */ }   // the lead's chat: the new-features card at the end of the list
   localStorage.setItem('hub-mobile-last', name);
   voiceStatusRefresh();   // the mic button shows only while the hub voice is on and ready
   researchLinePaint(); researchLineLoad(name);   // the deep research progress line

@@ -255,7 +255,7 @@ test('routes: both behaviour-changes routes and the page are admin only; the pag
   assert.match(server, /pathname === '\/api\/behaviour-changes' && req\.method === 'GET'/);
   assert.match(server, /pathname\.match\(\/\^\\\/api\\\/behaviour-changes\\\/\(\[a-z\]\[a-z0-9-\]\{1,40\}\)\$\/\)/);
   assert.match(server, /pathname === '\/changes'\) \{\n\s+filePath = path\.join\(__dirname, 'changes\.html'\)/);
-  assert.match(server, /\[behaviour\] \$\{m\[1\]\} turned \$\{b\.decision\} by /);
+  assert.match(server, /\[behaviour\] \$\{m\[1\]\} \$\{b\.decision === 'on'/);
   for (const code of ['400', '404', '409']) assert.ok(server.includes(`jsonResponse(res, ${code}, `) );
   const sf = L('static-files');
   assert.strictEqual(sf.resolve('/changes.html', REAL), fs.realpathSync(path.join(REAL, 'changes.html')));

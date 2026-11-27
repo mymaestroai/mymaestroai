@@ -10469,6 +10469,7 @@
       paintPlanBadges();           // plan usage next to the model (Claude subscription agents)
       soloViewPaint();             // the "Agent work" toggle shows the device's choice
       try { teamSetupChatPaint(chats[chatId]); } catch { /* cosmetic */ }   // the lead's chat: the Set up teams offer, the Undo for a team just set up
+      try { const c = chats[chatId]; if (c && c.agent && !c.isGroup && !c.isWorker && !c.isHistory) window.FeatureCard && FeatureCard.chatShown(c.agent, document.getElementById(`messages-${chatId}`)); } catch { /* cosmetic */ }   // the lead's chat: the new-features card at the end of its list
 
       // Load conversation history from server (the newest page of the chosen view; "Load earlier" fetches the rest)
       chats[chatId].historyLoaded = soloHistoryLoad(chatId);

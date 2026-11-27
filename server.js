@@ -708,6 +708,10 @@ async function handleHttpRequest(req, res) {
       let cadence = 'weekly'; try { cadence = require('./lib/settings').getSetting('workerProposals', 'weekly') === 'off' ? 'off' : 'weekly'; } catch { /* default */ }
       return jsonResponse(res, 200, { ok: true, changes, workerProposals: cadence, ...(changes.some((c) => c.unreadable) ? { unreadable: true } : {}) });
     }
+    // The one card for features that arrive switched off (lib/feature-card): admin only, like the list above (lib/access: not public, not a session route).
+    if (pathname === '/api/behaviour-changes/card' && req.method === 'GET') {
+      return jsonResponse(res, 200, require('./lib/feature-card').cardState());
+    }
     // How often the lead looks at how the install is used (worker-proposals): saves the setting, then makes the weekly task match.
     if (pathname === '/api/behaviour-changes/worker-proposals/cadence' && req.method === 'POST') {
       // Only the owner decides: a signed-in admin's own browser session (never the hub's service identity, a token or an agent).
@@ -727,17 +731,27 @@ async function handleHttpRequest(req, res) {
         // Only the owner decides: a signed-in admin's own browser session (never the hub's service identity, a token or an agent).
         if (!require('./lib/access').isAdminSession(req)) return jsonResponse(res, 403, { ok: false, error: 'Sign in with an admin account in your browser to decide this.' });
         const b = (await authJson()) || {};
-        if (b.decision !== 'on' && b.decision !== 'off') return jsonResponse(res, 400, { ok: false, error: 'decision must be "on" or "off"' });
+        if (b.decision !== 'on' && b.decision !== 'off' && b.decision !== 'snooze' && b.decision !== 'seen') return jsonResponse(res, 400, { ok: false, error: 'decision must be "on", "off", "snooze" or "seen"' });
         const bc = require('./lib/behaviour-changes');
         if (!bc.manifest().some((e) => e.id === m[1])) return jsonResponse(res, 404, { ok: false, error: 'no such change' });
+        const who = req.hubUser && req.hubUser.id;
         try {
-          await bc.decide(m[1], b.decision, { user: req.hubUser && req.hubUser.id });
-          console.log(`[behaviour] ${m[1]} turned ${b.decision} by ${(req.hubUser && req.hubUser.id) || 'unknown'}`);
+          // Run as the person who pressed: the change journal (Recent changes, Restore) names them.
+          await require('./lib/settings-journal').withActor({ kind: 'person', user: who }, async () => {
+            if (b.decision === 'snooze') await bc.snooze(m[1], { user: who });
+            else if (b.decision === 'seen') await bc.markSeen(m[1], { user: who });
+            else await bc.decide(m[1], b.decision, { user: who });
+          });
+          console.log(`[behaviour] ${m[1]} ${b.decision === 'on' || b.decision === 'off' ? `turned ${b.decision}` : b.decision === 'snooze' ? 'snoozed for a week' : 'notice seen'} by ${who || 'unknown'}`);
           if (m[1] === 'worker-proposals') {
             try { await require('./lib/behaviour-review').syncProposalsTask(); } catch (e) { console.warn('[behaviour] could not update the weekly team review:', e.message); }
           }
           return jsonResponse(res, 200, { ok: true, change: bc.list().find((c) => c.id === m[1]) });
-        } catch (e) { return jsonResponse(res, 409, { ok: false, error: e && e.message ? e.message : String(e) }); }
+        } catch (e) {
+          const msg = e && e.message ? e.message : String(e);
+          if (msg === 'already decided') return jsonResponse(res, 409, { ok: false, error: 'already decided' });
+          return jsonResponse(res, 409, { ok: false, error: msg });
+        }
       }
     }
     if (pathname === '/api/team/card/answer' && req.method === 'POST') {
@@ -4175,6 +4189,7 @@ server.listen(PORT, HOST, () => {
   // Behaviour changes (lib/behaviour-changes): on an install that already has agents each one waits, off, for the owner's decision.
   try {
     const bm = require('./lib/settings-journal').withActor({ kind: 'hub', why: 'start-up' }, () => require('./lib/behaviour-changes').migrate({ agentsFile: path.join(__dirname, 'data', 'agents.json') }));
+    if (bm.quiet && bm.quiet.length) console.log(`[behaviour] ${bm.quiet.length} quiet change(s) turned on by themselves, with a notice on the card: ${bm.quiet.join(', ')}`);
     if (bm.added && bm.added.length) console.log(`[behaviour] ${bm.added.length} change(s) waiting for the owner's decision: ${bm.added.join(', ')}`);
   } catch (e) { console.warn('[behaviour] could not check the behaviour changes:', e.message); }
   console.log(`\n  My Maestro AI v${require('./package.json').version} (multi-provider)`);
