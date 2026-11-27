@@ -6421,7 +6421,7 @@
       const pct = pctOf(main);
       let text = main.weekly ? `ChatGPT ${pct}%` : `ChatGPT ${main.label || 'usage'} ${pct}%`;
       const shorts = live.filter(w => w.short && w !== main && pctOf(w) > 50);
-      if (shorts.length) { const s = best(shorts); text += ` · ${String(s.label || '5-hour').replace(/-hour$/, 'h')} ${pctOf(s)}%`; }
+      if (shorts.length) { const s = best(shorts); text += ` · ${s.label || '5-hour'} ${pctOf(s)}%`; }
       const passed = lv.filter(l => pct >= l);
       const cls = pct >= 100 ? 'refused' : passed.length && passed.length === lv.length ? 'hot' : passed.length ? 'warn' : '';
       const when = subsWhen(main.resetsAt) || 'the reset';
@@ -6641,9 +6641,9 @@
       if (!d || !/^claude-sdk\//.test(String(model || ''))) return null;
       return planBadgeView(d, planFamilyOf(model), planBadgeChoice(), subsEnabled(), planLevels(d));
     }
-    // The badge words: the main window ("Plan 18% this week", "Fable 19% this week", "5h 70%"), then the extras.
+    // The badge words: the main window ("Claude plan 18% this week", "Fable 19% this week", "5-hour 70%"), then the extras.
     function planBadgeText(view, levels) {
-      return [view.main, ...view.extras].map((x, i) => (x.kind === 'five' ? `5h ${badgeAmount(x.w, levels)}` : `${x.kind === 'plan' ? 'Plan' : x.w.label} ${badgeAmount(x.w, levels)}` + (i === 0 ? ' this week' : ''))).join(' · ');
+      return [view.main, ...view.extras].map((x, i) => (x.kind === 'five' ? `5-hour ${badgeAmount(x.w, levels)}` : `${x.kind === 'plan' ? 'Claude plan' : x.w.label} ${badgeAmount(x.w, levels)}` + (i === 0 ? ' this week' : ''))).join(' · ');
     }
     // The hover: one sentence per window shown, main first. Each describes only its own window: used up -> used up;
     // extra usage paying -> the extra-usage sentence.
@@ -6670,7 +6670,7 @@
       c.badge.setAttribute('aria-expanded', 'false');
       if (returnFocus) c.badge.focus();
     }
-    const planChooserLabel = (k, w) => (k === 'plan' ? 'Plan (all models)' : k === 'family' ? (w.label || 'Model family') : '5-hour window');
+    const planChooserLabel = (k, w) => (k === 'plan' ? 'Claude plan (all models)' : k === 'family' ? (w.label || 'Model family') : '5-hour window');
     // The rows of the chooser, built from a badge view: used when it opens and again when the badge repaints under it.
     function planChooserFill(c, view, levels) {
       c.list.textContent = '';

@@ -162,7 +162,7 @@ for (const [name, src] of [['app.js', app], ['mobile.js', mjs]]) {
     s.limits[0].windows.push({ minutes: 300, label: '5-hour', usedPercent: 50, short: true, weekly: false, resetsAt: iso(30) });
     assert.strictEqual(C.codexBadge(s, lv, NOW).text, 'ChatGPT 42%');
     s.limits[0].windows[1].usedPercent = 51;
-    assert.strictEqual(C.codexBadge(s, lv, NOW).text, 'ChatGPT 42% · 5h 51%');
+    assert.strictEqual(C.codexBadge(s, lv, NOW).text, 'ChatGPT 42% · 5-hour 51%');
     // no weekly: the longest window with its label
     s = proSnap();
     s.limits[0].windows = [{ minutes: 300, label: '5-hour', usedPercent: 40, short: true, weekly: false, resetsAt: iso(30) }];

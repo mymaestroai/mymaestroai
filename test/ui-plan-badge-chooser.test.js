@@ -166,7 +166,7 @@ for (const kind of KINDS) {
   test(`${kind}: default badge words; phone now says "this week" too`, () => {
     const p = makePage(kind, { data: D([W(null, 18), W('fable', 19)], 62) });
     p.paint();
-    assert.strictEqual(p.badge.textContent, 'Plan 18% this week · Fable 19% · 5h 62%');
+    assert.strictEqual(p.badge.textContent, 'Claude plan 18% this week · Fable 19% · 5-hour 62%');
     assert.strictEqual(p.badge.hidden, false);
   });
   test(`${kind}: choice "family" -> "Fable 19% this week"; plan joins only when higher / at a warning level / used up`, () => {
@@ -174,21 +174,21 @@ for (const kind of KINDS) {
     p.paint();
     assert.strictEqual(p.badge.textContent, 'Fable 19% this week');
     p.data = D([W(null, 80), W('fable', 85)]); p.paint();
-    assert.strictEqual(p.badge.textContent, 'Fable 85% this week · Plan 80%');
+    assert.strictEqual(p.badge.textContent, 'Fable 85% this week · Claude plan 80%');
     assert.match(p.badge.className, /\bhot\b|\bwarn\b/);
   });
-  test(`${kind}: choice "five" -> "5h 70%" then the weekly windows that pass a level or are used up`, () => {
+  test(`${kind}: choice "five" -> "5-hour 70%" then the weekly windows that pass a level or are used up`, () => {
     const p = makePage(kind, { data: D([W(null, 40), W('fable', 22)], 70), local: { 'mm-plan-badge': 'five' } });
     p.paint();
-    assert.strictEqual(p.badge.textContent, '5h 70%');
+    assert.strictEqual(p.badge.textContent, '5-hour 70%');
     p.data = D([W(null, 95), W('fable', 60, { rejected: true })], 70); p.paint();
-    assert.strictEqual(p.badge.textContent, '5h 70% · Plan 95% · Fable used up');
+    assert.strictEqual(p.badge.textContent, '5-hour 70% · Claude plan 95% · Fable used up');
     assert.match(p.badge.className, /\brefused\b/);
   });
   test(`${kind}: a choice whose window is missing shows the plan`, () => {
     const p = makePage(kind, { data: D([W(null, 40), W('fable', 22)]), local: { 'mm-plan-badge': 'five' } });
     p.paint();
-    assert.strictEqual(p.badge.textContent, 'Plan 40% this week');
+    assert.strictEqual(p.badge.textContent, 'Claude plan 40% this week');
   });
   test(`${kind}: the hover has one sentence per window shown, main first`, () => {
     const p = makePage(kind, { data: D([W(null, 80), W('fable', 95)], 62) });
@@ -209,7 +209,7 @@ for (const kind of KINDS) {
     p.paint();
     assert.strictEqual(p.badge.getAttribute('aria-haspopup'), 'listbox');
     assert.strictEqual(p.badge.getAttribute('aria-expanded'), 'false');
-    assert.strictEqual(p.badge.getAttribute('aria-label'), 'Claude usage: Plan 40% this week. Press to choose what this shows.');
+    assert.strictEqual(p.badge.getAttribute('aria-label'), 'Claude usage: Claude plan 40% this week. Press to choose what this shows.');
     assert.match(p.badge.className, kind === 'desktop' ? /^plan-badge/ : /^sub/);
   });
 }
@@ -288,7 +288,7 @@ for (const kind of KINDS) {
     const rows = p.rows();
     const W11 = whenOf(kind, '2026-11-30T20:00:00Z'), WF = whenOf(kind, '2026-11-27T01:00:00Z');
     assert.deepStrictEqual(rows.map(r => stripCheck(r.textContent)), [
-      `Plan (all models) · 40% this week · resets ${W11}`,
+      `Claude plan (all models) · 40% this week · resets ${W11}`,
       `Fable · 22% this week · resets ${W11}`,
       `5-hour window · 70% · resets ${WF}`,
     ]);
@@ -319,14 +319,14 @@ for (const kind of KINDS) {
     const e = key('Enter');
     assert.ok(e.prevented);
     assert.strictEqual(p.chooser(), null, 'closed');
-    assert.strictEqual(p.badge.textContent, 'Fable 22% this week · Plan 40% · 5h 70%', 'the plan is higher, so it joins; the 5h window is over 50');
+    assert.strictEqual(p.badge.textContent, 'Fable 22% this week · Claude plan 40% · 5-hour 70%', 'the plan is higher, so it joins; the 5h window is over 50');
     assert.strictEqual(p.doc.activeElement, p.badge, 'focus back on the badge');
     assert.strictEqual(p.badge.getAttribute('aria-expanded'), 'false');
     await tick();
     p.badge.dispatch('click');
     p.doc.activeElement.dispatch('keydown', { key: 'ArrowDown' });
     p.doc.activeElement.dispatch('keydown', { key: ' ' });
-    assert.strictEqual(p.badge.textContent, '5h 70%');
+    assert.strictEqual(p.badge.textContent, '5-hour 70%');
     assert.deepStrictEqual(p.posts.map(x => x.body.planBadge), ['family', 'five']);
   });
   test(`${kind}: Esc closes and returns focus to the badge; a click outside closes without taking focus; pressing the badge again closes`, () => {
@@ -429,10 +429,10 @@ for (const kind of KINDS) {
   test(`${kind}: choice five at 5% with the plan at 40% shows both; choice plan 5% with five 40% and subscriptions off shows the plan alone`, () => {
     const p = makePage(kind, { data: D([W(null, 40)], 5), local: { 'mm-plan-badge': 'five' } });
     p.paint();
-    assert.strictEqual(p.badge.textContent, '5h 5% · Plan 40%');
+    assert.strictEqual(p.badge.textContent, '5-hour 5% · Claude plan 40%');
     const q = makePage(kind, { data: D([W(null, 5)], 40), local: { 'mm-plan-badge': 'plan' }, subs: false });
     q.paint();
-    assert.strictEqual(q.badge.textContent, 'Plan 5% this week');
+    assert.strictEqual(q.badge.textContent, 'Claude plan 5% this week');
   });
   const held = (o) => {
     const resolvers = [];
@@ -451,7 +451,7 @@ for (const kind of KINDS) {
     await tick();
     assert.deepStrictEqual(resolvers.map(r => r.post.body.planBadge), ['family'], 'only one save in flight');
     assert.strictEqual(p.store.m['mm-plan-badge'], 'five', 'the device copy is the newest pick at once');
-    assert.ok(p.badge.textContent.startsWith('5h '), 'repainted at once: ' + p.badge.textContent);
+    assert.ok(p.badge.textContent.startsWith('5-hour '), 'repainted at once: ' + p.badge.textContent);
     await s.settle(0);
     assert.strictEqual(p.win.hubMe.planBadge, 'plan', 'an older value does not become the person value');
     assert.deepStrictEqual(resolvers.map(r => r.post.body.planBadge), ['family', 'five']);
@@ -461,7 +461,7 @@ for (const kind of KINDS) {
     assert.strictEqual(p.win.hubMe.planBadge, 'five');
     assert.strictEqual(p.choice(), 'five');
     p.paint();
-    assert.ok(p.badge.textContent.startsWith('5h '), p.badge.textContent);
+    assert.ok(p.badge.textContent.startsWith('5-hour '), p.badge.textContent);
   });
   test(`${kind}: three quick picks family, five, plan while the first is in flight: two POSTs, family then plan; the final value is plan`, async () => {
     const { p, resolvers } = held({ me: { planBadge: 'five' } });
@@ -498,7 +498,7 @@ for (const kind of KINDS) {
     assert.strictEqual(p.store.m['mm-plan-badge'], 'five');
     assert.strictEqual(p.choice(), 'five');
     p.paint();
-    assert.ok(p.badge.textContent.startsWith('5h '), p.badge.textContent);
+    assert.ok(p.badge.textContent.startsWith('5-hour '), p.badge.textContent);
   });
   test(`${kind}: an open chooser follows a repaint to another model family: the row says Opus, not Fable`, () => {
     const p = makePage(kind, { data: D([W(null, 0), W('fable', 0)]) });
