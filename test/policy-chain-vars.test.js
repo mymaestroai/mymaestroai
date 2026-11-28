@@ -30,3 +30,12 @@ test('a cd that may fail, and every other failing step, keep the fail-closed rea
   assert.notEqual(cls(`cd ${X}/not-there; cp /dev/null b4.txt`), 'write_inside', 'a missing folder: judged in the starting folder too');
   assert.notEqual(cls(`cd ${X} || D=${X}/sub; cp /dev/null $D/b8.txt`), 'write_inside', 'an assignment in a || branch');
 });
+
+test('review: a cd is taken to succeed only when nothing earlier could have moved its folder, and never for a boxed agent', () => {
+  assert.notEqual(cls(`mv ${X} ${X}.old; cd ${X}; cp /dev/null b.txt`), 'write_inside', 'mv first: the cd may fail');
+  assert.notEqual(cls(`rmdir ${X}/sub && cd ${X}/sub; cp /dev/null b.txt`), 'write_inside', 'rmdir first');
+  assert.notEqual(cls(`chmod 000 ${X}; cd ${X}; cp /dev/null b.txt`), 'write_inside', 'chmod first');
+  assert.equal(cls(`echo start; cd ${X}; cp /dev/null b.txt`), 'write_inside', 'a harmless echo first is fine');
+  const boxed = tp.decide({ agent: worker, tool: 'Bash', input: { command: `cd ${X}; cp /dev/null b.txt` }, cwd: '/', isBoxed: () => true }).cls;
+  assert.notEqual(boxed, 'write_inside', 'a boxed agent: the box sees its own folders');
+});
