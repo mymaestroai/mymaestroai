@@ -4355,7 +4355,7 @@
           <input type="number" id="st-hw-minutes" min="0" max="240" step="1" value="${data.handOffWaitMinutes !== undefined && data.handOffWaitMinutes !== null && Number.isFinite(Number(data.handOffWaitMinutes)) ? Number(data.handOffWaitMinutes) : 10}" style="max-width:90px"> <span style="font-size:0.8rem;color:var(--text-dim)">minutes (0 turns it off)</span>
         </div>
         <div class="st-row">
-          <label class="gs-sub" style="flex-basis:auto"><input type="checkbox" id="st-hw-notice" ${data.buildPartnerNotice !== false ? 'checked' : ''}> Tell the lead when an agent has no build partner</label>
+          <label class="gs-sub st-check" style="flex-basis:auto"><input type="checkbox" id="st-hw-notice" ${data.buildPartnerNotice !== false ? 'checked' : ''}> Tell the lead when an agent has no build partner</label>
         </div>
         <div class="st-hint">An agent that waits a long time on its workers can't talk with you meanwhile. After two such waits in a week, the lead can offer you a build partner. Nothing is created without your yes.</div>
       </div>`;
@@ -4585,7 +4585,7 @@
         </div>
         <div class="st-row" data-search-group="caps">
           <label style="flex-basis:150px" for="st-cap-month-day">Month starts on day</label>
-          <input type="text" id="st-cap-month-day" placeholder="1" inputmode="numeric" style="max-width:44px" title="1 to 28; 1 is the calendar month" disabled>
+          <input type="text" id="st-cap-month-day" placeholder="1" inputmode="numeric" class="st-narrow" style="max-width:52px" title="1 to 28; 1 is the calendar month" disabled>
         </div>
         <div class="st-row" data-search-group="caps">
           <label style="flex-basis:150px"></label>
@@ -4600,7 +4600,7 @@
           <select id="st-credit-provider" onchange="fillCreditInputs()" style="max-width:120px">${CREDIT_PROVIDERS.map(([id, label]) => `<option value="${id}">${label}</option>`).join('')}</select>
           <input type="text" id="st-credit-amount" placeholder="none" inputmode="decimal" style="max-width:80px">
           <span style="font-size:0.78rem;color:var(--text-dim)">renews on day</span>
-          <input type="text" id="st-credit-day" placeholder="1" inputmode="numeric" style="max-width:44px">
+          <input type="text" id="st-credit-day" placeholder="1" inputmode="numeric" class="st-narrow" style="max-width:52px">
           <button class="st-test-btn" id="st-credit-save" onclick="saveCredit()">Save</button>
         </div>
         <div class="st-row">
@@ -6120,7 +6120,8 @@
       else if (r.kind === 'cache') ctl = `<span ${di} style="display:flex;gap:10px;align-items:center"><label class="toggle-switch"><input type="checkbox" id="${r.id}-on" ${on}><span class="toggle-slider"></span></label><select id="${r.id}-ttl" ${on}><option value="5m">Remember for 5 minutes</option><option value="1h">Remember for 1 hour</option></select></span>`;
       // One layout for every row (like the agent card rows): on the left the label with its ⓘ right after it and, under it, the help
       // sentence followed by "Default: ..." in the same dim paragraph; on the right the box (or switch) with its unit and Use default.
-      return `<div class="st-row st-xrow"><div class="st-xl"><label${r.kind === 'num' || r.kind === 'text' || r.kind === 'url' || r.kind === 'select' || r.kind === 'model' ? ` for="${r.id}"` : ''}>${esc(r.name)}</label><div class="st-hint st-xhelp">${esc(r.hint)} <span id="${r.id}-def">${esc(STG.p5cDefaultText(r))}</span></div></div>
+      // a switch row's name label points at the switch too, so the help script finds the label and puts the ⓘ right after the name (not under the switch)
+      return `<div class="st-row st-xrow"><div class="st-xl"><label${r.kind === 'num' || r.kind === 'text' || r.kind === 'url' || r.kind === 'select' || r.kind === 'model' || r.kind === 'switch' ? ` for="${r.id}"` : ''}>${esc(r.name)}</label><div class="st-hint st-xhelp">${esc(r.hint)} <span id="${r.id}-def">${esc(STG.p5cDefaultText(r))}</span></div></div>
         <div class="st-xr">${ctl}<button type="button" class="st-test-btn" id="${r.id}-use" hidden onclick="p5cSave('${r.opt}', true)">Use default</button></div></div>`;
     }
     // Put one row's controls in line with the saved settings (and show Default: ... only while the key is unset).

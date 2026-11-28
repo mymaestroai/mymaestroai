@@ -723,7 +723,7 @@ test('phone: no Answer me now in the header next to #chat-busy (no room there) t
   assert.strictEqual(answers().length, 0, 'no waiting message: no button');
 });
 
-test('both pages: the same words, the same storage key, and the service worker is hub-mobile-v113', () => {
+test('both pages: the same words, the same storage key, and the service worker is hub-mobile-v114', () => {
   for (const src of [APP, MOBILE]) {
     assert.match(src, /Your message runs after \$\{n - 1\} other message\$\{n - 1 === 1 \? '' : 's'\}\./);
     assert.match(src, /Waiting: \$\{behind\} is answering \$\{from\}\. Your message runs next\./);
@@ -737,7 +737,7 @@ test('both pages: the same words, the same storage key, and the service worker i
   }
   assert.match(APP, /qomOnConsult\(chat\.agent, chat\)\) return qomSendNew\(/);
   assert.match(MOBILE, /if \(!fallback && typeof qomOnConsult === 'function' && qomOnConsult\(agent\)\) \{ await qomSendNew\(agent\); return; \}\s*\n\s*if \(!fallback && \(isBusy\(agent\)/);
-  assert.match(fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8'), /const VERSION = 'hub-mobile-v113';/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8'), /const VERSION = 'hub-mobile-v114';/);
 });
 
 // ── person scope (both pages) ──

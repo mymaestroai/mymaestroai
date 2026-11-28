@@ -166,7 +166,7 @@ test('settings: the two keys are cleaned in the settings route and have a row in
   assert.match(applySrc, /patch\.buildPartnerNotice !== undefined\) patch\.buildPartnerNotice = patch\.buildPartnerNotice !== false/);
   assert.match(app, /<label>Notice long waits on workers<\/label>/);
   assert.match(app, /id="st-hw-minutes"[^>]*min="0" max="240"/);
-  assert.match(app, /id="st-hw-notice" \$\{data\.buildPartnerNotice !== false \? 'checked' : ''\}> Tell the lead when an agent has no build partner/);
+  assert.match(app, /id="st-hw-notice" \$\{data\.buildPartnerNotice !== false \? 'checked' : ''\}> Tell the lead when an agent has no build partner/);   // the words beside the box (one line; the label is a flex row)
   assert.match(app, /patch\.handOffWaitMinutes = parseInt\(hwMin\.value, 10\)/);
   assert.match(app, /patch\.buildPartnerNotice = !!hwNotice\.checked/);
   // the defaults: 10 minutes, notice on

@@ -123,9 +123,9 @@ test('Startup values placeholder: a default that is not one number leaves the bo
 
 test('Startup values: a read-only row keeps its words in the same layout', () => {
   const html = X.expertHtml(X.models([row('PORT', { value: '3000', set: true, readonly: true, running: '3000' })], records, null));
-  assert.ok(html.includes('<div class="st-row st-xrow" data-readonly="PORT" data-setting="OPT-0800"><div class="st-xl"><label>Port</label>'));
+  assert.ok(html.includes('<div class="st-row st-xrow" data-readonly="PORT"><div class="st-xl"><label for="st-ro-PORT">Port</label>'));   // data-setting is on the value (see the info-button test below)
   assert.ok(html.includes('The port your Maestro listens on.') && html.includes(X.FILE_HELP.replace(/'/g, '&#39;')));
-  assert.match(html, /<div class="st-xr"><span class="st-value" id="st-ro-PORT">3000<\/span><\/div>/);
+  assert.match(html, /<div class="st-xr"><span class="st-value" id="st-ro-PORT" data-setting="OPT-0800">3000<\/span><\/div>/);
 });
 
 test('checkValue: numbers refused outside range, empty accepted', () => {
@@ -395,4 +395,21 @@ test('the page hands its loaded records as a Map (hubSettingsHelp.load): rows st
   assert.strictEqual(m.expert[0].name, 'Hours between security checks');
   assert.ok(m.protectedRows.every((x) => x.id && !/^[A-Za-z_]+$/.test(x.name) || x.name.includes(' ')), 'protected rows have words too');
   assert.strictEqual(X.memoryModel({}, map).id, 'OPT-1095');
+});
+
+test('read-only and protected rows: data-setting sits on the value and the label points at it, so the info button lands after the label', () => {
+  const html = X.expertHtml(X.models([row('PORT', { value: '3000', set: true, readonly: true, running: '3000' }), row('HUB_AUTH_PASSWORD', { set: true, danger: true, readonly: true })], records, null));
+  assert.ok(html.includes('<div class="st-row st-xrow" data-readonly="PORT"><div class="st-xl"><label for="st-ro-PORT">Port</label>'));
+  assert.ok(html.includes('<span class="st-value" id="st-ro-PORT" data-setting="OPT-0800">3000</span>'));
+  assert.ok(!/data-readonly="[A-Z_]+" data-setting/.test(html), 'not on the row');
+  assert.ok(/<label for="st-ro-HUB_AUTH_PASSWORD">/.test(html) && /id="st-ro-HUB_AUTH_PASSWORD" data-setting="OPT-0900"/.test(html), 'protected rows too');
+});
+
+test('Startup values: only the first sentence of a record default is the Default; a trailing sentence follows as plain help', () => {
+  const mk = (def) => X.expertHtml(X.models([row('HUB_UPDATE_CHECK_HOURS', { writable: true })], [{ id: 'OPT-0950', name: 'N', storedAs: 'env:HUB_UPDATE_CHECK_HOURS', what: 'Words.', def }], null));
+  const h = mk('Default: 24 hours. We recommend leaving it.');
+  assert.ok(h.includes('Words. Default: <span data-for="HUB_UPDATE_CHECK_HOURS">24 hours</span>. We recommend leaving it.</div>'), h);
+  assert.match(h, /placeholder="24"/);
+  assert.ok(mk('Default: 1.5 hours. Fine.').includes('<span data-for="HUB_UPDATE_CHECK_HOURS">1.5 hours</span>. Fine.'));
+  assert.ok(mk('Default: 6 hours.').includes('Default: <span data-for="HUB_UPDATE_CHECK_HOURS">6 hours</span>.</div>'));
 });

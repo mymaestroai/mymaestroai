@@ -569,3 +569,16 @@ test('C2: a long feature summary is kept whole and the "Cost: ..." line shows, a
   assert.match(app, /cost: f\.cost, snoozedUntil/, 'the page passes the cost through');
   assert.match(app, /rv-text rv-cost">\$\{esc\('Cost: ' \+ f\.cost\)\}/, 'and draws it in the dim rv-text style');
 });
+
+test('features: a summary with no sentence end is cut at 240 characters at a word boundary with an ellipsis; a normal sentence is unchanged', () => {
+  const long = Array.from({ length: 80 }, (_, i) => 'word' + i).join(' ');   // well over 400 characters, no full stop
+  assert.ok(long.length > 400);
+  const r = R.build({ changes: { changes: [pending('long', { summary: long }), pending('short', { summary: 'A short one. And more.' }), pending('plain', { summary: 'No stop here' })] }, now: NOW });
+  const t = (id) => r.features.find((f) => f.id === id).text;
+  assert.ok(t('long').length <= 241, String(t('long').length));
+  assert.ok(t('long').endsWith('…'));
+  const body = t('long').slice(0, -1);
+  assert.ok(long.startsWith(body) && long.charAt(body.length) === ' ', 'cut at a word boundary');
+  assert.strictEqual(t('short'), 'A short one.');
+  assert.strictEqual(t('plain'), 'No stop here');
+});

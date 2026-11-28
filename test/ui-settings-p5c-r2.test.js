@@ -109,11 +109,11 @@ test('Q7: a family stored and now Default is sent as null; families not changed 
 test('Q8: words come from the read-back; a failed read-back says saved but not confirmed', async () => {
   const lost = fakeSaver({ data: { filesMaxUploadMb: 100 }, backFails: true });
   await lost.saver.save('OPT-0951', true);
-  assert.deepStrictEqual(lost.toasts, ['Biggest upload (MB): saved, but your Maestro could not be asked to confirm it.']);
+  assert.deepStrictEqual(lost.toasts, ['Biggest upload: saved, but your Maestro could not be asked to confirm it.']);
   const lost2 = fakeSaver({ data: {}, back: () => null });
   lost2.raws['OPT-0951'] = '100';
   await lost2.saver.save('OPT-0951');
-  assert.deepStrictEqual(lost2.toasts, ['Biggest upload (MB): saved, but your Maestro could not be asked to confirm it.']);
+  assert.deepStrictEqual(lost2.toasts, ['Biggest upload: saved, but your Maestro could not be asked to confirm it.']);
   // the hub holds something else than what was sent: not "saved."
   const odd = fakeSaver({ data: {}, back: () => ({ filesMaxUploadMb: 7 }) });
   odd.raws['OPT-0951'] = '100';
@@ -122,10 +122,10 @@ test('Q8: words come from the read-back; a failed read-back says saved but not c
   const good = fakeSaver({ data: {}, back: () => ({ filesMaxUploadMb: 100 }) });
   good.raws['OPT-0951'] = '100';
   await good.saver.save('OPT-0951');
-  assert.deepStrictEqual(good.toasts, ['Biggest upload (MB): saved.']);
+  assert.deepStrictEqual(good.toasts, ['Biggest upload: saved.']);
   const reset = fakeSaver({ data: { filesMaxUploadMb: 100 }, back: () => ({}) });
   await reset.saver.save('OPT-0951', true);
-  assert.deepStrictEqual(reset.toasts, ['Biggest upload (MB): back to the default.']);
+  assert.deepStrictEqual(reset.toasts, ['Biggest upload: back to the default.']);
 });
 
 // ── Q5: the row is painted whole from the stored copy (the row is locked while it saves, so nothing of the row is a draft)
@@ -164,7 +164,7 @@ test('read-back timeout: a read-back that fails or times out is "saved, but ... 
   const f = fakeSaver({ data: { filesMaxUploadMb: 100 }, backFails: true });
   f.raws['OPT-0951'] = '200';
   await f.saver.save('OPT-0951');
-  assert.deepStrictEqual(f.toasts, ['Biggest upload (MB): saved, but your Maestro could not be asked to confirm it.']);
+  assert.deepStrictEqual(f.toasts, ['Biggest upload: saved, but your Maestro could not be asked to confirm it.']);
   const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   assert.ok(app.includes('new AbortController()') && app.includes('ac.abort(), 8000') && app.includes('signal: ac.signal') && app.includes('clearTimeout(timer)'));
 });
@@ -176,10 +176,10 @@ test('a second save of a row that is still saving says so, and posts nothing mor
   const first = saver.save('OPT-0951');
   await tick();
   await saver.save('OPT-0951');
-  assert.deepStrictEqual(toasts, ['Biggest upload (MB): still saving…']);
+  assert.deepStrictEqual(toasts, ['Biggest upload: still saving…']);
   assert.strictEqual(posts.length, 1);
   open(); await first;
-  assert.strictEqual(toasts[toasts.length - 1], 'Biggest upload (MB): saved.');
+  assert.strictEqual(toasts[toasts.length - 1], 'Biggest upload: saved.');
   const app = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   assert.ok(app.includes("row.classList.add('st-p5c-saving')") && app.includes("row.classList.remove('st-p5c-saving')") && app.includes("h.textContent = 'Saving…'") && app.includes('hint.remove()'));
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8'), /\.st-row\.st-p5c-saving \{ opacity: \.6; \}/);

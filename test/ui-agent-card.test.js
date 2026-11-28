@@ -796,7 +796,7 @@ test('the card CSS uses only variables the pages define and no colour literal; t
     assert.match(h, /\.ac-shield \{ margin-left: 6px; color: var\(--accent\); \}/);
     assert.ok(!/orange/i.test(rules.join('\n')));
   }
-  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v113'/);
+  assert.match(read('sw.js'), /const VERSION = 'hub-mobile-v114'/);
 });
 
 test('the script has no invisible characters, sets text with textContent only and names no real person', () => {
@@ -1297,4 +1297,13 @@ test('editor: while a save is running the textarea and buttons are disabled', as
   release(); await flush();
   assert.deepStrictEqual(e.log.saves, ['slow']);
   assert.ok(!edArea(row()));
+});
+
+test('the More line says "More voice options:" when every row it names is a voice option; a mixed line keeps "More:"', () => {
+  const v = (id, name) => ({ id, home: 'Agent card > Basics', name });
+  const voice = [v('OPT-0022', 'Listens with'), v('OPT-0024', 'Cloud voice'), v('OPT-0025', 'ElevenLabs voice ID'), v('OPT-0026', 'Backup voice on this computer')];
+  assert.strictEqual(C.moreLine(voice), 'More voice options: Listens with, Cloud voice, ElevenLabs voice ID, Backup voice on this computer');
+  assert.strictEqual(C.moreLine(voice.concat([v('OPT-0028', 'Call timing for this agent')])), 'More voice options: Listens with, Cloud voice, ElevenLabs voice ID, Backup voice on this computer and more');
+  assert.strictEqual(C.moreLine([voice[0], v('OPT-0066', 'Longest reply')]), 'More: Listens with, Longest reply');
+  assert.strictEqual(C.moreLine([v('OPT-0066', 'Longest reply'), voice[0]]), 'More: Longest reply, Listens with');
 });
