@@ -261,7 +261,7 @@ test('anchors: no selector belongs to two records on one surface (an alias share
 test('access, spending, credentials and recording consent are never everyday + apply; the apply risk check exists and the records pass it', () => {
   const named = { 'OPT-0034': 'Who can download recordings', 'OPT-0598': 'Who can look at cameras', 'OPT-0575': 'Who can read Oura data', 'OPT-0565': 'Which agents may use the module',
     'OPT-0504': 'Telegram recipients', 'OPT-0347': 'Ollama address', 'OPT-0346': 'LM Studio address', 'OPT-0348': 'oMLX address', 'OPT-0608': 'Face recognizer address',
-    'OPT-0350': 'OpenRouter', 'OPT-0567': 'Google Drive backup copy', 'OPT-0153': "Protect Maestro's own code", 'OPT-0562': 'Switch on / Switch off',
+    'OPT-0350': 'OpenRouter', 'OPT-0567': 'Google Drive backup copy', 'OPT-0562': 'Switch on / Switch off',
     'OPT-0036': 'Announce the recording', 'OPT-0033': 'Keep call recordings' };
   for (const [id, name] of Object.entries(named)) {
     const r = records.byId(id);

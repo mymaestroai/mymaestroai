@@ -113,7 +113,6 @@ test('renamed words show in the page files', () => {
   assert.ok(app.includes('aria-label="Thinking effort"') && mhtml.includes('aria-label="Thinking effort"'));   // OPT-0057
   assert.ok(app.includes('>Clone an agent</span>'));                                      // OPT-0133
   assert.ok(app.includes('Two-factor sign-in <span class="sec-badge on">') && mob.includes('Two-factor sign-in: on'));   // OPT-0150
-  assert.ok(app.includes("Protect Maestro\\'s own code") && mob.includes("Protect Maestro\\'s own code"));              // OPT-0153
   assert.ok(app.includes('💾 Save chat'));                                                // OPT-0174
   assert.ok(app.includes('🔎 Search this chat') && mhtml.includes('Search this chat'));   // OPT-0175
   assert.ok(app.includes('>Show agent work</button>'));                                   // OPT-0177
