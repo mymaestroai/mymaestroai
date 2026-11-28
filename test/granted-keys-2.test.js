@@ -134,6 +134,6 @@ test('the lockbox widening list opens a .. path where the file system takes it, 
   assert.deepEqual(of(`cat ${X}/loop1/../id_ed25519`).reads, [], 'a link loop opens nothing');
   assert.deepEqual(of(`cat ${X}/nothere/../id_ed25519`).reads, [path.join(X, 'id_ed25519')], 'a missing folder: as typed');
   assert.deepEqual(of(`cat ${X}/id_ed25519 ${X}/link/../id_ed25519`).reads.sort(), [path.join(O, 'id_ed25519'), path.join(X, 'id_ed25519')].sort(), 'also named plainly: both');
-  // never wider than the policy check judged: X/link/../out is X/out to the check (inside the grant), O/out to the file system
-  assert.deepEqual(of(`cp /dev/null ${X}/link/../out.txt`).writes, []);
+  // the policy check judges X/link/../out where it lands (O/out, outside these roots), so an approval of it opens that file
+  assert.deepEqual(of(`cp /dev/null ${X}/link/../out.txt`).writes, [path.join(O, 'out.txt')]);
 });
