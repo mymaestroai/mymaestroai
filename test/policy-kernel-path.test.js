@@ -24,15 +24,16 @@ const dec = (tool, input) => tp.decide({ agent: worker, tool, input, cwd: '/tmp'
 test('a write through link/.. is judged where it lands (/usr: admin, nothing is written), refused for a worker', () => {
   assert.equal(dec('Bash', { command: `cp /dev/null ${X}/link/../out.txt` }).cls, 'admin');
   assert.equal(dec('Bash', { command: `cp /dev/null ${X}/link/../out.txt` }).decision, 'deny');
-  assert.equal(dec('Write', { file_path: `${X}/link/../out.txt` }).cls, 'admin', 'the Write tool too');
+  // the file tools fold `..` themselves before they write (lib/hub-tools path.resolve), so the folded path is what they touch
+  assert.equal(dec('Write', { file_path: `${X}/link/../out.txt` }).cls, 'write_inside', 'the Write tool writes the folded X/out.txt');
   assert.equal(dec('Bash', { command: `cd ${X}/link && cp /dev/null ../out.txt` }).cls, 'admin', 'a relative .. after cd into the link');
-  assert.equal(dec('Read', { file_path: `${X}/link/../notes.txt` }).cls, 'read_outside', 'a read lands outside the grant');
+  assert.equal(dec('Read', { file_path: `${X}/link/../notes.txt` }).cls, 'read', 'the Read tool reads the folded X/notes.txt');
 });
 
 test('a loop or an unreadable step is judged as outside; a missing folder keeps the typed answer', () => {
   assert.equal(dec('Bash', { command: `cp /dev/null ${X}/loop1/../out.txt` }).cls, 'write_outside');
   assert.equal(dec('Bash', { command: `cp /dev/null ${X}/nothere/../out.txt` }).cls, 'write_inside');
-  assert.equal(dec('Read', { file_path: `${X}/loop1/../notes.txt` }).cls, 'read_outside');
+  assert.equal(dec('Bash', { command: `cat ${X}/loop1/../notes.txt` }).cls, 'read_outside');
 });
 
 test('plain paths, and .. through plain folders, are judged as before', () => {
@@ -72,7 +73,7 @@ test('a settings file reached through link/.. is refused like the file itself', 
   try {
     process.env.HUB_AUTH_DIR = A;
     assert.equal(tp.touchesSettingsFile({ tool: 'Bash', input: { command: `echo x > ${XS}/link/../users.json` }, cwd: '/tmp' }), 'users.json');
-    assert.equal(tp.touchesSettingsFile({ tool: 'Write', input: { file_path: `${XS}/link/../users.json` }, cwd: '/tmp' }), 'users.json');
+    assert.equal(tp.touchesSettingsFile({ tool: 'Write', input: { file_path: `${XS}/link/../users.json` }, cwd: '/tmp' }), null, 'the Write tool writes the folded XS/users.json');
     assert.equal(tp.touchesSettingsFile({ tool: 'Bash', input: { command: `echo x > ${XS}/users.json` }, cwd: '/tmp' }), null, 'the typed path alone is not one');
     fs.mkdirSync(path.join(XS, 'other', 'sub'), { recursive: true });
     fs.symlinkSync(path.join(XS, 'other', 'sub'), path.join(XS, 'plain'));
@@ -80,14 +81,10 @@ test('a settings file reached through link/.. is refused like the file itself', 
   } finally { if (had === undefined) delete process.env.HUB_AUTH_DIR; else process.env.HUB_AUTH_DIR = had; }
 });
 
-test('review: the card and the approval key show where a file tool\'s .. path really lands', () => {
+test('the file tools are judged where they write: the folded path (they fold `..` themselves)', () => {
   const policy = tp.policyFor(worker);
   const w = tp.classifyTool({ tool: 'Write', input: { file_path: `${X}/link/../out.txt` }, agentName: 'torque', policy, cwd: '/tmp' });
-  assert.equal(w.summary, '/usr/out.txt');
-  assert.deepEqual(w.detail, { path: '/usr/out.txt', written: path.join(X, 'out.txt') });
-  assert.equal(w.destKey, '/usr');
-  const r = tp.classifyTool({ tool: 'Read', input: { file_path: `${X}/link/../notes.txt` }, agentName: 'torque', policy, cwd: '/tmp' });
-  assert.equal(r.summary, '/usr/notes.txt');
-  const plain = tp.classifyTool({ tool: 'Write', input: { file_path: `${X}/a/out.txt` }, agentName: 'torque', policy, cwd: '/tmp' });
-  assert.deepEqual([plain.summary, plain.detail], [path.join(X, 'a', 'out.txt'), { path: path.join(X, 'a', 'out.txt') }], 'a plain path: as before');
+  assert.deepEqual([w.cls, w.summary, w.detail], ['write_inside', path.join(X, 'out.txt'), { path: path.join(X, 'out.txt') }]);
+  const hubTools = require('fs').readFileSync(path.join(__dirname, '..', 'lib', 'hub-tools.js'), 'utf8');
+  assert.match(hubTools, /return path\.resolve\(cwd, s\);/, 'lib/hub-tools still folds paths before it touches a file; if that changes, judge file tools by kernelPath too');
 });
