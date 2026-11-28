@@ -87,3 +87,17 @@ test('review: a root with .. after a link grants neither the folder it spells no
   assert.equal(bash(a, `cat ${T}/home/keys/id_ed25519`).cls, 'admin', 'the folder the text spells');
   assert.equal(bash(a, `cat ${T}/elsewhere/keys/id_ed25519`).cls, 'admin', 'the folder the link reaches');
 });
+
+test('the lockbox widening list (pathsOf) applies the policy check\'s .. rule: a key path through .. widens, as decide calls it admin', () => {
+  const X = fs.mkdtempSync(path.join(os.tmpdir(), 'granted-keys-2-pdd-'));
+  const O = fs.mkdtempSync(path.join(os.tmpdir(), 'granted-keys-2-pdd-other-'));
+  fs.mkdirSync(path.join(O, 'sub'));
+  fs.writeFileSync(path.join(X, 'id_ed25519'), 'k');
+  fs.symlinkSync(path.join(O, 'sub'), path.join(X, 'link'));   // X/link/.. is O to the file system, X to a collapsed path
+  const a = worker([X]);
+  const keyRoots = tp.policyFor(a).keyRoots;
+  const cmd = `cat ${X}/link/../id_ed25519`;
+  assert.equal(bash(a, cmd).cls, 'admin', 'the policy check gives no exemption through ..');
+  assert.ok(tp.pathsOf(cmd, { cwd: '/tmp', roots: [X], keyRoots, agentName: 'torque' }).reads.length, 'so the widening list names it too');
+  assert.deepEqual(tp.pathsOf(`cat ${X}/id_ed25519`, { cwd: '/tmp', roots: [X], keyRoots, agentName: 'torque' }).reads, [], 'without .. the key stays the agent\'s own');
+});
