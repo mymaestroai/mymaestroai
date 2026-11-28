@@ -42,13 +42,7 @@ test('an old state file that still holds protect-own-code: listed without it, no
   assert.strictEqual(bc.stateOf('team-guidance', { stateFile }), 'off', 'other decisions kept');
   assert.strictEqual(bc.stateOf('own-code-guidance', { stateFile }), 'on');
   await assert.rejects(() => bc.decide('protect-own-code', 'on', { user: 'owner@example.com', stateFile }), /no such change/);
-  // the review prompt (the "Recent changes" review the lead runs) builds without it
-  const review = require('../lib/behaviour-review');
-  if (typeof review.reviewPrompt === 'function') {
-    let text = '';
-    assert.doesNotThrow(() => { text = String(review.reviewPrompt({ stateFile }) || ''); });
-    assert.ok(!/protect-own-code|Protect your Maestro's own code/.test(text));
-  }
+  // the review the lead runs for pending changes skips it: test/behaviour-review.test.js
 });
 
 test('the record of changes put aside before an update stays an agent-proof file', () => {

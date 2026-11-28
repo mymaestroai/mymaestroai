@@ -235,3 +235,12 @@ test('server wiring: the review runs after the scheduler starts; the decision an
   assert.match(page, /c\.id === 'worker-proposals' && c\.state === 'on'/);
   assert.doesNotMatch(page, /innerHTML/);
 });
+
+test('scheduleReview: a removed change still pending in an old state file (protect-own-code) is not reviewed; the others are', async () => {
+  const t = mk({ 'protect-own-code': ent('pending'), 'deep-research': ent('pending') });
+  const r = await review.scheduleReview(t.deps);
+  assert.deepStrictEqual(r.ids, ['deep-research']);
+  const task = t.live().find((x) => x.id === r.taskId);
+  assert.ok(task && /\(id: deep-research\)/.test(task.prompt));
+  assert.ok(!/protect-own-code|Protect your Maestro's own code/.test(task.prompt));
+});
