@@ -940,10 +940,14 @@ for (const [label, SRC] of [['desktop', APP], ['phone', MOBILE]]) {
     qomWait.clear();
     qomReleased.set('cid-2', { agent: 'lead', ts: Date.now() });
     assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'user', queued: 'cid-2' }), true, 'released, being handed to the page\'s stream');
+    qomReleased.set('cid-2', { agent: 'lead', ts: Date.now() - 60000, done: Date.now() - 1000 });
+    assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'user', queued: 'cid-2' }), true, 'drawn by this page: a late or replayed turn_start is still this page\'s');
+    qomReleased.set('cid-2', { agent: 'lead', ts: Date.now() - 400000, done: Date.now() - 301000 });
+    assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'user', queued: 'cid-2' }), false, 'after 5 minutes: not claimed');
     qomReleased.delete('cid-2');
-    assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'user', queued: 'cid-2' }), false, 'handed over or failed: no longer claimed');
+    assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'user', queued: 'cid-2' }), false, 'cancelled or failed: no longer claimed');
     assert.match(fnSource(SRC, 'qomStarted'), /qomReleased\.set\(w\.client_id, \{ agent: w\.agent, ts: Date\.now\(\) \}\);[^\n]*\n\s*qomEnd\(w, true\);/);
-    assert.match(fnSource(SRC, 'qomBegin'), /\} finally \{ qomReleased\.delete\(w\.client_id\); \}/);
+    assert.match(fnSource(SRC, 'qomBegin'), /handed = true;[\s\S]*\} finally \{[^\n]*\n\s*const r = qomReleased\.get\(w\.client_id\);\s*if \(handed && r\) r\.done = Date\.now\(\); else qomReleased\.delete\(w\.client_id\);/);
   });
 }
 test('phone: the re-attach waits only while a released message of this phone\'s is being handed to its stream', () => {
@@ -955,6 +959,8 @@ test('phone: the re-attach waits only while a released message of this phone\'s 
   assert.strictEqual(api.qomHandingOff('helper'), false);
   qomReleased.set('c', { agent: 'lead', ts: Date.now() - 31000 });
   assert.strictEqual(api.qomHandingOff('lead'), false, 'never longer than 30 s');
+  qomReleased.set('c', { agent: 'lead', ts: Date.now(), done: Date.now() });
+  assert.strictEqual(api.qomHandingOff('lead'), false, 'a completed hand-off holds nothing back');
 });
 test('wiring: the desktop turn_start mirror, the phone turn_start and the phone re-attach skip a turn of the page\'s own waiting message', () => {
   assert.match(fnSource(APP, 'onHubTurnStart'), /chat\.status === 'thinking'\) return;\s*if \(typeof qomOwnsTurn === 'function' && qomOwnsTurn\(ev\.agent, ev\.origin\)\) return;/);

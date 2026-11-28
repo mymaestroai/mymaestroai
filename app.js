@@ -14707,12 +14707,12 @@
     const qomWait = new Map();   // client_id -> the waiting message { chatId, agent, message, images, userEl, ts, client_id, position, behindName, fromName, line, ... }
     // A turn the hub starts for one of this page's own waiting messages carries that message's client_id (origin.queued):
     // it is this page's turn (its stream attaches a moment later), so the turn_start mirror must not draw it again.
-    const qomReleased = new Map();   // client_id -> { agent, ts } from the release until the page's stream has taken the turn over
+    const qomReleased = new Map();   // client_id -> { agent, ts, done? }: from the release; kept 5 min after a completed hand-off (turn_start may come late)
     function qomOwnsTurn(agent, origin) {
       const id = origin && origin.kind === 'user' && typeof origin.queued === 'string' ? origin.queued : null;
       if (!agent || !id) return false;
       const r = qomReleased.get(id);
-      if (r) return r.agent === agent;
+      if (r) return r.agent === agent && (!r.done || Date.now() - r.done < 300000);
       const w = qomWait.get(id);
       return !!(w && w.agent === agent && !w.ended && !w.refused);   // ended: replaced by another tab, which holds the stream
     }
@@ -14858,7 +14858,8 @@
     }
     // The first normal event arrived: the line goes, the request carries on as a completely normal turn stream.
     function qomStarted(w, reader, rest) {
-      qomReleased.set(w.client_id, { agent: w.agent, ts: Date.now() });   // until qomBegin has handed the turn to the page's stream
+      for (const [id, r] of qomReleased) if (r.done && Date.now() - r.done > 300000) qomReleased.delete(id);
+      qomReleased.set(w.client_id, { agent: w.agent, ts: Date.now() });   // claimed while qomBegin hands the turn to the page's stream
       qomEnd(w, true);
       const bytes = new TextEncoder().encode(rest);
       let first = bytes.length > 0;
@@ -14988,11 +14989,17 @@
     }
     // The turn began: the normal send takes the request over (the person's message is already drawn; nothing is drawn twice).
     async function qomBegin(w, response) {
+      let handed = false;
       try {
         for (let i = 0; i < 100 && chats[w.chatId] && chats[w.chatId].controller; i++) await new Promise(r => setTimeout(r, 200));   // the earlier reply is still closing
         if (!chats[w.chatId]) { try { response.body.getReader().cancel(); } catch (e) { /* gone */ } return; }
-        return await sendSoloMessage(w.chatId, 0, { fallback: { text: w.message, images: w.images || [] }, qomTurn: { response, userEl: w.userEl } });
-      } finally { qomReleased.delete(w.client_id); }   // handed over, cancelled or failed: the turn is no longer claimed
+        const out = await sendSoloMessage(w.chatId, 0, { fallback: { text: w.message, images: w.images || [] }, qomTurn: { response, userEl: w.userEl } });
+        handed = true;
+        return out;
+      } finally {   // drawn by this page: the id stays claimed a while (a late turn_start); cancelled or failed: released at once
+        const r = qomReleased.get(w.client_id);
+        if (handed && r) r.done = Date.now(); else qomReleased.delete(w.client_id);
+      }
     }
     // The agent is busy answering a consultation (not a turn of the person's own)
     function qomOnConsult(agent, chat) {
