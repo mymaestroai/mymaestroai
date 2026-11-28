@@ -542,8 +542,11 @@ test('phone: the busy line (#chat-busy and the card) shows Answer me now only wh
   await p.api.sendMessage();
   await tick();
   p.api.qomBusyBtn();
-  const b = p.doc.getElementById('chat-busy-answer');
-  assert.ok(b);
+  assert.strictEqual(p.doc.getElementById('chat-busy-answer'), null, 'never in the phone header: it squeezed the name and was clipped');
+  const card = new El('div');
+  p.api.qomDecorate(card, 'lead');
+  assert.strictEqual(btnsOf(card).length, 1);
+  const b = btnsOf(card)[0];
   assert.strictEqual(b.tagName, 'button');
   assert.strictEqual(b.type, 'button');
   assert.strictEqual(b.textContent, 'Answer me now');
@@ -551,9 +554,6 @@ test('phone: the busy line (#chat-busy and the card) shows Answer me now only wh
   b.click();
   await tick();
   assert.strictEqual(p.calls.api.find(f => f.url === '/api/chat/takeover').body.client_id, p.calls.api[0].body.client_id);
-  const card = new El('div');
-  p.api.qomDecorate(card, 'lead');
-  assert.strictEqual(btnsOf(card).length, 1);
   p.streams[0].ev({ type: 'text', content: 'x' });
   await tick(10);
   p.api.qomBusyBtn();
@@ -659,7 +659,7 @@ test('phone: a 409 whose status lookup says consultation, after a switch to anot
   lateOnOtherChat(p, '409');
 });
 
-test('phone: the Answer me now button sits right after #chat-busy (never inside it: #chat-busy is a button), stays through every repaint (once), and goes when no message waits', async () => {
+test('phone: no Answer me now in the header next to #chat-busy (no room there) through every repaint; the busy card in the chat carries it', async () => {
   const p = phoneFull();
   p.busy.hidden = false;
   const repaint = () => { p.busy.textContent = '⏳ Answering a consultation from Helper · 6s'; p.api.qomBusyBtn(); };   // what paintChatStatus does each time
@@ -669,11 +669,8 @@ test('phone: the Answer me now button sits right after #chat-busy (never inside 
   await p.api.sendMessage();
   await tick(12);
   repaint(); repaint(); repaint();
-  assert.strictEqual(answers().length, 1, 'one button after any number of repaints');
-  const b = answers()[0];
-  assert.strictEqual(b.textContent, 'Answer me now');
+  assert.strictEqual(answers().length, 0, 'no button in the phone header after any number of repaints');
   assert.strictEqual(p.busy.all(e => e.tagName === 'button').length, 0, 'not inside the busy line (a button in a button never gets the tap)');
-  assert.strictEqual(b.parentNode, p.busy.parentNode, 'in the same row as the busy line');
   assert.match(p.busy.textContent, /Answering a consultation from Helper · 6s/);
   p.streams[0].ev({ type: 'text', content: 'x' });   // the turn began: the message no longer waits
   await tick(12);
@@ -858,4 +855,23 @@ test('phone: expect_user on every send, a foreign waiter is dropped, retry:true 
   assert.ok(!p.vctx.qomWait.has(id));
   assert.strictEqual(linesOf(p.msgs).length, 0);
   assert.ok(!JSON.parse(p.ctx.localStorage.getItem('mmQueuedOwnerMessages') || '[]').some(e => e.client_id === id));
+});
+
+test('desktop: while the agent answers a consultation the composer reads Send with when the message runs; during the person\'s own turn it is Interject', () => {
+  const p = desk({ chatOver: { status: 'thinking' }, more: { names: ['qomComposerLook'] } });
+  const send = new El('button'); send.id = 'send-c1'; send.textContent = '⚡ Interject'; p.doc.root.appendChild(send);
+  const input = p.doc.getElementById('input-c1');
+  p.api.qomComposerLook(p.chat);
+  assert.strictEqual(send.textContent, 'Send');
+  assert.strictEqual(input.placeholder, 'Lead is answering Helper. Your message runs next.');
+  p.ctx.agentStatus.lead = { busy: true };   // the consultation ended and the person's own turn runs
+  p.api.qomComposerLook(p.chat);
+  assert.strictEqual(send.textContent, '⚡ Interject');
+  assert.strictEqual(input.placeholder, 'Type to interject new info into the running agent...');
+  p.chat.status = 'idle'; send.textContent = 'Send'; p.ctx.agentStatus.lead = { busy: true, consultedBy: 'helper' };
+  p.api.qomComposerLook(p.chat);
+  assert.strictEqual(send.textContent, 'Send', 'an idle chat is left to setStatus');
+  // wiring: setStatus's busy branch and the status feed both call it
+  assert.match(APP, /simpleBusyLook\(sendBtn, input, cancelBtn\);[^\n]*\n\s*if \(typeof qomComposerLook === 'function'\) qomComposerLook\(chats\[chatId\]\);/);
+  assert.match(APP, /busyCardRefresh\(c\); if \(typeof qomComposerLook === 'function'\) qomComposerLook\(c\);/);
 });

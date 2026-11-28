@@ -10855,14 +10855,8 @@ function qomBusyBtn() {
   if (!busy || !busy.parentNode) return;
   const old = $('chat-busy-answer');
   if (old) old.remove();   // painted again so its click and disabled state follow the first waiting message (and it never shows twice)
-  const first = current ? qomWaiting(current)[0] : null;
-  if (!first || busy.hidden) return;
-  // #chat-busy is itself a <button>: a button inside it would never get the tap (browsers give it to the outer one), so the
-  // button sits right after the busy line in the same row, which is allowed to show it (no clipping, flex-shrink 0).
-  const btn = qomButton(first);
-  btn.id = 'chat-busy-answer';
-  btn.style.cssText += 'margin-left:8px;white-space:nowrap;flex-shrink:0;';
-  busy.parentNode.insertBefore(btn, busy.nextSibling);
+  // The phone header has no room for it: a button there squeezed the agent's name and was clipped to one letter. The
+  // phone offers Answer me now on the waiting line and on the busy card in the chat (qomDecorate) instead.
 }
 function qomDecorate(card, agent) {
   const first = qomWaiting(agent)[0];

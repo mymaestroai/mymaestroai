@@ -11636,7 +11636,7 @@
       paintAgentStatus(name);
       paintAgentsWorking();
       if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
-      { const c = findSoloChat(name); if (c) busyCardRefresh(c); }   // the busy card follows the status feed
+      { const c = findSoloChat(name); if (c) { busyCardRefresh(c); if (typeof qomComposerLook === 'function') qomComposerLook(c); } }   // the busy card and the composer follow the status feed
       repaintWaiters(name, cur, next);   // a helper or a consulted agent changed: the agent waiting on it says so now
     }
     // A temporary worker the full feed no longer lists: forget it, and the agent that waited on it says so now.
@@ -14108,6 +14108,7 @@
         }
         if (input) input.placeholder = 'Type to interject new info into the running agent...';
         if (typeof simpleBusyLook === 'function') simpleBusyLook(sendBtn, input, cancelBtn);   // Simple: Send, a plain placeholder, Stop
+        if (typeof qomComposerLook === 'function') qomComposerLook(chats[chatId]);   // answering a consultation: a send waits, so Send and when it runs
       } else if (status === 'paused') {
         if (pauseBtn) pauseBtn.style.display = 'none';
         if (cancelBtn) cancelBtn.style.display = 'none';
@@ -14987,6 +14988,22 @@
       if (!st || !st.busy) return false;
       const run = busyRun[agent];
       return !!st.consultedBy || !!(run && run.origin && run.origin.kind === 'consultation');
+    }
+    // The composer of a busy chat: while the agent answers a consultation a send waits (it is not an interjection), so the
+    // button reads Send and the placeholder says when it runs; during the person's own turn it is Interject as before.
+    function qomComposerLook(chat) {
+      if (!chat || chat.status !== 'thinking') return;
+      const sendBtn = document.getElementById(`send-${chat.id}`);
+      const input = document.getElementById(`input-${chat.id}`);
+      if (qomOnConsult(chat.agent, chat)) {
+        const st = agentStatus[chat.agent] || {};
+        if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send'; sendBtn.style.background = ''; sendBtn.style.color = ''; }
+        if (input) input.placeholder = `${qomName(chat.agent)} is answering ${st.consultedBy ? qomName(st.consultedBy) : 'another agent'}. Your message runs next.`;
+        return;
+      }
+      if (sendBtn) { sendBtn.textContent = '⚡ Interject'; sendBtn.style.background = 'var(--warning)'; sendBtn.style.color = 'var(--on-light-text)'; }
+      if (input) input.placeholder = 'Type to interject new info into the running agent...';
+      if (typeof simpleBusyLook === 'function') simpleBusyLook(sendBtn, input, document.getElementById(`cancel-${chat.id}`));
     }
     // The hub refused a send as busy: is the agent answering a consultation? The status the page has, else a fresh one.
     async function qomStatusConsult(chat) {
