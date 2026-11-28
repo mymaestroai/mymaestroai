@@ -370,7 +370,7 @@ for (const file of ['app.js', 'mobile.js']) {
     page.report();
     assert.strictEqual(env.sent.length, 6, 'and one the hub failed (HTTP 500) too');
     const sends = (src.match(/(?:fetch|api)\('\/api\/chat\/stream', \{[\s\S]{0,200}?\.\.\.zoneHeader\(\) \}/g) || []).length;
-    assert.strictEqual(sends, file === 'app.js' ? 4 : 1, 'every message carries the device\'s zone');
+    assert.strictEqual(sends, file === 'app.js' ? 5 : 2, 'every message carries the device\'s zone');
     assert.strictEqual((src.match(/(?:fetch|api)\('\/api\/chat\/stream'/g) || []).length, sends, '...every one');
     page.cameBack(); page.report();
     assert.deepStrictEqual(page.zoneHeader(), {}, 'a tap that is not a send: the page\'s own requests say nothing');
@@ -383,7 +383,7 @@ for (const file of ['app.js', 'mobile.js']) {
       ? [['sendSoloMessage', 'if (!retryCount) tzSentAt = Date.now();'], ['sendGroupMessage', 'tzSentAt = Date.now();'], ['sendOrchTask', 'tzSentAt = Date.now();']]
       : [['sendMessage', 'if (!fallback) tzSentAt = Date.now();']];
     for (const [fn, line] of arms) assert.ok(extract(src, fn).includes(line), `${fn}: the person's own send arms it`);
-    assert.strictEqual((src.match(/tzSentAt = Date\.now\(\)/g) || []).length, arms.length, 'and nothing else does');
+    assert.strictEqual((src.match(/tzSentAt = Date\.now\(\)/g) || []).length, arms.length + (file === 'mobile.js' ? 1 : 0), 'and nothing else does (the phone\'s waiting message, qomSendNew, arms it itself: it is sent before sendMessage\'s own arming line)');
     const none = pageReporter(file);
     none.me.user = null; none.page.report();
     assert.strictEqual(none.env.sent.length, 0, 'nobody signed in: nothing to report');

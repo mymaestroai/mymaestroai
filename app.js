@@ -75,6 +75,7 @@
           // No session. On a hub with no accounts at all (updated from before multi-user) /api/me is refused too, so
           // ask the public auth status; hubMe stays undefined so the rest of the page behaves as before.
           try { const a = await (await fetch('/api/auth/status', { credentials: 'include' })).json(); window.hubNoAccounts = a && a.setupNeeded === true && !a.signedIn; } catch {}
+          if (window.hubNoAccounts !== true) { try { qomForgetAll(); } catch { /* blocked storage */ } }   // signed out: waiting messages belong to a person, none stay for the next one
         }
       } catch (e) { /* offline: behave as before */ }
       try { activeJobsSync(); } catch { /* the Active state is declared further down; its own first sync covers an early call */ }
@@ -727,6 +728,7 @@
       try { qsForgetRecents(null); } catch { /* the ⌘K switcher's recents leave with the person */ }
       try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
       try { if (window.HubLooks) window.HubLooks.forgetBanner(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
+      try { qomForgetAll(); } catch { /* blocked storage */ }
       try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }); } catch (e) { /* go to login anyway */ }
       location.href = '/login';
     }
@@ -11369,6 +11371,7 @@
       const fresh = !el;
       if (!el) { el = document.createElement('div'); el.className = 'chat-busy-card'; el.setAttribute('role', 'status'); }
       if (el.textContent !== text) el.textContent = text;
+      if (typeof qomDecorate === 'function') qomDecorate(el, chat.agent);   // Answer me now while one of the person's messages waits for this agent
       if (panel.lastElementChild !== el) panel.appendChild(el);
       if (fresh) autoScroll(panel);
       return keep(true);
@@ -11633,7 +11636,7 @@
       paintAgentStatus(name);
       paintAgentsWorking();
       if (typeof teamsRepaintSoon === 'function') teamsRepaintSoon();
-      { const c = findSoloChat(name); if (c) busyCardRefresh(c); }   // the busy card follows the status feed
+      { const c = findSoloChat(name); if (c) { busyCardRefresh(c); if (typeof qomComposerLook === 'function') qomComposerLook(c); } }   // the busy card and the composer follow the status feed
       repaintWaiters(name, cur, next);   // a helper or a consulted agent changed: the agent waiting on it says so now
     }
     // A temporary worker the full feed no longer lists: forget it, and the agent that waited on it says so now.
@@ -12830,6 +12833,7 @@
       if (ev.origin?.kind === 'user') {
         // Our own send is already streaming in this window (or re-attaching to it).
         if (!chat || chat.controller || chat.reattach || chat.status === 'thinking') return;
+        if (typeof qomOwnsTurn === 'function' && qomOwnsTurn(ev.agent, ev.origin)) return;   // one of this page's waiting messages: its own stream draws it
       }
       if (!chat) {
         if (!HUB_AUTO_OPEN.has(ev.origin?.kind)) return;   // plain consultations only show in an already open window
@@ -14105,6 +14109,7 @@
         }
         if (input) input.placeholder = 'Type to interject new info into the running agent...';
         if (typeof simpleBusyLook === 'function') simpleBusyLook(sendBtn, input, cancelBtn);   // Simple: Send, a plain placeholder, Stop
+        if (typeof qomComposerLook === 'function') qomComposerLook(chats[chatId]);   // answering a consultation: a send waits, so Send and when it runs
       } else if (status === 'paused') {
         if (pauseBtn) pauseBtn.style.display = 'none';
         if (cancelBtn) cancelBtn.style.display = 'none';
@@ -14695,6 +14700,383 @@
     window.addEventListener('pageshow', () => resync());
     document.addEventListener('visibilitychange', () => { if (!document.hidden) resync(); });
 
+    // ── The person's message waiting behind a consultation (queue_behind_consult) ──
+    // While the agent answers another agent's consultation, a message from the person is not injected into that answer
+    // (it would go to the other agent): it waits as its own request, the hub runs it next, and "Answer me now" pauses the
+    // consultation so it runs at once. The same words and logic are on the phone page (mobile.js); Simple uses both pages.
+    const qomWait = new Map();   // client_id -> the waiting message { chatId, agent, message, images, userEl, ts, client_id, position, behindName, fromName, line, ... }
+    // A turn the hub starts for one of this page's own waiting messages carries that message's client_id (origin.queued):
+    // it is this page's turn (its stream attaches a moment later), so the turn_start mirror must not draw it again.
+    const qomReleased = new Map();   // client_id -> { agent, ts, done? }: from the release; once done, kept for the life of the page (a turn_start may be replayed late)
+    function qomOwnsTurn(agent, origin) {
+      const id = origin && origin.kind === 'user' && typeof origin.queued === 'string' ? origin.queued : null;
+      if (!agent || !id) return false;
+      const r = qomReleased.get(id);
+      if (r) return r.agent === agent;
+      const w = qomWait.get(id);
+      return !!(w && w.agent === agent && !w.ended && !w.refused);   // ended: replaced by another tab, which holds the stream
+    }
+    function qomKey() { return 'mmQueuedOwnerMessages'; }
+    // Who is signed in: the account id, '' when the hub has no accounts, null while the page does not know yet (nothing is restored or sent then).
+    function qomUser() {
+      const me = typeof window !== 'undefined' ? window.hubMe : null;
+      if (me) return me.user && me.user.id != null ? String(me.user.id) : '';
+      return typeof window !== 'undefined' && window.hubNoAccounts === true ? '' : null;
+    }
+    // Waiting messages kept on this device (every person's); one older than 6 hours is dropped.
+    function qomAll() {
+      let list = [];
+      try { list = JSON.parse(localStorage.getItem(qomKey()) || '[]'); } catch (e) { list = []; }
+      const now = Date.now();
+      return (Array.isArray(list) ? list : []).filter(e => e && typeof e.agent === 'string' && typeof e.client_id === 'string' && typeof e.message === 'string' && now - Number(e.ts) < 6 * 3600 * 1000);
+    }
+    // Only this person's waiting messages (nothing while the page does not know who is signed in).
+    function qomStored(user) {
+      const u = user === undefined ? qomUser() : user;
+      if (u === null) return [];
+      return qomAll().filter(e => String(e.user || '') === u);
+    }
+    function qomSave(list) { try { localStorage.setItem(qomKey(), JSON.stringify(list)); } catch (e) { /* storage off or full: the message still waits on this page */ } }
+    function qomKeep(w) { const u = qomUser() || ''; qomSave(qomAll().filter(e => !(e.client_id === w.client_id && String(e.user || '') === u)).concat([{ agent: w.agent, client_id: w.client_id, message: w.message, ts: w.ts, user: u }])); }
+    function qomForget(id, user) { const u = user === undefined ? qomUser() : String(user || ''); if (u === null) return; qomSave(qomAll().filter(e => !(e.client_id === id && String(e.user || '') === u))); }
+    // Sign-out: no waiting message stays on this device for the next person.
+    function qomForgetAll() { try { localStorage.removeItem(qomKey()); } catch (e) { /* blocked storage */ } }
+    function qomNewId() { return `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`; }
+    function qomHidden() { return typeof document !== 'undefined' && !!document.hidden; }
+    function qomWords(behind, from, position) {
+      const n = Math.floor(Number(position)) || 1;
+      if (n >= 2) return `Your message runs after ${n - 1} other message${n - 1 === 1 ? '' : 's'}.`;
+      return `Waiting: ${behind} is answering ${from}. Your message runs next.`;
+    }
+    function qomLineText(w) {
+      if (w.error) return w.error;
+      if (w.pausing) return `Pausing ${w.fromName}'s request…`;
+      return qomWords(w.behindName, w.fromName, w.position);
+    }
+    // This agent's waiting messages, oldest first (the first one is what the busy line's button acts on).
+    function qomWaiting(agent) {
+      return [...qomWait.values()].filter(w => w.agent === agent && !w.ended).sort((a, b) => a.ts - b.ts);
+    }
+    function qomButton(w) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'owner-queue-now';
+      btn.textContent = 'Answer me now';
+      btn.disabled = !!w.pausing;
+      btn.style.cssText = 'min-height:36px;padding:4px 12px;border:1px solid currentColor;border-radius:6px;background:transparent;color:inherit;font:inherit;cursor:pointer;';
+      btn.addEventListener('click', () => qomTakeover(w.client_id));
+      return btn;
+    }
+    // The waiting line under the person's message: its words (role=status) and the Answer me now button.
+    function qomPaint(w) {
+      if (!w.line) {
+        const line = document.createElement('div');
+        line.className = 'owner-queue-line';
+        line.setAttribute('role', 'status');
+        line.style.cssText = 'margin:4px 0 8px;font-size:12px;opacity:.85;display:flex;flex-wrap:wrap;align-items:center;gap:8px;';
+        w.text = document.createElement('span');
+        line.appendChild(w.text);
+        w.line = line;
+        w.btn = null;
+        if (w.userEl && w.userEl.parentNode) w.userEl.parentNode.insertBefore(line, w.userEl.nextSibling);
+        else { const c = qomContainer(w); if (c) c.appendChild(line); }
+      }
+      w.text.textContent = qomLineText(w);
+      // Once pressed (pausing) the button is gone, not just disabled; it returns if the pause fails (pausing false again).
+      if (w.refused || w.pausing) { if (w.btn) { w.btn.remove(); w.btn = null; } }
+      else if (!w.btn) { w.btn = qomButton(w); w.line.appendChild(w.btn); }
+      qomPaintBusy(w.agent);
+    }
+    // Answer me now: pause the consultation; the waiting message then runs at once (this request carries on as the turn).
+    async function qomTakeover(id) {
+      const w = qomWait.get(id);
+      if (!w || w.pausing || w.ended) return;
+      w.pausing = true; w.error = '';
+      qomPaint(w);
+      let res = null;
+      try { const r = await qomPost('/api/chat/takeover', { agent: w.agent, client_id: w.client_id }); res = await r.json(); }
+      catch (e) { res = { ok: false, error: (e && e.message) || 'The request did not go through.' }; }
+      if (w.ended) return;
+      if (res && res.ok) { if (res.from) w.fromName = qomName(res.from); return; }
+      w.pausing = false;
+      w.error = String((res && res.error) || 'Could not pause the request.');
+      qomPaint(w);
+    }
+    // The stream's waiting phase: events for the waiting line, then the first normal event (where the turn begins).
+    // { events, started, rest }: rest is what is left to hand to the normal stream reader (from the first normal line on).
+    function qomScan(buffer) {
+      const lines = String(buffer).split('\n');
+      const tail = lines.pop();
+      const events = [];
+      for (let i = 0; i < lines.length; i++) {
+        if (!lines[i].startsWith('data: ')) continue;   // a ping comment or an empty line
+        let ev = null;
+        try { ev = JSON.parse(lines[i].slice(6)); } catch (e) { ev = null; }
+        if (ev && ['queued', 'replaced', 'already_sent', 'takeover_failed', 'error'].includes(ev.type)) { events.push(ev); continue; }
+        return { events, started: true, rest: `${lines.slice(i).join('\n')}\n${tail}` };
+      }
+      return { events, started: false, rest: tail };
+    }
+    // This waiting message is over (its turn began, it was already sent, or another request took its place).
+    function qomEnd(w, forget) {
+      w.ended = true;
+      if (w.line) { w.line.remove(); w.line = null; }
+      if (forget) { qomForget(w.client_id, w.user); qomWait.delete(w.client_id); }
+      qomPaintBusy(w.agent);
+    }
+    // true when the event ends the waiting
+    function qomEvent(w, ev) {
+      switch (ev.type) {
+        case 'queued':
+          w.position = Math.max(1, Math.floor(Number(ev.position)) || 1);
+          if (ev.behind && ev.behind.from) w.fromName = qomName(ev.behind.from);
+          if (ev.agent) w.behindName = qomName(ev.agent);
+          w.fails = 0; w.error = '';
+          qomPaint(w);
+          return false;
+        case 'takeover_failed':
+          w.pausing = false;
+          w.error = `Could not pause: ${ev.error || 'the request could not be paused.'}`;
+          qomPaint(w);
+          return false;
+        case 'replaced': qomEnd(w, false); return true;   // a newer request with this client_id took over: this one ends quietly
+        case 'already_sent': qomEnd(w, true); qomReread(w); return true;   // it already ran: the reply is in the chat history
+        default:
+          if (ev.retry === true) {   // the hub could not take the message just now (it did not run): it stays waiting and goes again, the reason on its line meanwhile
+            w.pausing = false; w.running = false;
+            w.error = String(ev.error || 'The hub could not record this message. Trying again.');
+            qomPaint(w);
+            qomRetryLater(w);
+            return true;
+          }
+          w.ended = true; w.refused = true; w.pausing = false;
+          qomForget(w.client_id, w.user); qomWait.delete(w.client_id);
+          w.error = `Not sent: ${ev.error || 'the hub refused the message.'}`;
+          qomPaint(w);
+          return true;
+      }
+    }
+    // The first normal event arrived: the line goes, the request carries on as a completely normal turn stream.
+    function qomStarted(w, reader, rest) {
+      qomReleased.set(w.client_id, { agent: w.agent, ts: Date.now() });   // claimed while qomBegin hands the turn to the page's stream
+      qomEnd(w, true);
+      const bytes = new TextEncoder().encode(rest);
+      let first = bytes.length > 0;
+      const response = { ok: true, status: 200, body: { getReader: () => ({
+        read: () => (first ? (first = false, Promise.resolve({ done: false, value: bytes })) : reader.read()),
+        cancel: (why) => reader.cancel(why),
+      }) } };
+      try { return qomBegin(w, response); } catch (e) { return null; }
+    }
+    async function qomRun(w) {
+      if (w.running || w.ended) return;
+      if (qomUser() === null) { qomRetryLater(w); return; }   // not while the page does not know who is signed in
+      if (w.user === null || w.user === undefined) w.user = qomUser();   // sent before the page knew who is signed in: it is that person's
+      if (qomForeign(w)) { qomDrop(w); return; }   // another account is signed in now: this message is not sent
+      w.running = true;
+      const run = (w.runId = (w.runId || 0) + 1);
+      w.ctl = new AbortController();
+      let reader = null;
+      try {
+        const resp = await qomStream(w, w.ctl);
+        if (w.runId !== run) return;
+        if (resp.status === 409 || !resp.ok) {
+          w.ended = true; w.refused = true; qomForget(w.client_id, w.user); qomWait.delete(w.client_id);
+          w.error = resp.status === 409 ? `Not sent: ${w.behindName} is busy with another turn.` : `Not sent: HTTP ${resp.status}`;
+          qomPaint(w);
+          return;
+        }
+        reader = resp.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (w.runId !== run) { try { reader.cancel(); } catch (e) { /* gone */ } return; }
+          if (done) throw new Error('the connection closed while waiting');
+          buf += dec.decode(value, { stream: true });
+          const scan = qomScan(buf);
+          buf = scan.rest;
+          for (const ev of scan.events) if (qomEvent(w, ev)) { try { reader.cancel(); } catch (e) { /* gone */ } return; }
+          if (scan.started) { w.running = false; return qomStarted(w, reader, buf); }
+        }
+      } catch (e) {
+        if (w.runId !== run || w.ended) return;
+        w.running = false;
+        // The request was lost while the message still waits (network, page hidden): the same client_id goes again, now or when the page shows.
+        qomRetryLater(w);
+      }
+    }
+    // Send the waiting message again after a pause that grows with each failure (a lost connection, or the hub saying "try again").
+    function qomRetryLater(w) {
+      w.fails = (w.fails || 0) + 1;
+      clearTimeout(w.timer);
+      if (!qomHidden()) w.timer = setTimeout(qomResendAll, Math.min(30000, 2000 * 2 ** (w.fails - 1)));
+    }
+    // A message sent by one account is never sent again by another: when the person signed in now is not who wrote it, it is dropped.
+    function qomForeign(w) { const u = qomUser(); return u !== null && w.user !== null && w.user !== undefined && String(w.user) !== u; }
+    function qomDrop(w) {
+      w.ended = true;
+      clearTimeout(w.timer);
+      try { if (w.ctl) w.ctl.abort(); } catch (e) { /* gone */ }
+      if (w.line) { w.line.remove(); w.line = null; }
+      if (w.userEl && w.drawn) { try { w.userEl.remove(); } catch (e) { /* gone */ } }
+      qomForget(w.client_id, w.user);
+      qomWait.delete(w.client_id);
+      qomPaintBusy(w.agent);
+    }
+    // Send every kept waiting message again with its own client_id (the hub lets the new request take the old one's place, or answers already_sent).
+    function qomResendAll() {
+      if (qomHidden() || qomUser() === null) return;   // not while the page does not know who is signed in
+      for (const e of qomStored()) {
+        if (qomWait.has(e.client_id)) continue;
+        const w = qomRestore(e);
+        if (w) { qomWait.set(e.client_id, w); qomPaint(w); }
+      }
+      for (const w of [...qomWait.values()]) {
+        if (!w.ended && qomForeign(w)) { qomDrop(w); continue; }
+        if (!w.ended && !w.running && qomReady(w)) qomRun(w);
+      }
+    }
+    function qomEnqueue(w) {
+      w.position = 1; w.runId = 0;
+      w.user = qomUser();   // who sent it (null while the page does not know yet): every send of it says so (expect_user)
+      qomWait.set(w.client_id, w);
+      qomKeep(w);
+      qomPaint(w);
+      qomRun(w);   // not awaited: the request stays open while the message waits (and then carries the turn)
+    }
+    // ── this page's side ──
+    function qomName(n) { try { return agentDisplayName(n) || n; } catch (e) { return n; } }
+    function qomContainer(w) { return document.getElementById(`messages-${w.chatId}`); }
+    function qomPost(path, body) { return fetch(path, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
+    function qomStream(w, ctl) {
+      const chat = chats[w.chatId];
+      return fetch('/api/chat/stream', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', ...zoneHeader() },
+        signal: ctl.signal,
+        body: JSON.stringify({
+          ...(typeof simpleOn === 'function' && simpleOn() && chat ? simpleEffortBody(window.hubSimple, w.agent, effortSupported(chatModelOf(chat)) && !chat.autoModel) : {}),
+          agent: w.agent,
+          message: w.message,
+          images: w.images || [],
+          queue_behind_consult: true,
+          client_id: w.client_id,
+          expect_user: String(w.user || ''),
+        }),
+      });
+    }
+    function qomReady(w) { return !!(chats[w.chatId] && document.getElementById(`messages-${w.chatId}`)); }
+    // A message kept on this device whose page lost it (reload): drawn again, then sent again.
+    function qomRestore(e) {
+      const chat = findSoloChat(e.agent);
+      if (!chat || !document.getElementById(`messages-${chat.id}`)) return null;
+      appendMessageWithImages(chat.id, 'user', e.message, []);
+      const userEl = document.getElementById(`messages-${chat.id}`).lastElementChild || null;
+      setMessageTime(userEl, msgTimeLabel(e.ts));
+      return { chatId: chat.id, agent: e.agent, message: e.message, images: [], userEl, ts: e.ts, client_id: e.client_id, user: String(e.user || ''), position: 1, runId: 0, drawn: true, behindName: qomName(e.agent), fromName: qomName((agentStatus[e.agent] || {}).consultedBy) || 'another agent' };
+    }
+    // The message already ran (the hub said already_sent): the reply is in the history, not on this page yet.
+    function qomReread(w) {
+      const chat = chats[w.chatId];
+      if (w.drawn) {   // this page drew it again after a reload: the history draws it
+        if (w.userEl) w.userEl.remove();
+        if (chat) { const last = chat.messages[chat.messages.length - 1]; if (last && last.role === 'user' && last.content === w.message) chat.messages.pop(); }
+      }
+      try { resync(true); } catch (e) { /* the next wake catches up */ }
+    }
+    // The turn began: the normal send takes the request over (the person's message is already drawn; nothing is drawn twice).
+    async function qomBegin(w, response) {
+      let handed = false;
+      try {
+        for (let i = 0; i < 100 && chats[w.chatId] && chats[w.chatId].controller; i++) await new Promise(r => setTimeout(r, 200));   // the earlier reply is still closing
+        if (!chats[w.chatId]) { try { response.body.getReader().cancel(); } catch (e) { /* gone */ } return; }
+        const out = await sendSoloMessage(w.chatId, 0, { fallback: { text: w.message, images: w.images || [] }, qomTurn: { response, userEl: w.userEl } });
+        handed = true;
+        return out;
+      } finally {   // drawn by this page: the id stays claimed for the life of the page (a late or replayed turn_start; a stream lost part-way re-attaches itself); cancelled or failed: released at once
+        const r = qomReleased.get(w.client_id);
+        if (handed && r) r.done = Date.now(); else qomReleased.delete(w.client_id);
+      }
+    }
+    // The agent is busy answering a consultation (not a turn of the person's own)
+    function qomOnConsult(agent, chat) {
+      // Only this page's own running send (its stream, or a re-attach to the person's own turn) rules it out. chat.status 'thinking'
+      // is also set while a hub-started turn (a consultation) is shown in the chat, so it must not block.
+      if (!chat || chat.controller || chat.reattach) return false;
+      const st = agentStatus[agent];
+      if (!st || !st.busy) return false;
+      const run = busyRun[agent];
+      return !!st.consultedBy || !!(run && run.origin && run.origin.kind === 'consultation');
+    }
+    // The composer of a busy chat: while the agent answers a consultation a send waits (it is not an interjection), so the
+    // button reads Send and the placeholder says when it runs; during the person's own turn it is Interject as before.
+    function qomComposerLook(chat) {
+      if (!chat || chat.status !== 'thinking') return;
+      const sendBtn = document.getElementById(`send-${chat.id}`);
+      const input = document.getElementById(`input-${chat.id}`);
+      if (qomOnConsult(chat.agent, chat)) {
+        const st = agentStatus[chat.agent] || {};
+        if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send'; sendBtn.style.background = ''; sendBtn.style.color = ''; }
+        if (input) input.placeholder = `${qomName(chat.agent)} is answering ${st.consultedBy ? qomName(st.consultedBy) : 'another agent'}. Your message waits its turn.`;
+        return;
+      }
+      if (sendBtn) { sendBtn.textContent = '⚡ Interject'; sendBtn.style.background = 'var(--warning)'; sendBtn.style.color = 'var(--on-light-text)'; }
+      if (input) input.placeholder = 'Type to interject new info into the running agent...';
+      if (typeof simpleBusyLook === 'function') simpleBusyLook(sendBtn, input, document.getElementById(`cancel-${chat.id}`));
+    }
+    // The hub refused a send as busy: is the agent answering a consultation? The status the page has, else a fresh one.
+    async function qomStatusConsult(chat) {
+      const ok = () => { const st = agentStatus[chat.agent]; const run = busyRun[chat.agent]; return !!(st && st.busy && (st.consultedBy || (run && run.origin && run.origin.kind === 'consultation'))); };
+      if (ok()) return true;
+      try {
+        const r = await fetch('/api/agents/status', { credentials: 'include', signal: AbortSignal.timeout(5000) });
+        if (r.ok) { const d = await r.json(); if (d && d.agents) applyStatusSnapshot(d.agents); }
+      } catch (e) { /* no fresh status: not a consultation as far as the page knows */ }
+      return ok();
+    }
+    function qomSendNew(chatId, content, images) {   // a fresh send from the composer: it takes the words and pictures out of it (sendSoloMessage armed the zone header for this send)
+      const input = document.getElementById(`input-${chatId}`);
+      input.value = '';
+      input.style.height = 'auto';
+      clearPendingImages(chatId);
+      return qomQueueMessage(chatId, content, images);
+    }
+    // Queue words and pictures already taken (a late re-route: a refused interjection or send). The composer is never touched,
+    // so whatever was typed or attached since stays. Draws the person's message once (not when opts.userEl is already on screen).
+    function qomQueueMessage(chatId, content, images, opts) {
+      const chat = chats[chatId];
+      images = images || [];
+      let userEl = (opts && opts.userEl) || null;
+      const ts = Date.now();
+      if (!userEl) {
+        chat.messages.push({ role: 'user', content, images: images.length > 0 ? [...images] : undefined });
+        appendMessageWithImages(chatId, 'user', content, images);
+        userEl = document.getElementById(`messages-${chatId}`)?.lastElementChild || null;
+        setMessageTime(userEl, msgTimeLabel(ts));
+      }
+      const st = agentStatus[chat.agent] || {};
+      const run = busyRun[chat.agent];
+      const from = st.consultedBy || (run && run.origin && run.origin.from) || '';
+      return qomEnqueue({ chatId, agent: chat.agent, message: content, images: [...images], userEl, ts, client_id: qomNewId(), behindName: qomName(chat.agent), fromName: from ? qomName(from) : 'another agent' });
+    }
+    // Answer me now lives only on the waiting line under the message: the header offers none (it only clears an old one).
+    function qomHeaderBtn(chat) {
+      const btn = document.getElementById(`qom-busy-${chat.id}`);
+      if (btn) btn.remove();
+    }
+    // Same for the busy card in the chat: nothing is added (one button, on the waiting line).
+    function qomDecorate(card, agent) { /* intentionally adds nothing */ }
+    function qomPaintBusy(agent) {
+      const chat = findSoloChat(agent);
+      if (chat) { try { qomHeaderBtn(chat); busyCardRefresh(chat); } catch (e) { /* cosmetic */ } }
+    }
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) qomResendAll(); });
+    window.addEventListener('online', () => qomResendAll());
+    setTimeout(qomResendAll, 2500);   // a page that loaded with kept messages sends them again once its chats are up
+    setInterval(() => { if (qomStored().length || qomWait.size) qomResendAll(); }, 15000);
+
     // Interject into a running agent turn (does not kill the turn)
     // A chat whose interjection found the turn already over sends the text as a normal message
     // once, even if the busy status has not caught up yet.
@@ -14716,7 +15098,8 @@
       if (!textOnly) clearPendingImages(chatId);
 
       // Show the interjection in the chat as a user message with a distinct style (with its pictures)
-      setMessageTime(document.getElementById(appendMessageWithImages(chatId, 'user', `⚡ [Interjection] ${content}`.trim(), imagesToSend)), msgTimeLabel(Date.now()));
+      const ijBubbleId = appendMessageWithImages(chatId, 'user', `⚡ [Interjection] ${content}`.trim(), imagesToSend);
+      setMessageTime(document.getElementById(ijBubbleId), msgTimeLabel(Date.now()));
 
       // Show a transient "sent" notice that will be updated when the agent picks it up
       const noticeEl = appendSystemNotice(chatId, '⚡ Interjection sent - waiting for agent to pick it up...');
@@ -14736,6 +15119,13 @@
           body: JSON.stringify({ agent: chat.agent, message: content, ...(imagesToSend.length ? { images: imagesToSend } : {}) })
         });
         const result = await resp.json();
+        if (result.consultation === true && !isVoice) {
+          // The hub refuses an interjection into a consultation (the status came late): the interjection bubble and notice go,
+          // and the same words and pictures wait as the person's own message instead (drawn once, by qomSendNew).
+          const ijEl = document.getElementById(ijBubbleId); if (ijEl) ijEl.remove();
+          if (noticeEl) noticeEl.remove();
+          return qomQueueMessage(chatId, content, [...imagesToSend]);   // the composer stays as the person left it
+        }
         if (result.success) {
           if (noticeEl) noticeEl.textContent = '⚡ Interjection delivered into the running turn';
         } else if (/not currently processing/i.test(String(result.error || ''))) {
@@ -14774,6 +15164,7 @@
       // with its own text and pictures; the composer (what is typed or attached now) is neither read nor changed.
       const fallback = sendOpts && sendOpts.fallback ? sendOpts.fallback : null;
       const isVoice = !!(sendOpts && sendOpts.voice);   // a voice send never waits: voiceCallSend puts the draft back right after this call, so the box is read before any await
+      const qomTurn = sendOpts && sendOpts.qomTurn ? sendOpts.qomTurn : null;   // a waiting message whose turn began: its request already runs, the message is already drawn
       if (!fallback && !retryCount && !isVoice && chat.sendWaiting) return;   // one waiting send per composer: a second send returns at once
       if (!fallback && !retryCount && !isVoice && chat.imagesPreparing && chat.imagesPreparing.size) { if (!(await waitForPreparingImages(chatId))) { notify(new Error('picture still being prepared')); return; } }   // a picture attached a moment ago is part of this send; on a timeout nothing is sent
       const content = fallback ? String(fallback.text || '').trim() : input.value.trim();
@@ -14784,7 +15175,10 @@
       // desktop only interjected into its own turn and every other send bounced as "busy".
       // A message with pictures goes the same way: the pictures travel with the interjection.
       const liveNow = agentStatus[chat.agent];
-      const agentWorking = chat.status === 'thinking' || !!(liveNow && liveNow.busy);
+      const agentWorking = !qomTurn && (chat.status === 'thinking' || !!(liveNow && liveNow.busy));   // (a waiting message whose turn began never interjects)
+      // The agent is answering another agent's consultation: an interjection would go into that answer and never reach the person.
+      // The message waits as its own request instead (queue_behind_consult) and runs next; Answer me now pauses the consultation.
+      if (!fallback && !retryCount && !isVoice && (content || pendingImages.length > 0) && typeof qomOnConsult === 'function' && qomOnConsult(chat.agent, chat)) return qomSendNew(chatId, content, [...pendingImages]);
       if ((content || pendingImages.length > 0) && agentWorking && !skipInterjectOnce.delete(chatId)) {
         notify(null);   // a voice message into a working agent goes as an interjection
         return sendInterjection(chatId, sendOpts);
@@ -14793,7 +15187,7 @@
       if (!retryCount) { chat.voiceTurn = !!chat.voiceDictated; chat.voiceDictated = false; }   // this reply follows a mic dictation: read it aloud when it ends (if the device asks for that)
 
       // Need content OR images to send
-      if (!content && pendingImages.length === 0) return;
+      if (!content && pendingImages.length === 0 && !qomTurn) return;   // a handed-over turn (qomBegin) runs already: always read its stream
 
       // Clear paused state if resuming
       if (chat.paused) {
@@ -14812,7 +15206,8 @@
 
       // Only clear input and add to history on first attempt (not retries)
       let userMsgEl = null;
-      if (retryCount === 0) {
+      if (qomTurn) { userMsgEl = qomTurn.userEl || null; chat.sentAtMs = Date.now(); }   // drawn when it was sent
+      else if (retryCount === 0) {
         if (!fallback) {
           input.value = '';
           input.style.height = 'auto';
@@ -14834,7 +15229,7 @@
 
       // The hub says the agent is still on an earlier turn: warn, but let the message go.
       const live = agentStatus[chat.agent];
-      if (live && live.busy) {
+      if (live && live.busy && !qomTurn) {
         const since = elapsedLabel(live.busySince, false);
         appendSystemNotice(chatId, `⏳ ${chat.display || chat.agent} is still working on the previous message (${chatViewActivityWord(live.activity) || 'working'}${since ? `, ${since}` : ''}). Your message will queue or be refused (409) until it finishes.`);
       }
@@ -14854,7 +15249,7 @@
 
       try {
         // Send only the raw user message — server manages conversation history
-        const response = await fetch('/api/chat/stream', {
+        const response = qomTurn ? qomTurn.response : await fetch('/api/chat/stream', {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json', ...zoneHeader() },
@@ -14885,6 +15280,11 @@
             chat.bounced409 = false;
             notify(Object.assign(new Error('busy'), { refused: true }));
             return;
+          }
+          if (!chat.bounced409 && !isVoice) {   // (a call's own message was refused above)
+            // The hub says busy: if it is a consultation (the status says so, or a fresh /api/agents/status does), the message waits
+            // as the person's own request instead of being interjected.
+            if (await qomStatusConsult(chat)) { chat.bounced409 = false; return qomQueueMessage(chatId, content, [...imagesToSend]); }   // late: the composer is left alone
           }
           if (!chat.bounced409) {
             chat.bounced409 = true;

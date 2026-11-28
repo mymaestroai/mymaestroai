@@ -513,6 +513,7 @@ async function handleHttpRequest(req, res) {
   req.hubUser = ident && (ident.kind === 'user' || ident.kind === 'legacy') ? ident.user : null;
   req.hubPendingTotp = !!(ident && ident.kind === 'user' && ident.pendingTotp);
   req.hubIdentKind = ident ? ident.kind : null;
+  req.hubSessionId = ident && ident.kind === 'user' && ident.session ? ident.session.id : null;   // the session row's id (a hash of the cookie, never the cookie): lets a held message ask later whether this sign-in still stands
   // The settings journal (lib/settings-journal) names who made a change: the signed-in person, or the hub's own service. The body
   // listeners are bound too (an http request's 'data' and 'end' callbacks otherwise run outside this request's context).
   {
@@ -1873,7 +1874,33 @@ async function handleHttpRequest(req, res) {
       // The owner's own message (same test as /api/chat below): lets connector_access be offered in this turn.
       if (body && typeof body === 'object') body.owner_turn = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser);
       // Identity comes only from the authenticated session (req.hubUser), never from the body.
-      return handleChatStream(body, res, { userId: (req.hubUser && req.hubUser.id) || null, service: !!req.hubService, accounts: hubAuth.hasUsers(), admin: access.isAdmin(req.hubUser) });
+      // A waiting message (queue_behind_consult) checks access again when it is released (lib/sdk-chat pumpOwnerWaiters): the person's
+      // account must still exist, not be disabled, and still may use this agent (the same test as the AGENT_BODY rule above).
+      const askedUserId = (req.hubUser && req.hubUser.id) || null;
+      const sessionIsUser = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService;
+      const freshUser = () => (askedUserId ? hubAuth.getUser(askedUserId) : null);
+      const sessionId = req.hubSessionId || null;
+      const recheck = () => {
+        if (!askedUserId) return !hubAuth.hasUsers();
+        // The sign-in itself must still stand (not signed out, revoked, expired, or waiting for a TOTP code), not only the account.
+        if (!sessionId || !hubAuth.sessionStillValid(sessionId, askedUserId)) return false;
+        const u = freshUser();
+        if (!u || u.disabled) return false;
+        if (access.isAdmin(u)) return true;
+        const agentName = body && body.agent;
+        return !!agentName && access.canAccessAgent(u, agentName, { agents: require('./lib/agents').getAgentsSync(), resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) });
+      };
+      const ownerTurnNow = () => { const u = freshUser(); return sessionIsUser && !!u && !u.disabled && access.isAdmin(u); };
+      // At release the whole context is rebuilt from the account as it is then (an admin demoted meanwhile runs as a member).
+      const refresh = () => (askedUserId ? { userId: askedUserId, accounts: hubAuth.hasUsers(), admin: access.isAdmin(freshUser()) } : {});
+      return handleChatStream(body, res, { userId: askedUserId, service: !!req.hubService, accounts: hubAuth.hasUsers(), admin: access.isAdmin(req.hubUser), person: !req.hubToken && !req.hubService, recheck, ownerTurnNow, refresh });   // person: a browser session, not a program (queue_behind_consult is for people only)
+    }
+
+    // Owner takeover: the person's message is waiting behind another agent's consultation of this agent; pause that consultation now.
+    if (pathname === '/api/chat/takeover' && req.method === 'POST') {
+      if (req.hubToken || req.hubService) return jsonResponse(res, 403, { ok: false, error: 'Only a person at the browser can pause a consultation.' });
+      const body = JSON.parse(await readBody(req));
+      return jsonResponse(res, 200, require('./lib/sdk-chat').takeoverConsultation(String(body?.agent || ''), { clientId: body?.client_id, userId: req.hubUser ? req.hubUser.id : '' }));
     }
 
     if (pathname === '/api/chat' && req.method === 'POST') {
@@ -1903,7 +1930,7 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/chat/interject' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
       if (req.hubToken) require('./lib/sdk-chat').__settingsTool.noteTokenInterjection(body && body.agent);   // a program's token is text from outside: the running turn can no longer change settings at once
-      const result = handleInterjection(body);
+      const result = handleInterjection(body, { person: !req.hubToken && !req.hubService });
       return jsonResponse(res, result.success ? 200 : 400, result);
     }
 

@@ -97,7 +97,7 @@ test('agent field: ultra is accepted, the error text names it, members cannot ch
 
 test('members never send Ultra: the server passes admin, the turn marks memberTurn, Codex maps ultra to max', () => {
   const server = read('server.js');
-  assert.match(server, /return handleChatStream\(body, res, \{ userId: [^\n]*accounts: hubAuth\.hasUsers\(\), admin: access\.isAdmin\(req\.hubUser\) \}\);/);
+  assert.match(server, /return handleChatStream\(body, res, \{ userId: [^\n]*accounts: hubAuth\.hasUsers\(\), admin: access\.isAdmin\(req\.hubUser\)(?:, person: [^\n]*?)? \}\);/);   // the stream route also passes person (owner queue)
   const chat = read('lib/sdk-chat.js');
   assert.match(chat, /const trustedAdmin = !!\(ctx && typeof ctx === 'object' && ctx\.admin === true\);/);
   assert.match(chat, /const memberTurn = !!\(trustedUserId && !trustedAdmin\);/);
@@ -166,7 +166,7 @@ test('review r1: Simple turns never run Ultra (both pages mark every Simple turn
 
 test('review r1: both chat routes pass the admin flag', () => {
   const server = read('server.js');
-  assert.match(server, /return handleChatStream\(body, res, \{ [^}]*admin: access\.isAdmin\(req\.hubUser\) \}\);/);
+  assert.match(server, /return handleChatStream\(body, res, \{ [^}]*admin: access\.isAdmin\(req\.hubUser\)[^}]* \}\);/);
   assert.match(server, /return handleChat\(body, res, \{ [^}]*admin: access\.isAdmin\(req\.hubUser\) \}\);/);
 });
 
