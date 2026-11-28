@@ -272,11 +272,18 @@ test('Grep: a worker may not search a folder holding files protected by name or 
     fs.symlinkSync(path.join(root, 'keys', 'private.key'), path.join(root, 'plain', 'link.key'));   // a link: not followed by Grep
     const worker = { name: 'w-q', category: 'worker', policy: { roots: [root] } };
     const wh = gateFor(worker).sdkHook({ agentName: 'w-q', cwd: '/opt/fake-install' });
-    for (const p of [path.join(root, 'keys'), path.join(root, 'envs'), root]) {
+    // a key named file inside a folder granted to the worker is its own (tool-policy keyRoots): that folder can be searched;
+    // an .env file is private everywhere, so a folder holding one can't
+    assert.ok(isAllow(await wh(pre('Grep', { pattern: 'x', path: path.join(root, 'keys') }))), 'a key in the granted folder: allowed');
+    for (const p of [path.join(root, 'envs'), root]) {
       const d = await wh(pre('Grep', { pattern: 'x', path: p }));
       assert.strictEqual(d.decision, 'block', `worker Grep ${p}: blocked`);
       assert.match(d.reason, /protected file/);
     }
+    // the same key folder for a worker it was not granted to: refused
+    const other = { name: 'w-q2', category: 'worker' };
+    const oh = gateFor(other).sdkHook({ agentName: 'w-q2', cwd: '/opt/fake-install' });
+    assert.strictEqual((await oh(pre('Grep', { pattern: 'x', path: path.join(root, 'keys') }))).decision, 'block', 'not granted: blocked');
     assert.ok(isAllow(await wh(pre('Grep', { pattern: 'x', path: path.join(root, 'plain') }))), 'a folder with no protected file: allowed');
     assert.ok(isAllow(await wh(pre('Glob', { pattern: '**/*', path: root }))), 'Glob lists names only: allowed');
     const lh = gateFor({ name: 'lead-q', category: 'primary', lead: true }).sdkHook({ agentName: 'lead-q', cwd: '/opt/fake-install' });
@@ -325,7 +332,13 @@ test('Grep of a clone-shaped folder: .env.example, wallet code and a large node_
     assert.ok(isAllow(await wh(pre('Grep', { pattern: 'x', path: root }))), 'a clone with templates, wallet code and dependencies: allowed');
     assert.ok(isAllow(await wh(pre('Read', { file_path: path.join(root, '.env.example') }))), 'a template can be read');
     assert.ok(isAllow(await wh(pre('Read', { file_path: path.join(root, 'lib', 'wallet', 'keystore.js') }))), 'the wallet code can be read');
-    for (const real of ['.env', 'config/.env.local', 'deploy/.env.production', 'keys/deploy.pem', 'data/wallet-keystore.json']) {
+    // a key file in the granted folder is the worker's own; another worker may not search the folder holding it
+    w('keys/deploy.pem');
+    assert.ok(isAllow(await wh(pre('Grep', { pattern: 'x', path: root }))), 'a key in the granted folder: allowed');
+    const oh = gateFor({ name: 'w-c2', category: 'worker' }).sdkHook({ agentName: 'w-c2', cwd: '/opt/fake-install' });
+    assert.strictEqual((await oh(pre('Grep', { pattern: 'x', path: root }))).decision, 'block', 'not granted: refused');
+    fs.rmSync(path.join(root, 'keys/deploy.pem'));
+    for (const real of ['.env', 'config/.env.local', 'deploy/.env.production', 'data/wallet-keystore.json']) {
       w(real);
       const d = await wh(pre('Grep', { pattern: 'x', path: root }));
       assert.strictEqual(d.decision, 'block', `${real} in the clone: refused`);
