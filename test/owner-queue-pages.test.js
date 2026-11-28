@@ -863,7 +863,7 @@ test('desktop: while the agent answers a consultation the composer reads Send wi
   const input = p.doc.getElementById('input-c1');
   p.api.qomComposerLook(p.chat);
   assert.strictEqual(send.textContent, 'Send');
-  assert.strictEqual(input.placeholder, 'Lead is answering Helper. Your message runs next.');
+  assert.strictEqual(input.placeholder, 'Lead is answering Helper. Your message waits its turn.');
   p.ctx.agentStatus.lead = { busy: true };   // the consultation ended and the person's own turn runs
   p.api.qomComposerLook(p.chat);
   assert.strictEqual(send.textContent, '⚡ Interject');

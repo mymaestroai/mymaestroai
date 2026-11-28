@@ -14998,7 +14998,7 @@
       if (qomOnConsult(chat.agent, chat)) {
         const st = agentStatus[chat.agent] || {};
         if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send'; sendBtn.style.background = ''; sendBtn.style.color = ''; }
-        if (input) input.placeholder = `${qomName(chat.agent)} is answering ${st.consultedBy ? qomName(st.consultedBy) : 'another agent'}. Your message runs next.`;
+        if (input) input.placeholder = `${qomName(chat.agent)} is answering ${st.consultedBy ? qomName(st.consultedBy) : 'another agent'}. Your message waits its turn.`;
         return;
       }
       if (sendBtn) { sendBtn.textContent = '⚡ Interject'; sendBtn.style.background = 'var(--warning)'; sendBtn.style.color = 'var(--on-light-text)'; }
