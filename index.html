@@ -2353,17 +2353,18 @@
     /* Every Expert values row is one layout with one left edge (app.js p5cRowHtml): the label with its ⓘ right after it and, under it, the help
        sentence with "Default: ..." at its end in the same dim paragraph (.st-xl); the box or switch with its unit and Use default on the right (.st-xr).
        At 720 px and under (and in the phone frame) the right part drops under the left one, up to the box's own widest size. */
-    .st-xrow { display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 16px; row-gap: 4px; align-items: start; }   /* the right column is a fixed track: every row's box starts at the same x */
+    /* .st-row.st-xrow, not .st-xrow: the general .st-row { display: flex } further down has the same weight and would win (the grid never applied before). */
+    .st-row.st-xrow { display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 16px; row-gap: 4px; align-items: start; }   /* the right column is a fixed track: every row's box starts at the same x */
     .st-xrow .st-xl { min-width: 0; }
     .st-xrow .st-xl > label { display: inline-block; flex: none; max-width: calc(100% - 30px); text-align: left; vertical-align: middle; }
     .st-xrow .st-xl > .st-hint { margin: 2px 0 0 0; }
     .st-xrow .st-xr { display: flex; flex-wrap: wrap; align-items: center; justify-self: start; gap: 8px; min-width: 0; max-width: 100%; }
     .st-xrow > .st-p5c-saving-hint { grid-column: 1 / -1; }
     @media (max-width: 720px) {
-      .st-xrow { grid-template-columns: minmax(0, 1fr); }
+      .st-row.st-xrow { grid-template-columns: minmax(0, 1fr); }
       .st-xrow .st-xr { max-width: 340px; }
     }
-    html.mm-settings-only .st-xrow { grid-template-columns: minmax(0, 1fr); }
+    html.mm-settings-only .st-row.st-xrow { grid-template-columns: minmax(0, 1fr); }
     html.mm-settings-only .st-xrow .st-xr { max-width: 340px; }
     /* Hidden from the eye, still read by a screen reader and by Settings search: the heading of Expert values, which the More toggle above it already names. */
     .st-vh, .st-section > h4.st-vh { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }

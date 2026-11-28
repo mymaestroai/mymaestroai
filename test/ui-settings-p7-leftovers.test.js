@@ -22,13 +22,13 @@ const rowHtml = (r) => new Function('STG', 'esc', `${fnSrc('p5cPlaceholder')}\n$
 const rule = (sel) => { const m = new RegExp(`${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`).exec(html); assert.ok(m, `rule ${sel}`); return m[1]; };
 
 test('A1: the right column of an Expert values row is a fixed track, so every box starts at the same x', () => {
-  const body = rule('.st-xrow');
+  const body = rule('.st-row.st-xrow');
   assert.match(body, /grid-template-columns: minmax\(0, 1fr\) 340px;/);
   assert.ok(!/minmax\(0, 340px\)/.test(body), 'not a track that follows its own content');
   assert.match(rule('.st-xrow .st-xr'), /justify-self: start/);
   // the phone and narrow stacking is kept
-  assert.match(html, /@media \(max-width: 720px\) \{\s*\.st-xrow \{ grid-template-columns: minmax\(0, 1fr\); \}/);
-  assert.match(html, /html\.mm-settings-only \.st-xrow \{ grid-template-columns: minmax\(0, 1fr\); \}/);
+  assert.match(html, /@media \(max-width: 720px\) \{\s*\.st-row\.st-xrow \{ grid-template-columns: minmax\(0, 1fr\); \}/);
+  assert.match(html, /html\.mm-settings-only \.st-row\.st-xrow \{ grid-template-columns: minmax\(0, 1fr\); \}/);
 });
 
 test('A2: a switch row\'s name label points at the switch, so its ⓘ lands after the name', () => {
@@ -83,4 +83,12 @@ test('A6: the narrow day boxes keep room for 4 digits', () => {
   }
   // the other narrow boxes: number boxes of 90 px keep 4 digits even with the spin buttons (90 - 2 - 20 - 16 = 52)
   assert.ok(90 - 2 - 20 - 16 >= 4 * 7.7);
+});
+
+test('the Expert values grid wins over the general .st-row flex rule (same weight, later in the file), on desktop and stacked on narrow screens', () => {
+  const idx = require('fs').readFileSync(require('path').join(__dirname, '..', 'index.html'), 'utf8');
+  assert.match(idx, /\n\s*\.st-row\.st-xrow \{ display: grid; grid-template-columns: minmax\(0, 1fr\) 340px;/);
+  assert.ok(!/\n\s*\.st-xrow \{ display: grid/.test(idx), 'a lone .st-xrow display rule loses to .st-row { display: flex }');
+  assert.match(idx, /@media \(max-width: 720px\) \{\s*\n\s*\.st-row\.st-xrow \{ grid-template-columns: minmax\(0, 1fr\); \}/);
+  assert.match(idx, /html\.mm-settings-only \.st-row\.st-xrow \{ grid-template-columns: minmax\(0, 1fr\); \}/);
 });

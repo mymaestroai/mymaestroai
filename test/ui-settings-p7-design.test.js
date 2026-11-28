@@ -65,8 +65,8 @@ test('every row of the table keeps its ids, data-setting and save path in the ne
 
 test('the layout CSS: two columns, the right one drops under the left at 720 px and in the phone frame', () => {
   assert.match(idx, /\.st-xrow \{ display: grid; grid-template-columns: minmax\(0, 1fr\) 340px;/);   // a fixed right track: every box starts at the same x
-  assert.match(idx, /@media \(max-width: 720px\) \{\s*\.st-xrow \{ grid-template-columns: minmax\(0, 1fr\); \}\s*\.st-xrow \.st-xr \{ max-width: 340px; \}/);
-  assert.match(idx, /html\.mm-settings-only \.st-xrow \{ grid-template-columns: minmax\(0, 1fr\); \}/);
+  assert.match(idx, /@media \(max-width: 720px\) \{\s*\.st-row\.st-xrow \{ grid-template-columns: minmax\(0, 1fr\); \}\s*\.st-xrow \.st-xr \{ max-width: 340px; \}/);
+  assert.match(idx, /html\.mm-settings-only \.st-row\.st-xrow \{ grid-template-columns: minmax\(0, 1fr\); \}/);
   assert.match(idx, /\.st-xrow \.st-xl > label \{[^}]*text-align: left/);
   // the Startup values rows (drawn by lib/ui-settings-expert.js) use the same .st-xrow classes, so no CSS of their own is left
   assert.ok(!idx.includes('#st-env-values .st-row'), 'no stop-gap rules for the Startup values rows');
