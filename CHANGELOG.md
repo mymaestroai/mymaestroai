@@ -6,6 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **Connecting to another machine always counts as sending.** An agent whose role may not send anything off this computer could still run `ssh` or `sftp` to a machine when no user name was written in front of it. Now every ssh, scp, sftp and rsync connection to another machine is treated the same way; machines on your home network stay reachable for an agent with "May connect to machines on the home network" on, and its card says so.
 - **An agent can be allowed to reach machines on your home network.** A new switch on the agent card, "May connect to machines on the home network", lets an agent run ssh, scp, sftp and rsync to devices in your house, such as a robot, even when its role may not send anything off this computer. Anything on the internet stays refused. It is off for every agent until you turn it on, and your lead can turn it on for you after you confirm.
 - **The "Protect your Maestro's own code" switch is gone.** It tried to tell from the text of an agent's commands whether they would change your Maestro's program files, and it kept stopping ordinary work. Agents' commands are no longer checked against the program files. Real protection will come later from the operating system, through the command lockbox. Updates still stop when the program files have local edits, and "Put my changes aside" stays.
 

@@ -147,3 +147,37 @@ test('the agent card row: a toggle, asks before turning on, sends only localNetw
   assert.deepEqual(sent.pop(), { localNetwork: false });
   assert.equal(asked, 0, 'turning it off does not ask');
 });
+
+test('ssh and sftp to another machine are "send" with or without user@; scp and rsync to host:path too; printing and local forms are not', () => {
+  for (const c of ['ssh 8.8.8.8 true', 'ssh host.example.com', 'scp f host.example.com:/tmp', 'rsync -a d host.example.com:d', 'sftp host.example.com',
+    'ssh -p 2222 8.8.8.8 ls', 'rsync -a d $HOST:/d', 'ssh -qJ 192.168.50.5 8.8.8.8']) {
+    assert.equal(decide(worker(false), c).cls, 'send', 'off: ' + c);
+    assert.equal(decide(worker(true), c).decision, 'deny', 'on: ' + c);
+  }
+  for (const c of [`ssh ${R} true`, 'scp f 10.0.0.2:/tmp', 'rsync -a d 10.0.0.2:d']) {
+    assert.equal(decide(worker(false), c).decision, 'deny', 'off: ' + c);
+    assert.equal(decide(worker(true), c).decision, 'allow', 'on, home: ' + c);
+  }
+  for (const c of ['ssh -V', 'ssh -G host.example.com', 'rsync -a /tmp/a /tmp/b', 'scp /tmp/a /tmp/b', 'ssh']) {
+    assert.notEqual(decide(worker(false), c).cls, 'send', c);
+  }
+});
+
+test('the card\'s "What it may do right now" line names the home network when the switch is on', () => {
+  const { ROWS } = require(path.join(inst.lib, 'ui-agent-card-access.js'));
+  const src = fs.readFileSync(path.join(inst.lib, 'ui-agent-card-access.js'), 'utf8');
+  assert.match(src, /to the home network: allowed/);
+  assert.ok(ROWS['OPT-0015']);
+});
+
+test('review: the print-only flags count only as ssh\'s own options; queries and option values are not hosts; unknown operands may be remote', () => {
+  for (const c of ['ssh 8.8.8.8 ls -G', 'ssh 8.8.8.8 curl -G url', 'ssh -oVisualHostKey=no 8.8.8.8 true', 'ssh -o GlobalKnownHostsFile=/x 8.8.8.8',
+    'ssh -iGkey 8.8.8.8', 'scp f $DEST', 'rsync -a d "$DEST"', 'sftp -b batch host.example.com']) {
+    assert.equal(decide(worker(false), c).cls, 'send', c);
+  }
+  for (const c of ['ssh -Q cipher', 'ssh -qV', 'rsync -a --exclude cache:old /tmp/a /tmp/b', 'rsync -a --exclude=cache:old /tmp/a /tmp/b', 'scp -i /tmp/k /tmp/a /tmp/b']) {
+    assert.notEqual(decide(worker(false), c).cls, 'send', c);
+  }
+  // a variable assigned literally in the same command is put in first: a remote value is caught by its colon
+  assert.equal(decide(worker(false), 'DEST=8.8.8.8:/tmp && scp f $DEST').cls, 'send');
+});
