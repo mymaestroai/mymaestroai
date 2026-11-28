@@ -54,9 +54,12 @@ test('a key read through link/.. stays admin; a read through link/.. into a secr
   const probe = `const tp = require(${JSON.stringify(path.join(__dirname, '..', 'lib', 'tool-policy'))});
     const a = { name: 'torque', category: 'worker', policy: { roots: [${JSON.stringify(XH)}] } };
     const c = (command) => tp.decide({ agent: a, tool: 'Bash', input: { command }, cwd: '/tmp' }).cls;
-    process.stdout.write(JSON.stringify([c('cat ${XH}/link/../config'), c('cat ${XH}/config')]));`;
+    process.stdout.write(JSON.stringify([c('cat ${XH}/link/../config'), c('cat ${XH}/config'), c('cat ${XH}/plain/../config ${XH}/link/../config')]));`;
+  fs.mkdirSync(path.join(XH, 'elsewhere', 'sub'), { recursive: true });
+  fs.symlinkSync(path.join(XH, 'elsewhere', 'sub'), path.join(XH, 'plain'));
   const out = JSON.parse(execFileSync(process.execPath, ['-e', probe], { env: { ...process.env, HOME: H }, encoding: 'utf8' }));
-  assert.deepEqual(out, ['admin', 'read'], 'through the link it is ~/.ssh/config; the typed X/config is the agent\'s own');
+  assert.deepEqual(out.slice(0, 2), ['admin', 'read'], 'through the link it is ~/.ssh/config; the typed X/config is the agent\'s own');
+  assert.equal(out[2], 'admin', 'review: two words fold to one path; the one that reaches ~/.ssh still counts');
 });
 
 test('a settings file reached through link/.. is refused like the file itself', () => {
@@ -71,5 +74,20 @@ test('a settings file reached through link/.. is refused like the file itself', 
     assert.equal(tp.touchesSettingsFile({ tool: 'Bash', input: { command: `echo x > ${XS}/link/../users.json` }, cwd: '/tmp' }), 'users.json');
     assert.equal(tp.touchesSettingsFile({ tool: 'Write', input: { file_path: `${XS}/link/../users.json` }, cwd: '/tmp' }), 'users.json');
     assert.equal(tp.touchesSettingsFile({ tool: 'Bash', input: { command: `echo x > ${XS}/users.json` }, cwd: '/tmp' }), null, 'the typed path alone is not one');
+    fs.mkdirSync(path.join(XS, 'other', 'sub'), { recursive: true });
+    fs.symlinkSync(path.join(XS, 'other', 'sub'), path.join(XS, 'plain'));
+    assert.equal(tp.touchesSettingsFile({ tool: 'Bash', input: { command: `echo x > ${XS}/plain/../users.json > ${XS}/link/../users.json` }, cwd: '/tmp' }), 'users.json', 'review: two words, one folded path, one of them a settings file');
   } finally { if (had === undefined) delete process.env.HUB_AUTH_DIR; else process.env.HUB_AUTH_DIR = had; }
+});
+
+test('review: the card and the approval key show where a file tool\'s .. path really lands', () => {
+  const policy = tp.policyFor(worker);
+  const w = tp.classifyTool({ tool: 'Write', input: { file_path: `${X}/link/../out.txt` }, agentName: 'torque', policy, cwd: '/tmp' });
+  assert.equal(w.summary, '/usr/out.txt');
+  assert.deepEqual(w.detail, { path: '/usr/out.txt', written: path.join(X, 'out.txt') });
+  assert.equal(w.destKey, '/usr');
+  const r = tp.classifyTool({ tool: 'Read', input: { file_path: `${X}/link/../notes.txt` }, agentName: 'torque', policy, cwd: '/tmp' });
+  assert.equal(r.summary, '/usr/notes.txt');
+  const plain = tp.classifyTool({ tool: 'Write', input: { file_path: `${X}/a/out.txt` }, agentName: 'torque', policy, cwd: '/tmp' });
+  assert.deepEqual([plain.summary, plain.detail], [path.join(X, 'a', 'out.txt'), { path: path.join(X, 'a', 'out.txt') }], 'a plain path: as before');
 });
