@@ -84,6 +84,9 @@ test('Optimize team starts the reviewer\'s turn as an owner turn with origin opt
 test('a keep-on-box boss reviews its own team: the turn runs on the boss, which is offered team_plan and team_set and nothing else of the lead\'s tools', async () => {
   const during = {};
   let release; const gate = new Promise(r => { release = r; });
+  // Resolved by the stand-in once it has taken its readings: the test waits for that, not for a fixed time (under a loaded
+  // suite the turn can take more than the 5 s the old poll allowed to reach the model call, and the readings were missing).
+  let captured; const capturedP = new Promise(r => { captured = r; });
   setTestStreamer(async ({ agent, res }) => {
     res.writeHead(200, {});
     during.agent = agent;
@@ -93,12 +96,14 @@ test('a keep-on-box boss reviews its own team: the turn runs on the boss, which 
       during.namesDepth1 = await toolNames(agent, 1);
       during.lead = await toolNames('zz_lead');
     } catch (e) { during.error = e && e.stack; during.lead = []; }
+    captured();
     await gate;
     res.write('data: [DONE]\n\n'); res.end();
   });
   const started = await sdkChat.startOptimizeTeam({ primary: 'zz_studio', display: 'Studio', reviewer: 'zz_studio', message: "This is Studio's own review of its team." });
   assert.equal(started.reviewer, 'zz_studio');
-  for (let i = 0; i < 100 && !during.lead; i++) await new Promise(r => setTimeout(r, 50));
+  let limit; const late = new Promise((_, no) => { limit = setTimeout(() => no(new Error('the review turn never reached the model call within 60 s')), 60000); });
+  try { await Promise.race([capturedP, late]); } finally { clearTimeout(limit); }
   assert.equal(during.error, undefined);
   assert.equal(during.agent, 'zz_studio');
   assert.equal(during.owner, true);
