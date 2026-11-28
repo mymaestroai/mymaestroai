@@ -28,7 +28,7 @@ const tick = async (n = 6) => { for (let i = 0; i < n; i++) await new Promise(r 
 
 // A tiny DOM: enough for the waiting line, the buttons and the busy card.
 class El {
-  constructor(tag) { this.tagName = tag; this.children = []; this.parentNode = null; this.attrs = {}; this.style = {}; this.listeners = {}; this.own = ''; this.id = ''; this.disabled = false; this.className = ''; this.type = ''; this.value = ''; }
+  constructor(tag) { this.tagName = tag; this.children = []; this.parentNode = null; this.attrs = {}; this.style = {}; this.listeners = {}; this.own = ''; this.id = ''; this.disabled = false; this.className = ''; this.type = ''; this.value = ''; this.classList = { add() {}, remove() {}, toggle() {}, contains() { return false; } }; }
   appendChild(c) { if (c.parentNode) c.remove(); c.parentNode = this; this.children.push(c); return c; }
   insertBefore(c, ref) { if (c.parentNode) c.remove(); c.parentNode = this; const i = ref ? this.children.indexOf(ref) : -1; if (i < 0) this.children.push(c); else this.children.splice(i, 0, c); return c; }
   get nextSibling() { if (!this.parentNode) return null; const s = this.parentNode.children; return s[s.indexOf(this) + 1] || null; }
@@ -64,7 +64,7 @@ const NAMES = { lead: 'Lead', helper: 'Helper' };
 const QOM_SHARED = ['qomKey', 'qomUser', 'qomAll', 'qomForgetAll', 'qomStored', 'qomSave', 'qomKeep', 'qomForget', 'qomNewId', 'qomHidden', 'qomWords', 'qomLineText', 'qomWaiting', 'qomButton', 'qomPaint', 'qomTakeover', 'qomScan', 'qomEnd', 'qomEvent', 'qomStarted', 'qomRun', 'qomResendAll', 'qomEnqueue', 'qomName', 'qomPost', 'qomStream', 'qomReady', 'qomRestore', 'qomReread', 'qomBegin', 'qomOnConsult', 'qomSendNew', 'qomDecorate', 'qomPaintBusy', 'qomRetryLater', 'qomForeign', 'qomDrop'];
 
 // ── desktop ──
-function desk({ status = { busy: true, consultedBy: 'helper' }, chatOver = {}, stored = {}, hidden = false, me = { user: { id: 'sam' } } } = {}) {
+function desk({ status = { busy: true, consultedBy: 'helper' }, chatOver = {}, stored = {}, hidden = false, me = { user: { id: 'sam' } }, more = {} } = {}) {
   const doc = makeDoc(); doc.hidden = hidden;
   const bar = new El('div'); doc.root.appendChild(bar);
   const statusText = new El('span'); statusText.id = 'status-text-c1'; bar.appendChild(statusText);
@@ -74,8 +74,9 @@ function desk({ status = { busy: true, consultedBy: 'helper' }, chatOver = {}, s
   const calls = { fetch: [], solo: [], inter: [], resync: 0, begun: [] };
   const streams = [];
   const answers = {};   // url -> async () => Response-like
+  const agentStatus = { lead: status };
   const ctx = {
-    window: { hubMe: me }, document: doc, chats: { c1: chat }, skipInterjectOnce: new Set(), agentStatus: { lead: status }, busyRun: {}, localStorage: memStorage(stored), tzSentAt: 0,
+    window: { hubMe: me }, document: doc, chats: { c1: chat }, skipInterjectOnce: new Set(), agentStatus, busyRun: {}, localStorage: memStorage(stored), tzSentAt: 0,
     qomWait: new Map(), setTimeout: () => 0, clearTimeout() {}, zoneHeader: () => ({}),
     agentDisplayName: (n) => NAMES[n] || n, findSoloChat: (a) => (a === 'lead' ? chat : null),
     appendMessageWithImages: (id, role, content) => { const d = new El('div'); d.own = content; d.className = `msg ${role}`; msgs.appendChild(d); return 'm1'; },
@@ -88,8 +89,9 @@ function desk({ status = { busy: true, consultedBy: 'helper' }, chatOver = {}, s
     },
     sendInterjection: async (id) => { calls.inter.push(id); },
     sendSoloMessage: async (id, retry, opts) => { calls.solo.push({ id, opts }); },
+    ...(more.ctx ? more.ctx({ doc, msgs, chat, calls, agentStatus }) : {}),
   };
-  const { api, ctx: vctx } = load(APP, [...QOM_SHARED, 'qomHeaderBtn', 'sendSoloMessage'], ctx);
+  const { api, ctx: vctx } = load(APP, [...QOM_SHARED, 'qomHeaderBtn', 'sendSoloMessage', ...(more.names || [])], ctx);
   // the page's own sendSoloMessage is loaded for the routing tests; the one qomBegin calls is the recording stub
   vctx.sendSoloMessage = ctx.sendSoloMessage;
   return { api, vctx, doc, msgs, input, chat, calls, streams, answers, statusText, bar, ctx };
@@ -309,6 +311,74 @@ test('desktop: the busy line (header text and chat card) shows Answer me now onl
   assert.match(fnSource(APP, 'busyCardRefresh'), /qomDecorate\(el, chat\.agent\)/);
 });
 
+// ── a late status (the hub started a consultation, the page has not heard yet) and a status that outlives the person's own turn ──
+const noop = () => {};
+const full = (extra = {}) => ({ names: ['sendInterjection', 'qomStatusConsult'], ctx: ({ doc, msgs, chat, calls, agentStatus }) => ({
+  AbortSignal, skipInterjectOnce: new Set(), waitForPreparingImages: async () => true, renderImagePreviews: noop, setStatus: noop, setAgentStatus: noop, setAgentLive: noop, startToolTracker: noop,
+  appendMessage: () => 'a1', elapsedLabel: () => '', chatViewActivityWord: () => '',
+  appendSystemNotice(id, text) { const d = new El('div'); d.own = text; d.className = 'notice'; msgs.appendChild(d); return d; },
+  applyStatusSnapshot(map) { for (const [n, v] of Object.entries(map)) agentStatus[n] = { ...v }; },
+  appendMessageWithImages: (id, role, content) => { const d = new El('div'); d.own = content; d.className = `msg ${role}`; d.id = `mm${msgs.children.length}`; msgs.appendChild(d); return d.id; },
+  ...extra }) });
+
+test('desktop: qomOnConsult is true while the chat shows a hub-started turn (status "thinking") but has no running send of its own; a send of its own (controller, reattach) still rules it out', () => {
+  const d = desk({ chatOver: { status: 'thinking' } });
+  assert.strictEqual(d.api.qomOnConsult('lead', d.chat), true, 'thinking is also set for a consultation shown in the chat');
+  d.chat.controller = {};
+  assert.strictEqual(d.api.qomOnConsult('lead', d.chat), false, 'this page\'s own stream');
+  d.chat.controller = null; d.chat.reattach = { x: 1 };
+  assert.strictEqual(d.api.qomOnConsult('lead', d.chat), false, 'a re-attach to the person\'s own turn');
+  d.chat.reattach = null;
+  d.ctx.agentStatus.lead = { busy: true }; d.vctx.busyRun.lead = { origin: { kind: 'consultation', from: 'helper' } };
+  assert.strictEqual(d.api.qomOnConsult('lead', d.chat), true, 'the running turn\'s origin says consultation');
+  d.vctx.busyRun.lead = { origin: { kind: 'schedule' } };
+  assert.strictEqual(d.api.qomOnConsult('lead', d.chat), false, 'a scheduled task is not a consultation');
+});
+
+test('desktop: a send in a chat whose status is "thinking" (a consultation shown in it) waits as a queued request, not an interjection', async () => {
+  const d = desk({ chatOver: { status: 'thinking' } });
+  await d.api.sendSoloMessage('c1');
+  await tick();
+  assert.ok(!d.calls.fetch.some(f => /interject/.test(f.url)), 'no interjection');
+  assert.strictEqual(d.calls.fetch[0].url, '/api/chat/stream');
+  assert.strictEqual(d.calls.fetch[0].body.queue_behind_consult, true);
+  assert.strictEqual(linesOf(d.msgs).length, 1, 'the waiting line');
+});
+
+test('desktop: the hub refuses an interjection into a consultation (consultation: true) -> the bubble and notice go, the text and pictures wait as a queued request, drawn once', async () => {
+  const d = desk({ status: { busy: true }, more: full() });   // the page does not know about the consultation yet
+  d.ctx.chats.c1.pendingImages = ['data:image/png;base64,AAA'];
+  d.answers['/api/chat/interject'] = async () => ({ ok: true, status: 200, json: async () => ({ success: false, consultation: true, error: 'busy answering a consultation' }) });
+  await d.api.sendSoloMessage('c1');
+  await tick(12);
+  assert.ok(d.calls.fetch.some(f => /interject/.test(f.url)), 'the interjection was tried first');
+  const stream = d.calls.fetch.find(f => f.url === '/api/chat/stream');
+  assert.ok(stream, 'then the same text is sent as a queued request');
+  assert.strictEqual(stream.body.queue_behind_consult, true);
+  assert.strictEqual(stream.body.message, 'Please check the plan');
+  assert.deepStrictEqual(stream.body.images, ['data:image/png;base64,AAA']);
+  assert.strictEqual(d.msgs.all(e => e.className === 'notice').length, 0, 'the interjection notice is gone');
+  const bubbles = d.msgs.all(e => /^msg /.test(e.className));
+  assert.strictEqual(bubbles.length, 1, 'the message is drawn once');
+  assert.ok(!/Interjection/.test(bubbles[0].textContent), 'and it is not the interjection bubble');
+  assert.strictEqual(linesOf(d.msgs).length, 1, 'with its waiting line');
+});
+
+test('desktop: a normal send the hub answers 409 busy, while the status (or a fresh /api/agents/status) says consultation -> it is queued, not interjected', async () => {
+  const d = desk({ status: { busy: false }, more: full() });
+  d.answers['/api/chat/stream'] = async () => ({ ok: false, status: 409, statusText: 'Conflict' });
+  d.answers['/api/agents/status'] = async () => ({ ok: true, json: async () => ({ agents: { lead: { busy: true, consultedBy: 'helper' } } }) });
+  await d.api.sendSoloMessage('c1');
+  await tick(12);
+  assert.ok(!d.calls.fetch.some(f => /interject/.test(f.url)), 'no interjection');
+  assert.ok(d.calls.fetch.some(f => f.url === '/api/agents/status'), 'the status was read again');
+  const queued = d.calls.fetch.filter(f => f.url === '/api/chat/stream' && f.body && f.body.queue_behind_consult === true);
+  assert.strictEqual(queued.length, 1);
+  assert.strictEqual(queued[0].body.message, 'Please check the plan');
+  assert.strictEqual(d.msgs.all(e => /^msg user/.test(e.className)).length, 1, 'drawn once');
+  assert.strictEqual(linesOf(d.msgs).length, 1);
+});
+
 // ── phone ──
 function phone({ live = { lead: { busy: true, consultedBy: 'helper' } }, stored = {}, own = false, origin = null, me = { user: { id: 'sam' } } } = {}) {
   const doc = makeDoc();
@@ -470,6 +540,79 @@ test('phone: the busy line (#chat-busy and the card) shows Answer me now only wh
   // wiring in the page
   assert.match(fnSource(MOBILE, 'paintChatStatus'), /qomBusyBtn\(\);[^\n]*\n\s*setSendMode\(own\);\s*paintBusyCard\(\);/);
   assert.match(fnSource(MOBILE, 'paintBusyCard'), /qomDecorate\(busyCardEl, current\)/);
+});
+
+// The phone with the page's own sendInterjection / sendMessage (their other helpers are stubs).
+function phoneFull(opts = {}) {
+  const p = phone(opts);
+  const c = p.ctx;
+  const bubbles = () => p.msgs.all(e => e.className === 'msg user');
+  Object.assign(c, {
+    AbortSignal, streams: new Map(), recentOwn: new Map(), imagesPreparing: new Set(), sendWaiting: false, stick: false,
+    addNote: (t) => { const d = new El('div'); d.own = t; d.className = 'note'; p.msgs.appendChild(d); return d; },
+    classList: undefined, addAssistantBubble: () => { const el = new El('div'); el.className = 'msg assistant'; p.msgs.appendChild(el); return { el, body: new El('div') }; },
+    newFeed: () => ({}), voiceTakeDictated: () => false, simpleThinkStart: noop, elapsed: () => '', chatViewActivityWord: () => '', paintStatus: noop, feedEnd: noop, reasoningEnd: noop,
+    chatOpenFor: () => true, bubbleLive: () => true, voiceAutoReadGen: 0, window: {}, setLive: noop, toast: noop,
+    applySnapshot(map) { for (const [n, v] of Object.entries(map)) c.live[n] = { ...v }; },
+    ...(opts.ctx || {}),
+  });
+  const { api, ctx: vctx } = load(MOBILE, [...QOM_SHARED, 'qomBusyBtn', 'isBusy', 'ownTurnFor', 'currentTurnOrigin', 'qomStatusConsult', 'qomRefusedOnConsult', 'sendInterjection', 'sendMessage'], c);
+  vctx.sendMessage = c.sendMessage;
+  Object.assign(p, { api, vctx, bubbles });
+  return p;
+}
+
+test('phone: the hub refuses an interjection into a consultation (consultation: true) -> the bubble and note go, the same text and pictures wait as a queued request, drawn once', async () => {
+  const p = phoneFull({ live: { lead: { busy: true } } });   // the phone does not know about the consultation yet
+  p.vctx.pendingImages = ['data:image/png;base64,AAA'];
+  p.answers['/api/chat/interject'] = async () => ({ ok: true, status: 200, json: async () => ({ success: false, consultation: true, error: 'busy answering a consultation' }) });
+  await p.api.sendInterjection('lead');
+  await tick(12);
+  const stream = p.calls.api.find(c => c.url === '/api/chat/stream');
+  assert.ok(stream, 'the same text goes as a queued request');
+  assert.strictEqual(stream.body.queue_behind_consult, true);
+  assert.strictEqual(stream.body.message, 'Please check the plan');
+  assert.deepStrictEqual(stream.body.images, ['data:image/png;base64,AAA']);
+  assert.strictEqual(p.msgs.all(e => e.className === 'note').length, 0, 'the interjection note is gone');
+  assert.strictEqual(p.bubbles().length, 1, 'the message is drawn once');
+  assert.strictEqual(linesOf(p.msgs).length, 1, 'with its waiting line');
+});
+
+test('phone: a normal send the hub answers 409 busy while a fresh /api/agents/status says consultation -> it is queued, not refused', async () => {
+  const p = phoneFull({ live: { lead: { busy: false } } });
+  p.answers['/api/chat/stream'] = async () => { p.answers['/api/chat/stream'] = null; return { ok: false, status: 409 }; };
+  p.answers['/api/agents/status'] = async () => ({ ok: true, json: async () => ({ agents: { lead: { busy: true, consultedBy: 'helper' } } }) });
+  await p.api.sendMessage();
+  await tick(12);
+  assert.ok(p.calls.api.some(c => c.url === '/api/agents/status'), 'the status was read again');
+  const queued = p.calls.api.filter(c => c.url === '/api/chat/stream' && c.body && c.body.queue_behind_consult === true);
+  assert.strictEqual(queued.length, 1);
+  assert.strictEqual(queued[0].body.message, 'Please check the plan');
+  assert.strictEqual(p.input.value, '', 'the text is not put back in the box');
+  assert.strictEqual(p.bubbles().length, 1, 'drawn once');
+  assert.strictEqual(linesOf(p.msgs).length, 1);
+});
+
+test('phone: the Answer me now button sits right after #chat-busy (never inside it: #chat-busy is a button), stays through every repaint (once), and goes when no message waits', async () => {
+  const p = phoneFull();
+  p.busy.hidden = false;
+  const repaint = () => { p.busy.textContent = '⏳ Answering a consultation from Helper · 6s'; p.api.qomBusyBtn(); };   // what paintChatStatus does each time
+  const answers = () => p.doc.root.all(e => e.id === 'chat-busy-answer');
+  repaint();
+  assert.strictEqual(answers().length, 0, 'nothing waits: no button');
+  await p.api.sendMessage();
+  await tick(12);
+  repaint(); repaint(); repaint();
+  assert.strictEqual(answers().length, 1, 'one button after any number of repaints');
+  const b = answers()[0];
+  assert.strictEqual(b.textContent, 'Answer me now');
+  assert.strictEqual(p.busy.all(e => e.tagName === 'button').length, 0, 'not inside the busy line (a button in a button never gets the tap)');
+  assert.strictEqual(b.parentNode, p.busy.parentNode, 'in the same row as the busy line');
+  assert.match(p.busy.textContent, /Answering a consultation from Helper · 6s/);
+  p.streams[0].ev({ type: 'text', content: 'x' });   // the turn began: the message no longer waits
+  await tick(12);
+  repaint();
+  assert.strictEqual(answers().length, 0, 'no waiting message: no button');
 });
 
 test('both pages: the same words, the same storage key, and the service worker is hub-mobile-v113', () => {

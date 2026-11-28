@@ -14980,11 +14980,23 @@
     }
     // The agent is busy answering a consultation (not a turn of the person's own)
     function qomOnConsult(agent, chat) {
-      if (!chat || chat.controller || chat.reattach || chat.status === 'thinking') return false;
+      // Only this page's own running send (its stream, or a re-attach to the person's own turn) rules it out. chat.status 'thinking'
+      // is also set while a hub-started turn (a consultation) is shown in the chat, so it must not block.
+      if (!chat || chat.controller || chat.reattach) return false;
       const st = agentStatus[agent];
       if (!st || !st.busy) return false;
       const run = busyRun[agent];
       return !!st.consultedBy || !!(run && run.origin && run.origin.kind === 'consultation');
+    }
+    // The hub refused a send as busy: is the agent answering a consultation? The status the page has, else a fresh one.
+    async function qomStatusConsult(chat) {
+      const ok = () => { const st = agentStatus[chat.agent]; const run = busyRun[chat.agent]; return !!(st && st.busy && (st.consultedBy || (run && run.origin && run.origin.kind === 'consultation'))); };
+      if (ok()) return true;
+      try {
+        const r = await fetch('/api/agents/status', { credentials: 'include', signal: AbortSignal.timeout(5000) });
+        if (r.ok) { const d = await r.json(); if (d && d.agents) applyStatusSnapshot(d.agents); }
+      } catch (e) { /* no fresh status: not a consultation as far as the page knows */ }
+      return ok();
     }
     function qomSendNew(chatId, content, images) {   // (sendSoloMessage armed the zone header for this send)
       const chat = chats[chatId];
@@ -15051,7 +15063,8 @@
       if (!textOnly) clearPendingImages(chatId);
 
       // Show the interjection in the chat as a user message with a distinct style (with its pictures)
-      setMessageTime(document.getElementById(appendMessageWithImages(chatId, 'user', `⚡ [Interjection] ${content}`.trim(), imagesToSend)), msgTimeLabel(Date.now()));
+      const ijBubbleId = appendMessageWithImages(chatId, 'user', `⚡ [Interjection] ${content}`.trim(), imagesToSend);
+      setMessageTime(document.getElementById(ijBubbleId), msgTimeLabel(Date.now()));
 
       // Show a transient "sent" notice that will be updated when the agent picks it up
       const noticeEl = appendSystemNotice(chatId, '⚡ Interjection sent - waiting for agent to pick it up...');
@@ -15071,6 +15084,16 @@
           body: JSON.stringify({ agent: chat.agent, message: content, ...(imagesToSend.length ? { images: imagesToSend } : {}) })
         });
         const result = await resp.json();
+        if (result.consultation === true && !isVoice) {
+          // The hub refuses an interjection into a consultation (the status came late): the interjection bubble and notice go,
+          // and the same words and pictures wait as the person's own message instead (drawn once, by qomSendNew).
+          const ijEl = document.getElementById(ijBubbleId); if (ijEl) ijEl.remove();
+          if (noticeEl) noticeEl.remove();
+          const typedNow = input.value, imagesNow = chat.pendingImages;   // what was typed or attached since stays
+          input.value = ''; chat.pendingImages = [];
+          try { return qomSendNew(chatId, content, [...imagesToSend]); }
+          finally { input.value = typedNow; chat.pendingImages = imagesNow; if (imagesNow && imagesNow.length) renderImagePreviews(chatId); }
+        }
         if (result.success) {
           if (noticeEl) noticeEl.textContent = '⚡ Interjection delivered into the running turn';
         } else if (/not currently processing/i.test(String(result.error || ''))) {
@@ -15225,6 +15248,11 @@
             chat.bounced409 = false;
             notify(Object.assign(new Error('busy'), { refused: true }));
             return;
+          }
+          if (!chat.bounced409 && !isVoice) {   // (a call's own message was refused above)
+            // The hub says busy: if it is a consultation (the status says so, or a fresh /api/agents/status does), the message waits
+            // as the person's own request instead of being interjected.
+            if (await qomStatusConsult(chat)) { chat.bounced409 = false; return qomSendNew(chatId, content, [...imagesToSend]); }
           }
           if (!chat.bounced409) {
             chat.bounced409 = true;

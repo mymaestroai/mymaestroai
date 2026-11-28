@@ -10793,18 +10793,20 @@ function qomOnConsult(agent) {
   return !!s.consultedBy || !!(o && o.origin && o.origin.kind === 'consultation');
 }
 // The composer's message goes as a waiting request (the same steps as an interjection: the box is emptied, the bubble drawn).
-function qomSendNew(agent) {
+function qomSendNew(agent, again) {   // again { text, images }: words already taken from the composer (a refused interjection or send): the composer is left alone
   const input = $('msg-input');
-  const text = input.value.trim();
-  const images = pendingImages.slice();
+  const text = again ? String(again.text || '').trim() : input.value.trim();
+  const images = again ? [...(again.images || [])] : pendingImages.slice();
   if (!text && !images.length) return null;
   tzSentAt = Date.now();
-  input.value = '';
-  input.style.height = 'auto';
-  saveDraft(agent, '');
-  composerTypingPaint();
-  pendingImages = [];
-  renderPreviews();
+  if (!again) {
+    input.value = '';
+    input.style.height = 'auto';
+    saveDraft(agent, '');
+    composerTypingPaint();
+    pendingImages = [];
+    renderPreviews();
+  }
   stick = true;
   const ts = Date.now();
   const userEl = addUserBubble(text, images);
@@ -10815,6 +10817,17 @@ function qomSendNew(agent) {
   const from = s.consultedBy || (o && o.origin && o.origin.from) || '';
   return qomEnqueue({ agent, message: text, images, userEl, ts, client_id: qomNewId(), behindName: qomName(agent), fromName: from ? qomName(from) : 'another agent' });
 }
+// The hub refused a send as busy: is the agent answering a consultation? The status the phone has, else a fresh one.
+async function qomStatusConsult(agent) {
+  if (qomOnConsult(agent)) return true;
+  try {
+    const r = await api('/api/agents/status', { signal: AbortSignal.timeout(5000) });
+    if (r.ok) { const d = await r.json(); if (d && d.agents) applySnapshot(d.agents); }
+  } catch (e) { /* no fresh status: not a consultation as far as the phone knows */ }
+  return qomOnConsult(agent);
+}
+// A send of this phone's own was refused as busy: its record is not a turn of the phone's own, so it goes first; then, is it a consultation?
+function qomRefusedOnConsult(agent, rec) { if (streams.get(agent) === rec) streams.delete(agent); return qomStatusConsult(agent); }
 // Back in a chat (opened again): its waiting messages are drawn again with their lines, then sent again where the request was lost.
 function qomChatOpened(agent) {
   for (const w of qomWaiting(agent)) {
@@ -10830,11 +10843,14 @@ function qomBusyBtn() {
   const busy = $('chat-busy');
   if (!busy || !busy.parentNode) return;
   const old = $('chat-busy-answer');
-  if (old) old.remove();   // painted again so its click and disabled state follow the first waiting message
+  if (old) old.remove();   // painted again so its click and disabled state follow the first waiting message (and it never shows twice)
   const first = current ? qomWaiting(current)[0] : null;
-  if (!first) return;
+  if (!first || busy.hidden) return;
+  // #chat-busy is itself a <button>: a button inside it would never get the tap (browsers give it to the outer one), so the
+  // button sits right after the busy line in the same row, which is allowed to show it (no clipping, flex-shrink 0).
   const btn = qomButton(first);
   btn.id = 'chat-busy-answer';
+  btn.style.cssText += 'margin-left:8px;white-space:nowrap;flex-shrink:0;';
   busy.parentNode.insertBefore(btn, busy.nextSibling);
 }
 function qomDecorate(card, agent) {
@@ -10883,6 +10899,11 @@ async function sendInterjection(agent) {
     result = await r.json().catch(() => ({ success: false, error: `HTTP ${r.status}` }));
   } catch (e) {
     result = { success: false, error: e.message || 'request failed' };
+  }
+  if (result && result.consultation === true) {   // the hub refuses an interjection into a consultation (the status came late): the bubble and note go, the same words wait as the person's own message
+    try { userEl.remove(); noteEl.remove(); } catch (e) { /* gone */ }
+    qomSendNew(agent, { text, images });
+    return;
   }
   if (result && result.success) {
     noteEl.textContent = 'delivered mid-turn';
@@ -13603,6 +13624,8 @@ async function sendMessage(fallback) {
       fallback?.noteEl?.remove();
       if (fallback && fallback.voice) {
         // a call keeps the composer as it was; the controller was told (notify) and says "That did not go through." itself, or keeps the words for the next idle
+      } else if (!(fallback && fallback.response) && current === agent && await qomRefusedOnConsult(agent, rec)) {
+        qomSendNew(agent, { text, images });   // busy on a consultation (the status came late): the message waits for its turn, it is not refused
       } else if (current === agent) {
         input.value = text;
         saveDraft(agent, text);

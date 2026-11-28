@@ -212,7 +212,7 @@ test('the message box keeps a draft per agent: saved as you type, restored when 
   const send = js.slice(sendStart, js.indexOf('\n}\n', sendStart) + 2);
   assert.ok(send.includes("input.style.height = 'auto';\n    saveDraft(agent, '');"), 'a send clears the draft');
   assert.ok(js.includes("input.value = text;\n        saveDraft(agent, text);"), 'a refused send (409) puts the text back and keeps it');
-  const inter = js.slice(js.indexOf('async function sendInterjection('), js.indexOf('async function sendInterjection(') + 3200);
+  const inter = js.slice(js.indexOf('async function sendInterjection('), js.indexOf('async function sendInterjection(') + 3800);   // (window widened: the refused-by-a-consultation branch was added at the top of the result handling)
   assert.ok(inter.includes("saveDraft(agent, '');") && inter.includes('{ input.value = text; saveDraft(agent, text); }'), 'interjections too');
 });
 
