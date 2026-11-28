@@ -6,6 +6,7 @@ All notable changes to My Maestro AI are recorded here. The format follows
 
 ## [Unreleased]
 
+- **An agent can be allowed to reach machines on your home network.** A new switch on the agent card, "May connect to machines on the home network", lets an agent run ssh, scp, sftp and rsync to devices in your house, such as a robot, even when its role may not send anything off this computer. Anything on the internet stays refused. It is off for every agent until you turn it on, and your lead can turn it on for you after you confirm.
 - **The "Protect your Maestro's own code" switch is gone.** It tried to tell from the text of an agent's commands whether they would change your Maestro's program files, and it kept stopping ordinary work. Agents' commands are no longer checked against the program files. Real protection will come later from the operating system, through the command lockbox. Updates still stop when the program files have local edits, and "Put my changes aside" stays.
 
 - **Settings rows line up and say what they mean.** Expert and startup values show one row shape, with the default in the help line and as the box's hint; each Workers at once service has its own ⓘ; the spend caps have one "Save caps" button after all three caps; new features in For your review show their whole description and cost; the security check speaks of your Maestro.
