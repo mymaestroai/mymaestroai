@@ -2204,6 +2204,7 @@ function paintChatStatus() {
   // reply is done", only while a reply runs).
   const bell = $('chat-notify-btn');
   if (bell) { bell.hidden = false; paintNotifyBtn(); }
+  if (typeof qomBusyBtn === 'function') qomBusyBtn();   // Answer me now while one of the person's messages waits for this agent
   setSendMode(own);
   paintBusyCard();
 }
@@ -8857,6 +8858,7 @@ async function openChat(name) {
     reattachCheck(r);
     catchUpReattach(r);
   }
+  qomChatOpened(name);   // this chat's waiting messages come back with their lines
   // Opened the chat of an agent that is mid-turn on the server (sent from another device, or this
   // page just loaded): follow that turn so the reply lands here without a refresh. Before the first
   // status snapshot the hub's turn endpoint says whether there is a turn to follow.
@@ -10501,7 +10503,7 @@ function addImageFile(file) {
 // phone is streaming / re-attaching, or one started elsewhere). Stop is in the header.
 function setSendMode(own) {
   const b = $('send-btn');
-  const interject = !!current && (own || isBusy(current));
+  const interject = !!current && (own || (isBusy(current) && !(typeof qomOnConsult === 'function' && qomOnConsult(current))));   // busy on a consultation: the message waits for its turn, it is not an interjection
   b.classList.remove('stop');
   b.classList.toggle('interject', interject);
   b.innerHTML = interject ? '&#x2935;' : '&#x27A4;';
@@ -10511,6 +10513,296 @@ function setSendMode(own) {
   if (input) input.placeholder = interject ? 'Interject into the running turn…' : 'Message';
   if (typeof simpleSendLook === 'function') simpleSendLook(b, input, interject);   // Simple: the send arrow and a plain placeholder while it works
 }
+
+// ── The person's message waiting behind a consultation (queue_behind_consult) ──
+// While the agent answers another agent's consultation, a message from the person is not injected into that answer
+// (it would go to the other agent): it waits as its own request, the hub runs it next, and "Answer me now" pauses the
+// consultation so it runs at once. The same words and logic are on the desktop page (app.js); Simple uses both pages.
+const qomWait = new Map();   // client_id -> the waiting message { chatId, agent, message, images, userEl, ts, client_id, position, behindName, fromName, line, ... }
+function qomKey() { return 'mmQueuedOwnerMessages'; }
+// Waiting messages kept on this device; one older than 6 hours is dropped.
+function qomStored() {
+  let list = [];
+  try { list = JSON.parse(localStorage.getItem(qomKey()) || '[]'); } catch (e) { list = []; }
+  const now = Date.now();
+  return (Array.isArray(list) ? list : []).filter(e => e && typeof e.agent === 'string' && typeof e.client_id === 'string' && typeof e.message === 'string' && now - Number(e.ts) < 6 * 3600 * 1000);
+}
+function qomSave(list) { try { localStorage.setItem(qomKey(), JSON.stringify(list)); } catch (e) { /* storage off or full: the message still waits on this page */ } }
+function qomKeep(w) { qomSave(qomStored().filter(e => e.client_id !== w.client_id).concat([{ agent: w.agent, client_id: w.client_id, message: w.message, ts: w.ts }])); }
+function qomForget(id) { qomSave(qomStored().filter(e => e.client_id !== id)); }
+function qomNewId() { return `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`; }
+function qomHidden() { return typeof document !== 'undefined' && !!document.hidden; }
+function qomWords(behind, from, position) {
+  const n = Math.floor(Number(position)) || 1;
+  if (n >= 2) return `Your message runs after ${n - 1} other message${n - 1 === 1 ? '' : 's'}.`;
+  return `Waiting: ${behind} is answering ${from}. Your message runs next.`;
+}
+function qomLineText(w) {
+  if (w.error) return w.error;
+  if (w.pausing) return `Pausing ${w.fromName}'s request…`;
+  return qomWords(w.behindName, w.fromName, w.position);
+}
+// This agent's waiting messages, oldest first (the first one is what the busy line's button acts on).
+function qomWaiting(agent) {
+  return [...qomWait.values()].filter(w => w.agent === agent && !w.ended).sort((a, b) => a.ts - b.ts);
+}
+function qomButton(w) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'owner-queue-now';
+  btn.textContent = 'Answer me now';
+  btn.disabled = !!w.pausing;
+  btn.style.cssText = 'min-height:36px;padding:4px 12px;border:1px solid currentColor;border-radius:6px;background:transparent;color:inherit;font:inherit;cursor:pointer;';
+  btn.addEventListener('click', () => qomTakeover(w.client_id));
+  return btn;
+}
+// The waiting line under the person's message: its words (role=status) and the Answer me now button.
+function qomPaint(w) {
+  if (!w.line) {
+    const line = document.createElement('div');
+    line.className = 'owner-queue-line';
+    line.setAttribute('role', 'status');
+    line.style.cssText = 'margin:4px 0 8px;font-size:12px;opacity:.85;display:flex;flex-wrap:wrap;align-items:center;gap:8px;';
+    w.text = document.createElement('span');
+    line.appendChild(w.text);
+    w.line = line;
+    w.btn = null;
+    if (w.userEl && w.userEl.parentNode) w.userEl.parentNode.insertBefore(line, w.userEl.nextSibling);
+    else { const c = qomContainer(w); if (c) c.appendChild(line); }
+  }
+  w.text.textContent = qomLineText(w);
+  if (w.refused) { if (w.btn) { w.btn.remove(); w.btn = null; } }
+  else if (!w.btn) { w.btn = qomButton(w); w.line.appendChild(w.btn); }
+  else w.btn.disabled = !!w.pausing;
+  qomPaintBusy(w.agent);
+}
+// Answer me now: pause the consultation; the waiting message then runs at once (this request carries on as the turn).
+async function qomTakeover(id) {
+  const w = qomWait.get(id);
+  if (!w || w.pausing || w.ended) return;
+  w.pausing = true; w.error = '';
+  qomPaint(w);
+  let res = null;
+  try { const r = await qomPost('/api/chat/takeover', { agent: w.agent, client_id: w.client_id }); res = await r.json(); }
+  catch (e) { res = { ok: false, error: (e && e.message) || 'The request did not go through.' }; }
+  if (w.ended) return;
+  if (res && res.ok) { if (res.from) w.fromName = qomName(res.from); return; }
+  w.pausing = false;
+  w.error = String((res && res.error) || 'Could not pause the request.');
+  qomPaint(w);
+}
+// The stream's waiting phase: events for the waiting line, then the first normal event (where the turn begins).
+// { events, started, rest }: rest is what is left to hand to the normal stream reader (from the first normal line on).
+function qomScan(buffer) {
+  const lines = String(buffer).split('\n');
+  const tail = lines.pop();
+  const events = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].startsWith('data: ')) continue;   // a ping comment or an empty line
+    let ev = null;
+    try { ev = JSON.parse(lines[i].slice(6)); } catch (e) { ev = null; }
+    if (ev && ['queued', 'replaced', 'already_sent', 'takeover_failed', 'error'].includes(ev.type)) { events.push(ev); continue; }
+    return { events, started: true, rest: `${lines.slice(i).join('\n')}\n${tail}` };
+  }
+  return { events, started: false, rest: tail };
+}
+// This waiting message is over (its turn began, it was already sent, or another request took its place).
+function qomEnd(w, forget) {
+  w.ended = true;
+  if (w.line) { w.line.remove(); w.line = null; }
+  if (forget) { qomForget(w.client_id); qomWait.delete(w.client_id); }
+  qomPaintBusy(w.agent);
+}
+// true when the event ends the waiting
+function qomEvent(w, ev) {
+  switch (ev.type) {
+    case 'queued':
+      w.position = Math.max(1, Math.floor(Number(ev.position)) || 1);
+      if (ev.behind && ev.behind.from) w.fromName = qomName(ev.behind.from);
+      if (ev.agent) w.behindName = qomName(ev.agent);
+      w.fails = 0; w.error = '';
+      qomPaint(w);
+      return false;
+    case 'takeover_failed':
+      w.pausing = false;
+      w.error = `Could not pause: ${ev.error || 'the request could not be paused.'}`;
+      qomPaint(w);
+      return false;
+    case 'replaced': qomEnd(w, false); return true;   // a newer request with this client_id took over: this one ends quietly
+    case 'already_sent': qomEnd(w, true); qomReread(w); return true;   // it already ran: the reply is in the chat history
+    default:
+      w.ended = true; w.refused = true; w.pausing = false;
+      qomForget(w.client_id); qomWait.delete(w.client_id);
+      w.error = `Not sent: ${ev.error || 'the hub refused the message.'}`;
+      qomPaint(w);
+      return true;
+  }
+}
+// The first normal event arrived: the line goes, the request carries on as a completely normal turn stream.
+function qomStarted(w, reader, rest) {
+  qomEnd(w, true);
+  const bytes = new TextEncoder().encode(rest);
+  let first = bytes.length > 0;
+  const response = { ok: true, status: 200, body: { getReader: () => ({
+    read: () => (first ? (first = false, Promise.resolve({ done: false, value: bytes })) : reader.read()),
+    cancel: (why) => reader.cancel(why),
+  }) } };
+  try { return qomBegin(w, response); } catch (e) { return null; }
+}
+async function qomRun(w) {
+  if (w.running || w.ended) return;
+  w.running = true;
+  const run = (w.runId = (w.runId || 0) + 1);
+  w.ctl = new AbortController();
+  let reader = null;
+  try {
+    const resp = await qomStream(w, w.ctl);
+    if (w.runId !== run) return;
+    if (resp.status === 409 || !resp.ok) {
+      w.ended = true; w.refused = true; qomForget(w.client_id); qomWait.delete(w.client_id);
+      w.error = resp.status === 409 ? `Not sent: ${w.behindName} is busy with another turn.` : `Not sent: HTTP ${resp.status}`;
+      qomPaint(w);
+      return;
+    }
+    reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (w.runId !== run) { try { reader.cancel(); } catch (e) { /* gone */ } return; }
+      if (done) throw new Error('the connection closed while waiting');
+      buf += dec.decode(value, { stream: true });
+      const scan = qomScan(buf);
+      buf = scan.rest;
+      for (const ev of scan.events) if (qomEvent(w, ev)) { try { reader.cancel(); } catch (e) { /* gone */ } return; }
+      if (scan.started) { w.running = false; return qomStarted(w, reader, buf); }
+    }
+  } catch (e) {
+    if (w.runId !== run || w.ended) return;
+    w.running = false;
+    // The request was lost while the message still waits (network, page hidden): the same client_id goes again, now or when the page shows.
+    w.fails = (w.fails || 0) + 1;
+    clearTimeout(w.timer);
+    if (!qomHidden()) w.timer = setTimeout(qomResendAll, Math.min(30000, 2000 * 2 ** (w.fails - 1)));
+  }
+}
+// Send every kept waiting message again with its own client_id (the hub lets the new request take the old one's place, or answers already_sent).
+function qomResendAll() {
+  if (qomHidden()) return;
+  for (const e of qomStored()) {
+    if (qomWait.has(e.client_id)) continue;
+    const w = qomRestore(e);
+    if (w) { qomWait.set(e.client_id, w); qomPaint(w); }
+  }
+  for (const w of [...qomWait.values()]) if (!w.ended && !w.running && qomReady(w)) qomRun(w);
+}
+function qomEnqueue(w) {
+  w.position = 1; w.runId = 0;
+  qomWait.set(w.client_id, w);
+  qomKeep(w);
+  qomPaint(w);
+  qomRun(w);   // not awaited: the request stays open while the message waits (and then carries the turn)
+}
+// ── this page's side ──
+function qomName(n) { try { return displayName(n) || n; } catch (e) { return n; } }
+function qomContainer() { return chatEl(); }
+function qomPost(path, body) { return api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
+function qomStream(w, ctl) {
+  return api('/api/chat/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...zoneHeader() },
+    signal: ctl.signal,
+    body: JSON.stringify({ agent: w.agent, message: w.message, images: w.images || [], confirm_tools: false, ...(typeof simpleChatExtra === 'function' ? simpleChatExtra(w.agent) : {}), queue_behind_consult: true, client_id: w.client_id }),
+  });
+}
+// A waiting message is sent again only while its chat is on screen (the bubbles and the line are drawn there).
+function qomReady(w) { return current === w.agent && screen === 'chat'; }
+// A message kept on this device whose page lost it (reload): drawn again, then sent again.
+function qomRestore(e) {
+  if (current !== e.agent || screen !== 'chat') return null;
+  const userEl = addUserBubble(e.message, []);
+  setBubbleTime(userEl, msgTimeLabel(e.ts));
+  return { agent: e.agent, message: e.message, images: [], userEl, ts: e.ts, client_id: e.client_id, position: 1, runId: 0, drawn: true, behindName: qomName(e.agent), fromName: qomName((live[e.agent] || {}).consultedBy) || 'another agent' };
+}
+// The message already ran (the hub said already_sent): the reply is in the history, not on this page yet.
+function qomReread(w) {
+  if (w.drawn && w.userEl) w.userEl.remove();   // drawn again after a reload: the history draws it
+  if (current === w.agent) rereadHistory(w.agent);
+}
+// The turn began: the normal send takes the request over (the person's message is already drawn; nothing is drawn twice).
+async function qomBegin(w, response) {
+  for (let i = 0; i < 100 && (streams.has(w.agent) || reattaches.has(w.agent)); i++) await new Promise(r => setTimeout(r, 200));   // the earlier reply is still closing
+  if (current !== w.agent || screen !== 'chat') {   // another chat is open: the turn runs on the hub and its reply lands in the history
+    try { response.body.getReader().cancel(); } catch (e) { /* gone */ }
+    markUnread(w.agent);
+    return;
+  }
+  return sendMessage({ agent: w.agent, text: w.message, images: w.images || [], userEl: w.userEl, response });
+}
+// The agent is busy answering a consultation (not a turn of this phone's own)
+function qomOnConsult(agent) {
+  if (!agent || ownTurnFor(agent)) return false;
+  const s = live[agent];
+  if (!s || !s.busy) return false;
+  const o = currentTurnOrigin(agent);
+  return !!s.consultedBy || !!(o && o.origin && o.origin.kind === 'consultation');
+}
+// The composer's message goes as a waiting request (the same steps as an interjection: the box is emptied, the bubble drawn).
+function qomSendNew(agent) {
+  const input = $('msg-input');
+  const text = input.value.trim();
+  const images = pendingImages.slice();
+  if (!text && !images.length) return null;
+  tzSentAt = Date.now();
+  input.value = '';
+  input.style.height = 'auto';
+  saveDraft(agent, '');
+  composerTypingPaint();
+  pendingImages = [];
+  renderPreviews();
+  stick = true;
+  const ts = Date.now();
+  const userEl = addUserBubble(text, images);
+  setBubbleTime(userEl, msgTimeLabel(ts));
+  scrollChat(true);
+  const s = live[agent] || {};
+  const o = currentTurnOrigin(agent);
+  const from = s.consultedBy || (o && o.origin && o.origin.from) || '';
+  return qomEnqueue({ agent, message: text, images, userEl, ts, client_id: qomNewId(), behindName: qomName(agent), fromName: from ? qomName(from) : 'another agent' });
+}
+// Back in a chat (opened again): its waiting messages are drawn again with their lines, then sent again where the request was lost.
+function qomChatOpened(agent) {
+  for (const w of qomWaiting(agent)) {
+    w.userEl = addUserBubble(w.message, w.images || []);
+    setBubbleTime(w.userEl, msgTimeLabel(w.ts));
+    w.line = null; w.btn = null;
+    qomPaint(w);
+  }
+  setTimeout(qomResendAll, 0);
+}
+// The busy line (#chat-busy and the card in the chat): Answer me now acts on the first waiting message.
+function qomBusyBtn() {
+  const busy = $('chat-busy');
+  if (!busy || !busy.parentNode) return;
+  const old = $('chat-busy-answer');
+  if (old) old.remove();   // painted again so its click and disabled state follow the first waiting message
+  const first = current ? qomWaiting(current)[0] : null;
+  if (!first) return;
+  const btn = qomButton(first);
+  btn.id = 'chat-busy-answer';
+  busy.parentNode.insertBefore(btn, busy.nextSibling);
+}
+function qomDecorate(card, agent) {
+  const first = qomWaiting(agent)[0];
+  if (!first) return;
+  card.appendChild(document.createTextNode(' '));
+  card.appendChild(qomButton(first));
+}
+function qomPaintBusy(agent) { if (agent === current) { try { paintChatStatus(); } catch (e) { /* cosmetic */ } } }
+document.addEventListener('visibilitychange', () => { if (!document.hidden) qomResendAll(); });
+window.addEventListener('online', () => qomResendAll());
+setTimeout(qomResendAll, 2500);   // a page that loaded with kept messages sends them again once its chat is up
+setInterval(() => { if (qomStored().length || qomWait.size) qomResendAll(); }, 15000);
 
 // Interject: the text is injected into the agent's running turn (same POST /api/chat/interject
 // the desktop uses) instead of waiting for it to finish. If the turn ended in the meantime the
@@ -13208,6 +13500,9 @@ async function sendMessage(fallback) {
   }
   // While the agent is busy (a turn this phone is streaming or one started elsewhere) the
   // composer interjects into that turn; Stop is in the header.
+  // Busy answering another agent's consultation: an interjection would go into that answer and never reach the person, so the
+  // message waits as its own request (queue_behind_consult) and runs next; Answer me now pauses the consultation.
+  if (!fallback && typeof qomOnConsult === 'function' && qomOnConsult(agent)) { await qomSendNew(agent); return; }
   if (!fallback && (isBusy(agent) || ownTurnFor(agent))) { await sendInterjection(agent); return; }
   if (!fallback) tzSentAt = Date.now();   // the person's own send: its request carries the phone's zone (zoneHeader)
   const input = $('msg-input');
@@ -13225,7 +13520,7 @@ async function sendMessage(fallback) {
   }
   stick = true;
   const s = live[agent];
-  if (s && s.busy) {
+  if (s && s.busy && !(fallback && fallback.response)) {
     const e = elapsed(s.busySince);
     addNote(`⏳ ${displayName(agent)} is still working on the previous message (${chatViewActivityWord(s.activity) || 'working'}${e ? `, ${e}` : ''}). Your message will queue or be refused until it finishes.`);
   }
@@ -13245,7 +13540,7 @@ async function sendMessage(fallback) {
   let lost = false;
   let sent = true;
   try {
-    const r = await api('/api/chat/stream', {
+    const r = fallback && fallback.response ? fallback.response : await api('/api/chat/stream', {   // a waiting message's turn began: its request is already running (fallback.response)
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...zoneHeader() },
       signal: controller.signal,
@@ -15040,6 +15335,7 @@ function paintBusyCard() {
   }
   const detail = chatBusyDetail(current);
   busyCardEl.textContent = `\u23F3 ${info.text} \u00B7 ${chatViewElapsed(info.since, Date.now())}${detail ? ` \u00B7 ${detail}` : ''}`;   // as the header: words, time, detail
+  if (typeof qomDecorate === 'function') qomDecorate(busyCardEl, current);   // Answer me now while one of the person's messages waits for this agent
   if (box.lastElementChild !== busyCardEl) box.appendChild(busyCardEl);
   if (fresh) scrollChat();
   if (!busyCardTimer) busyCardTimer = setInterval(paintBusyCard, 5000);

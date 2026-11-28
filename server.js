@@ -1873,7 +1873,14 @@ async function handleHttpRequest(req, res) {
       // The owner's own message (same test as /api/chat below): lets connector_access be offered in this turn.
       if (body && typeof body === 'object') body.owner_turn = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser);
       // Identity comes only from the authenticated session (req.hubUser), never from the body.
-      return handleChatStream(body, res, { userId: (req.hubUser && req.hubUser.id) || null, service: !!req.hubService, accounts: hubAuth.hasUsers(), admin: access.isAdmin(req.hubUser) });
+      return handleChatStream(body, res, { userId: (req.hubUser && req.hubUser.id) || null, service: !!req.hubService, accounts: hubAuth.hasUsers(), admin: access.isAdmin(req.hubUser), person: !req.hubToken && !req.hubService });   // person: a browser session, not a program (queue_behind_consult is for people only)
+    }
+
+    // Owner takeover: the person's message is waiting behind another agent's consultation of this agent; pause that consultation now.
+    if (pathname === '/api/chat/takeover' && req.method === 'POST') {
+      if (req.hubToken || req.hubService) return jsonResponse(res, 403, { ok: false, error: 'Only a person at the browser can pause a consultation.' });
+      const body = JSON.parse(await readBody(req));
+      return jsonResponse(res, 200, require('./lib/sdk-chat').takeoverConsultation(String(body?.agent || ''), { clientId: body?.client_id }));
     }
 
     if (pathname === '/api/chat' && req.method === 'POST') {
@@ -1903,7 +1910,7 @@ async function handleHttpRequest(req, res) {
     if (pathname === '/api/chat/interject' && req.method === 'POST') {
       const body = JSON.parse(await readBody(req));
       if (req.hubToken) require('./lib/sdk-chat').__settingsTool.noteTokenInterjection(body && body.agent);   // a program's token is text from outside: the running turn can no longer change settings at once
-      const result = handleInterjection(body);
+      const result = handleInterjection(body, { person: !req.hubToken && !req.hubService });
       return jsonResponse(res, result.success ? 200 : 400, result);
     }
 

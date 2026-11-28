@@ -55,7 +55,7 @@ function loadAlertModule() {
   vm.createContext(ctx);
   const code = [
     slice('async function handleChat(body, res, ctx) {', '\nfunction handleAskResponse('),
-    slice('function handleInterjection(body) {', '\n// ── Exports'),
+    slice('function handleInterjection(body, ctx) {', '\n// ── Exports'),
     slice('function isAgentActive(agentName) {', '\n// ── Detached jobs (run_job)'),
   ].join('\n');
   vm.runInContext(code + '\nthis.api = { handleChat, handleInterjection, handleAlert, ensureAlertSecret, ALERT_IDS, alertMessage, drainInterjections };', ctx);
