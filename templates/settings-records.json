@@ -4477,51 +4477,6 @@
       "facts": "POST /api/auth/sessions/revoke calls hubAuth.revokeSessions for the signed-in user and clears this cookie server.js:838-842. Applies at once, no restart."
     },
     {
-      "id": "OPT-0153",
-      "kind": "setting",
-      "name": "Protect Maestro's own code",
-      "labels": [
-        "Security > Protect your Maestro's own code",
-        "Protect your Maestro's own code"
-      ],
-      "what": "Stops all agents, the lead included, from changing the program files of your Maestro on this computer. A refused agent describes the change to you instead.",
-      "when": "Turn it on for a normal home or office install. Leave it off only if an agent is meant to maintain Maestro's code, as on a developer's install.",
-      "risk": "A change an agent makes to the program files can break updates or stop every agent from answering. Turned on, an agent that maintains the code cannot do that work.",
-      "def": "Default: undecided on an install that already has agents, and agents may still change the code until you choose. We recommend turning it on.",
-      "restart": false,
-      "danger": "care",
-      "who": "admin",
-      "lead": "confirm",
-      "words": [
-        "protect code",
-        "program files",
-        "source code",
-        "lock code",
-        "updates",
-        "agents editing code",
-        "developer",
-        "own code"
-      ],
-      "scope": "install | per-person",
-      "home": "Settings > For your review while undecided (then Settings > Agents and teams > More)",
-      "storedAs": "behaviour:protect-own-code",
-      "anchors": [
-        {
-          "surface": "desktop",
-          "label": "Security > Protect your Maestro's own code"
-        },
-        {
-          "surface": "desktop",
-          "label": "Protect your Maestro's own code"
-        },
-        {
-          "surface": "phone",
-          "selector": "#sec-code-protect"
-        }
-      ],
-      "facts": "Behaviour change 'protect-own-code' templates/behaviour-changes.json:93, state in data/behaviour-reviews.json lib/code-protect.js:26-50. An install with agents starts 'pending' (treated as off) lib/behaviour-changes.js:3, 114; a missing or unreadable state file counts as ON lib/code-protect.js:50-58. Fresh install default not confirmed. data, workspaces, node_modules stay writable lib/code-protect.js:56-62. Whole install; no restart (state cached 2 s lib/behaviour-changes.js:63). Audit scope 'install | per-person': the code treats it as install-wide."
-    },
-    {
       "id": "OPT-0155",
       "kind": "door",
       "name": "Data connectors",
@@ -17427,7 +17382,7 @@
       "home": "Settings > For your review while undecided (then Settings > Agents and teams > More)",
       "storedAs": "behaviour:own-code-guidance",
       "anchors": [],
-      "facts": "behaviour id own-code-guidance templates/behaviour-changes.json:104-115; read per lead turn lib/sdk-chat.js:277; fresh install on, install with agents 'pending' off lib/behaviour-changes.js:3, 101; the separate 'Protect your Maestro's own code' change can still refuse edits (same file)."
+      "facts": "behaviour id own-code-guidance templates/behaviour-changes.json:104-115; read per lead turn lib/sdk-chat.js:277; fresh install on, install with agents 'pending' off lib/behaviour-changes.js:3, 101."
     },
     {
       "id": "OPT-0554",

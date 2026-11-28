@@ -16533,31 +16533,6 @@ async function chooseTimeZone(sel) {
   secMsg('prof-tz-msg', error ? `Not saved: ${error}` : 'Saved.', !error);
 }
 
-// "Protect your Maestro's own code": the switch IS the state of the behaviour change 'protect-own-code' (admin-only route).
-async function mountCodeProtect(el) {
-  if (!el) return;
-  el.innerHTML = '<div class="sec-title">Protect Maestro\'s own code</div><label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="sec-code-protect" style="width:auto" disabled> Protect Maestro\'s own code</label><div class="sec-hint">Agents can\'t change the program files of your Maestro on this computer, and a refused agent describes the change to you instead. Also on the Changes page.</div><div class="sec-msg" id="sec-code-protect-msg"></div>';
-  const box = el.querySelector('#sec-code-protect'), msg = el.querySelector('#sec-code-protect-msg');
-  try {
-    const r = await fetch('/api/behaviour-changes', { credentials: 'include' });
-    const j = r.ok ? await r.json() : null;
-    const e = j && (j.changes || []).find((c) => c.id === 'protect-own-code');
-    if (!e) { msg.textContent = 'Could not read this setting.'; return; }
-    box.checked = e.state === 'on';
-    box.disabled = false;
-    box.addEventListener('change', async () => {
-      const want = box.checked ? 'on' : 'off';
-      box.disabled = true;
-      try {
-        const p = await fetch('/api/behaviour-changes/protect-own-code', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision: want }) });
-        if (!p.ok) throw new Error((await p.json().catch(() => ({}))).error || 'Could not save.');
-        msg.textContent = want === 'on' ? 'On.' : 'Off.';
-      } catch (err) { box.checked = !box.checked; msg.textContent = err.message; }
-      box.disabled = false;
-    });
-  } catch { msg.textContent = 'Could not read this setting.'; }
-}
-
 function openSecuritySheet() {
   $('menu').classList.remove('open');
   const sheet = $('security-sheet');
@@ -16576,14 +16551,12 @@ function openSecuritySheet() {
       <div class="sec-title">Sessions</div>
       <div class="sec-actions"><button id="sec-revoke" class="danger">Sign out everywhere</button></div>
     </div>
-    ${hubMe && hubMe.isAdmin ? '<div class="sec-section" id="sec-code-protect-box"></div>' : ''}
     ${hubMe && hubMe.isAdmin ? `<div class="sec-section" id="sec-share" data-no-dirty>${shareSettingsHtml()}</div>` : ''}
     <div class="sec-actions" style="margin-top:10px"><button id="sec-close">Close</button></div>`;
   $('sec-pw-go').addEventListener('click', changePassword);
   $('sec-revoke').addEventListener('click', signOutEverywhere);
   $('sec-close').addEventListener('click', () => dialogRequestClose(sheet));
   paintTwoFactor();
-  mountCodeProtect($('sec-code-protect-box'));
   if ($('sec-share')) shareSettingsMount($('sec-share'), shareLinksListOpen);
   if (!sheet.open) sheet.showModal();
 }

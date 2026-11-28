@@ -18,7 +18,6 @@ test('path hint appears only on outside path policy refusals', () => {
     const dec = { cls, reason: 'test policy', summary: 'test action' };
     if (cls === 'read_outside' || cls === 'write_outside') {
       assert.ok(tp.denialText(dec).endsWith('\n' + hint), cls);
-      assert.ok(!tp.denialText({ ...dec, protectedCode: true }).includes(hint));
       for (const by of ['owner', 'timeout']) assert.ok(!tp.denialText(dec, { by }).includes(hint));
     } else {
       assert.ok(!tp.denialText(dec).includes(hint), cls);

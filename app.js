@@ -774,13 +774,11 @@
             <div class="sec-hint" id="sec-sessions">Loading…</div>
             <div class="sec-actions"><button class="sec-btn danger" onclick="signOutEverywhere()">Sign out everywhere</button></div>
           </div>
-          ${window.hubMe && window.hubMe.isAdmin ? '<div class="sec-section" id="sec-code-protect-box"></div>' : ''}
           <div class="sec-actions"><button class="sec-btn" onclick="dialogRequestClose(this)">Close</button></div>
         </div>`;
       document.body.appendChild(overlay);
       paintTwoFactor();
       loadSessionsInfo();
-      mountCodeProtect(document.getElementById('sec-code-protect-box'));
     }
     // Profile: who you are here (your name and sign-in, set by an admin on the Users page) and the time zone your agents
     // use. Security keeps password, two-factor and sessions.
@@ -965,30 +963,6 @@
         dialogGuard.markLoaded(['sec-pw-current', 'sec-pw-new', 'sec-pw-new2'].map(id => document.getElementById(id)));   // done: nothing left to lose
         secMsg('sec-pw-msg', 'Password changed.', true);
       } catch (e) { secMsg('sec-pw-msg', e.message); }
-    }
-    // "Protect your Maestro's own code": the switch IS the state of the behaviour change 'protect-own-code' (admin-only route).
-    async function mountCodeProtect(el) {
-      if (!el) return;
-      el.innerHTML = '<div class="sec-title">Protect Maestro\'s own code</div><label class="sec-hint" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="sec-code-protect" style="width:auto" disabled> Protect Maestro\'s own code</label><div class="sec-hint">Agents can\'t change the program files of your Maestro on this computer, and a refused agent describes the change to you instead. Also on the Changes page.</div><div class="sec-msg" id="sec-code-protect-msg"></div>';
-      const box = el.querySelector('#sec-code-protect'), msg = el.querySelector('#sec-code-protect-msg');
-      try {
-        const r = await fetch('/api/behaviour-changes', { credentials: 'include' });
-        const j = r.ok ? await r.json() : null;
-        const e = j && (j.changes || []).find((c) => c.id === 'protect-own-code');
-        if (!e) { msg.textContent = 'Could not read this setting.'; return; }
-        box.checked = e.state === 'on';
-        box.disabled = false;
-        box.addEventListener('change', async () => {
-          const want = box.checked ? 'on' : 'off';
-          box.disabled = true;
-          try {
-            const p = await fetch('/api/behaviour-changes/protect-own-code', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision: want }) });
-            if (!p.ok) throw new Error((await p.json().catch(() => ({}))).error || 'Could not save.');
-            msg.textContent = want === 'on' ? 'On.' : 'Off.';
-          } catch (err) { box.checked = !box.checked; msg.textContent = err.message; }
-          box.disabled = false;
-        });
-      } catch { msg.textContent = 'Could not read this setting.'; }
     }
 
     async function loadSessionsInfo() {

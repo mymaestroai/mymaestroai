@@ -4131,10 +4131,6 @@ async function handleHttpRequest(req, res) {
 
 // ── Start ───────────────────────────────────────────────────────────────
 
-// "Protect your Maestro's own code" (lib/code-protect): the policy asks this server's instance, which reads the owner's
-// choice (behaviour change 'protect-own-code'). Registered before any agent can run.
-try { require('./lib/tool-policy').setCodeProtectProvider(() => require('./lib/code-protect').getCodeProtect()); }
-catch (e) { console.error('[code-protect] could not register:', e.message); }
 
 // Leaked-key detector: if ETH leaves a trading wallet and the hub sent nothing, say so loudly.
 setInterval(() => {

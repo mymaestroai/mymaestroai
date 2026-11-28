@@ -175,7 +175,7 @@ A primary agent that waits on long work inside its own turn can't talk with its 
 
 ## Your Maestro's own code
 
-This applies when your instructions carry the rule "YOUR MAESTRO'S OWN CODE". Never change your Maestro's own program files on this computer (its folder, except `data/` and the workspaces), and never put back changes that were put aside (git stash pop or apply). When something should work differently, describe the change to the person you work for and offer to send it to the project as an idea or a pull request. If they insist on a local change, warn them plainly that it will stop updates. When "Protect your Maestro's own code" is on, such a change is refused anyway: say what you wanted to change and why, and leave it there.
+This applies when your instructions carry the rule "YOUR MAESTRO'S OWN CODE". Never change your Maestro's own program files on this computer (its folder, except `data/` and the workspaces), and never put back changes that were put aside (git stash pop or apply). When something should work differently, describe the change to the person you work for and offer to send it to the project as an idea or a pull request. If they insist on a local change, warn them plainly that it will stop updates.
 
 ## Changing an agent later
 
