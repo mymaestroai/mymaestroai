@@ -12833,7 +12833,7 @@
       if (ev.origin?.kind === 'user') {
         // Our own send is already streaming in this window (or re-attaching to it).
         if (!chat || chat.controller || chat.reattach || chat.status === 'thinking') return;
-        if (typeof qomOwnsTurn === 'function' && qomOwnsTurn(ev.agent, ev.message)) return;   // one of this page's waiting messages: its own stream draws it
+        if (typeof qomOwnsTurn === 'function' && qomOwnsTurn(ev.agent, ev.origin)) return;   // one of this page's waiting messages: its own stream draws it
       }
       if (!chat) {
         if (!HUB_AUTO_OPEN.has(ev.origin?.kind)) return;   // plain consultations only show in an already open window
@@ -14705,16 +14705,16 @@
     // (it would go to the other agent): it waits as its own request, the hub runs it next, and "Answer me now" pauses the
     // consultation so it runs at once. The same words and logic are on the phone page (mobile.js); Simple uses both pages.
     const qomWait = new Map();   // client_id -> the waiting message { chatId, agent, message, images, userEl, ts, client_id, position, behindName, fromName, line, ... }
-    // A turn the hub starts for one of this page's own waiting messages is this page's (its stream attaches a moment later):
-    // the turn_start mirror must not draw it again as from another device or the hub.
-    const qomReleased = new Map();   // agent -> { message, ts } of the waiting message whose turn just began here
-    function qomOwnsTurn(agent, message) {
-      if (!agent) return false;
-      const text = typeof message === 'string' ? message.trim() : '';
-      const r = qomReleased.get(agent);
-      if (r && Date.now() - r.ts < 60000 && r.message === text) return true;   // kept for its minute: turn_start and a re-attach may both ask
-      for (const w of qomWait.values()) if (w.agent === agent && !w.ended && !w.refused && String(w.message || '').trim() === text) return true;
-      return false;
+    // A turn the hub starts for one of this page's own waiting messages carries that message's client_id (origin.queued):
+    // it is this page's turn (its stream attaches a moment later), so the turn_start mirror must not draw it again.
+    const qomReleased = new Map();   // client_id -> { agent, ts } from the release until the page's stream has taken the turn over
+    function qomOwnsTurn(agent, origin) {
+      const id = origin && origin.kind === 'user' && typeof origin.queued === 'string' ? origin.queued : null;
+      if (!agent || !id) return false;
+      const r = qomReleased.get(id);
+      if (r) return r.agent === agent;
+      const w = qomWait.get(id);
+      return !!(w && w.agent === agent && !w.refused);
     }
     function qomKey() { return 'mmQueuedOwnerMessages'; }
     // Who is signed in: the account id, '' when the hub has no accounts, null while the page does not know yet (nothing is restored or sent then).
@@ -14858,7 +14858,7 @@
     }
     // The first normal event arrived: the line goes, the request carries on as a completely normal turn stream.
     function qomStarted(w, reader, rest) {
-      qomReleased.set(w.agent, { message: String(w.message || '').trim(), ts: Date.now() });
+      qomReleased.set(w.client_id, { agent: w.agent, ts: Date.now() });   // until qomBegin has handed the turn to the page's stream
       qomEnd(w, true);
       const bytes = new TextEncoder().encode(rest);
       let first = bytes.length > 0;
@@ -14988,9 +14988,11 @@
     }
     // The turn began: the normal send takes the request over (the person's message is already drawn; nothing is drawn twice).
     async function qomBegin(w, response) {
-      for (let i = 0; i < 100 && chats[w.chatId] && chats[w.chatId].controller; i++) await new Promise(r => setTimeout(r, 200));   // the earlier reply is still closing
-      if (!chats[w.chatId]) { try { response.body.getReader().cancel(); } catch (e) { /* gone */ } return; }
-      return sendSoloMessage(w.chatId, 0, { fallback: { text: w.message, images: w.images || [] }, qomTurn: { response, userEl: w.userEl } });
+      try {
+        for (let i = 0; i < 100 && chats[w.chatId] && chats[w.chatId].controller; i++) await new Promise(r => setTimeout(r, 200));   // the earlier reply is still closing
+        if (!chats[w.chatId]) { try { response.body.getReader().cancel(); } catch (e) { /* gone */ } return; }
+        return await sendSoloMessage(w.chatId, 0, { fallback: { text: w.message, images: w.images || [] }, qomTurn: { response, userEl: w.userEl } });
+      } finally { qomReleased.delete(w.client_id); }   // handed over, cancelled or failed: the turn is no longer claimed
     }
     // The agent is busy answering a consultation (not a turn of the person's own)
     function qomOnConsult(agent, chat) {

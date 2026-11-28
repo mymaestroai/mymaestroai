@@ -10520,15 +10520,20 @@ function setSendMode(own) {
 // (it would go to the other agent): it waits as its own request, the hub runs it next, and "Answer me now" pauses the
 // consultation so it runs at once. The same words and logic are on the desktop page (app.js); Simple uses both pages.
 const qomWait = new Map();   // client_id -> the waiting message { chatId, agent, message, images, userEl, ts, client_id, position, behindName, fromName, line, ... }
-// A turn the hub starts for one of this page's own waiting messages is this page's (its stream attaches a moment later):
-// the turn_start mirror must not draw it again as from another device or the hub.
-const qomReleased = new Map();   // agent -> { message, ts } of the waiting message whose turn just began here
-function qomOwnsTurn(agent, message) {
-  if (!agent) return false;
-  const text = typeof message === 'string' ? message.trim() : '';
-  const r = qomReleased.get(agent);
-  if (r && Date.now() - r.ts < 60000 && r.message === text) return true;   // kept for its minute: turn_start and a re-attach may both ask
-  for (const w of qomWait.values()) if (w.agent === agent && !w.ended && !w.refused && String(w.message || '').trim() === text) return true;
+// A turn the hub starts for one of this page's own waiting messages carries that message's client_id (origin.queued):
+// it is this page's turn (its stream attaches a moment later), so the turn_start mirror must not draw it again.
+const qomReleased = new Map();   // client_id -> { agent, ts } from the release until the page's stream has taken the turn over
+function qomOwnsTurn(agent, origin) {
+  const id = origin && origin.kind === 'user' && typeof origin.queued === 'string' ? origin.queued : null;
+  if (!agent || !id) return false;
+  const r = qomReleased.get(id);
+  if (r) return r.agent === agent;
+  const w = qomWait.get(id);
+  return !!(w && w.agent === agent && !w.refused);
+}
+// The phone's re-attach waits only while one of its released messages is being handed to its own stream (at most 30 s).
+function qomHandingOff(agent) {
+  for (const r of qomReleased.values()) if (r.agent === agent && Date.now() - r.ts < 30000) return true;
   return false;
 }
 function qomKey() { return 'mmQueuedOwnerMessages'; }
@@ -10674,7 +10679,7 @@ function qomEvent(w, ev) {
 }
 // The first normal event arrived: the line goes, the request carries on as a completely normal turn stream.
 function qomStarted(w, reader, rest) {
-  qomReleased.set(w.agent, { message: String(w.message || '').trim(), ts: Date.now() });
+  qomReleased.set(w.client_id, { agent: w.agent, ts: Date.now() });   // until qomBegin has handed the turn to the page's stream
   qomEnd(w, true);
   const bytes = new TextEncoder().encode(rest);
   let first = bytes.length > 0;
@@ -10789,13 +10794,15 @@ function qomReread(w) {
 }
 // The turn began: the normal send takes the request over (the person's message is already drawn; nothing is drawn twice).
 async function qomBegin(w, response) {
-  for (let i = 0; i < 100 && (streams.has(w.agent) || reattaches.has(w.agent)); i++) await new Promise(r => setTimeout(r, 200));   // the earlier reply is still closing
-  if (current !== w.agent || screen !== 'chat') {   // another chat is open: the turn runs on the hub and its reply lands in the history
-    try { response.body.getReader().cancel(); } catch (e) { /* gone */ }
-    markUnread(w.agent);
-    return;
-  }
-  return sendMessage({ agent: w.agent, text: w.message, images: w.images || [], userEl: w.userEl, response });
+  try {
+    for (let i = 0; i < 100 && (streams.has(w.agent) || reattaches.has(w.agent)); i++) await new Promise(r => setTimeout(r, 200));   // the earlier reply is still closing
+    if (current !== w.agent || screen !== 'chat') {   // another chat is open: the turn runs on the hub and its reply lands in the history
+      try { response.body.getReader().cancel(); } catch (e) { /* gone */ }
+      markUnread(w.agent);
+      return;
+    }
+    return await sendMessage({ agent: w.agent, text: w.message, images: w.images || [], userEl: w.userEl, response });
+  } finally { qomReleased.delete(w.client_id); }   // handed over, cancelled or failed: the turn is no longer claimed
 }
 // The agent is busy answering a consultation (not a turn of this phone's own)
 function qomOnConsult(agent) {
@@ -13720,7 +13727,7 @@ function followedHubTurn(agent) {
 function reattachIfIdle(agent, partial = '') {
   if (!agent || !chatOpenFor(agent) || streams.has(agent) || reattaches.has(agent)) return;
   if (followedHubTurn(agent)) return;   // that turn is already drawn live; a re-attach would be a second copy
-  { const r = typeof qomReleased !== 'undefined' ? qomReleased.get(agent) : null; if (r && Date.now() - r.ts < 60000) return; }   // a waiting message of this phone's just began: its own stream is about to draw it
+  if (typeof qomHandingOff === 'function' && qomHandingOff(agent)) return;   // a waiting message of this phone's is being handed to its own stream
   const s = live[agent];
   if (!s || !s.busy) return;
   if (busyCardInfo(agent)) return;   // main view, a hub-started turn is running: the busy card says so, no live bubble
@@ -15439,7 +15446,7 @@ function onTurnStart(ev) {
   if (ev.turnId && hubTurns[ev.turnId]) return;   // replayed after a reconnect (?since=): the turn is already followed
   setLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || originLabel(ev.origin), ...(ev.reviewingTeamFor || (ev.origin && ev.origin.kind === 'optimize_team' && ev.origin.for) ? { reviewingTeamFor: ev.reviewingTeamFor || ev.origin.for } : {}), ...(ev.settingUpTeams || (ev.origin && ev.origin.kind === 'team_setup') ? { settingUpTeams: true } : {}) });
   noteTurnOrigin(ev.agent, ev.turnId, ev.origin, ev.startedAt);
-  const own = ev.origin?.kind === 'user' && (ownTurnFor(ev.agent) || (typeof qomOwnsTurn === 'function' && qomOwnsTurn(ev.agent, ev.message)));   // a waiting message of this phone's: its own stream draws it
+  const own = ev.origin?.kind === 'user' && (ownTurnFor(ev.agent) || (typeof qomOwnsTurn === 'function' && qomOwnsTurn(ev.agent, ev.origin)));   // a waiting message of this phone's: its own stream draws it
   if (chatOpenFor(ev.agent) && !streams.has(ev.agent) && !own) {
     // The last saved entry: renderHistory leaves out a running turn's inProgress entry, so does this.
     let last;

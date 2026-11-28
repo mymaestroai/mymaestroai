@@ -921,28 +921,40 @@ test('desktop: while the agent answers a consultation the composer reads Send wi
   assert.match(APP, /busyCardRefresh\(c\); if \(typeof qomComposerLook === 'function'\) qomComposerLook\(c\);/);
 });
 
-// A released waiting message's turn_start comes to the page before its own stream attaches: it is this page's turn.
+// A released waiting message's turn_start comes to the page before its own stream attaches: the hub names its client_id.
 for (const [label, SRC] of [['desktop', APP], ['phone', MOBILE]]) {
-  test(`${label}: qomOwnsTurn claims a turn for one of the page's waiting messages, or one released within the minute; not other text, agents or refused ones`, () => {
+  test(`${label}: qomOwnsTurn claims a turn only by its client_id (origin.queued): a waiting or just-released message of this page's; never by text`, () => {
     const qomWait = new Map(), qomReleased = new Map();
     const { api } = load(SRC, ['qomOwnsTurn'], { qomWait, qomReleased });
-    qomWait.set('a', { agent: 'lead', message: 'Please check the plan', ended: false });
-    assert.strictEqual(api.qomOwnsTurn('lead', '  Please check the plan '), true);
-    assert.strictEqual(api.qomOwnsTurn('lead', 'something else'), false);
-    assert.strictEqual(api.qomOwnsTurn('helper', 'Please check the plan'), false);
-    qomWait.get('a').refused = true;
-    assert.strictEqual(api.qomOwnsTurn('lead', 'Please check the plan'), false, 'a refused message never ran');
+    qomWait.set('cid-1', { agent: 'lead', client_id: 'cid-1', message: 'Continue' });
+    assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'user', queued: 'cid-1' }), true);
+    assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'user' }), false, 'the same words sent from another device: not claimed');
+    assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'user', queued: 'cid-other' }), false, 'another device\'s waiting message');
+    assert.strictEqual(api.qomOwnsTurn('helper', { kind: 'user', queued: 'cid-1' }), false);
+    assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'consultation', queued: 'cid-1' }), false);
+    qomWait.get('cid-1').refused = true;
+    assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'user', queued: 'cid-1' }), false, 'a refused message never ran');
     qomWait.clear();
-    qomReleased.set('lead', { message: 'released one', ts: Date.now() - 5000 });
-    assert.strictEqual(api.qomOwnsTurn('lead', 'released one'), true);
-    assert.strictEqual(api.qomOwnsTurn('lead', 'released one'), true, 'kept for its minute: turn_start and a re-attach may both ask');
-    qomReleased.set('lead', { message: 'released one', ts: Date.now() - 61000 });
-    assert.strictEqual(api.qomOwnsTurn('lead', 'released one'), false, 'older than a minute');
-    assert.match(fnSource(SRC, 'qomStarted'), /qomReleased\.set\(w\.agent, \{ message: String\(w\.message \|\| ''\)\.trim\(\), ts: Date\.now\(\) \}\);\s*qomEnd\(w, true\);/);
+    qomReleased.set('cid-2', { agent: 'lead', ts: Date.now() });
+    assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'user', queued: 'cid-2' }), true, 'released, being handed to the page\'s stream');
+    qomReleased.delete('cid-2');
+    assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'user', queued: 'cid-2' }), false, 'handed over or failed: no longer claimed');
+    assert.match(fnSource(SRC, 'qomStarted'), /qomReleased\.set\(w\.client_id, \{ agent: w\.agent, ts: Date\.now\(\) \}\);[^\n]*\n\s*qomEnd\(w, true\);/);
+    assert.match(fnSource(SRC, 'qomBegin'), /\} finally \{ qomReleased\.delete\(w\.client_id\); \}/);
   });
 }
-test('wiring: the desktop turn_start mirror and the phone turn_start and re-attach skip a turn of the page\'s own waiting message', () => {
-  assert.match(fnSource(APP, 'onHubTurnStart'), /chat\.status === 'thinking'\) return;\s*if \(typeof qomOwnsTurn === 'function' && qomOwnsTurn\(ev\.agent, ev\.message\)\) return;/);
-  assert.match(fnSource(MOBILE, 'onTurnStart'), /const own = ev\.origin\?\.kind === 'user' && \(ownTurnFor\(ev\.agent\) \|\| \(typeof qomOwnsTurn === 'function' && qomOwnsTurn\(ev\.agent, ev\.message\)\)\);/);
-  assert.match(fnSource(MOBILE, 'reattachIfIdle'), /const r = typeof qomReleased !== 'undefined' \? qomReleased\.get\(agent\) : null; if \(r && Date\.now\(\) - r\.ts < 60000\) return;/);
+test('phone: the re-attach waits only while a released message of this phone\'s is being handed to its stream', () => {
+  const qomReleased = new Map();
+  const { api } = load(MOBILE, ['qomHandingOff'], { qomReleased });
+  assert.strictEqual(api.qomHandingOff('lead'), false);
+  qomReleased.set('c', { agent: 'lead', ts: Date.now() });
+  assert.strictEqual(api.qomHandingOff('lead'), true);
+  assert.strictEqual(api.qomHandingOff('helper'), false);
+  qomReleased.set('c', { agent: 'lead', ts: Date.now() - 31000 });
+  assert.strictEqual(api.qomHandingOff('lead'), false, 'never longer than 30 s');
+});
+test('wiring: the desktop turn_start mirror, the phone turn_start and the phone re-attach skip a turn of the page\'s own waiting message', () => {
+  assert.match(fnSource(APP, 'onHubTurnStart'), /chat\.status === 'thinking'\) return;\s*if \(typeof qomOwnsTurn === 'function' && qomOwnsTurn\(ev\.agent, ev\.origin\)\) return;/);
+  assert.match(fnSource(MOBILE, 'onTurnStart'), /const own = ev\.origin\?\.kind === 'user' && \(ownTurnFor\(ev\.agent\) \|\| \(typeof qomOwnsTurn === 'function' && qomOwnsTurn\(ev\.agent, ev\.origin\)\)\);/);
+  assert.match(fnSource(MOBILE, 'reattachIfIdle'), /if \(typeof qomHandingOff === 'function' && qomHandingOff\(agent\)\) return;/);
 });

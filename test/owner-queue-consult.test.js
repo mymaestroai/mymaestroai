@@ -41,7 +41,7 @@ async function boot() {
   T.setTestStreamer(async ({ agent, res, signal, message: full, ownerTurn, admin }) => {
     const message = full.replace(/^\[Consultation from agent "[^"]*"\]\n\n/, '').replace(/^\[This request was sent at[^\]]*\]\n\n/, '');
     const t = T.turnRegistry.get(agent);
-    starts.push({ agent, message, kind: t && t.origin ? t.origin.kind : null, ownerTurn, admin });
+    starts.push({ agent, message, kind: t && t.origin ? t.origin.kind : null, queued: t && t.origin ? t.origin.queued : undefined, ownerTurn, admin });
     const consult = t && t.origin && t.origin.kind === 'consultation';
     if (consult && /partial/.test(message)) T.sendSSE(res, T.makeChunk('partial text ', 'm'));
     const g = [...gates].filter(([k]) => message.startsWith(k)).map(([, v]) => v).pop();
@@ -122,6 +122,9 @@ test('(a) a person message waits behind a consultation: queued event at once, ru
   await until(() => c.ended, 'owner response ended');
   assert.strictEqual(sdkChat.ownerWaitersFor(B), 0);
   assert.deepStrictEqual(startedMessages(), ['consult-a', 'owner-a'], 'consultation first, then the owner');
+  const ownerStart = starts.find(x => x.message === 'owner-a');
+  assert.strictEqual(ownerStart.kind, 'user');
+  assert.strictEqual(ownerStart.queued, 'ca', 'the released turn names its client_id, so the page that sent it draws it once');
   await idle(B);
 });
 
@@ -163,6 +166,7 @@ test('(c) unchanged without the flag, from a token, and when the running turn is
   const second = person(B, 'second-c', { client_id: 'c-second' });
   await until(() => second.status !== null, 'second answered');
   assert.strictEqual(second.status, 409);
+  assert.strictEqual(starts.find(x => x.message === 'own-c').queued, undefined, 'an ordinary send names no client_id');
   own.open(); await until(() => first.ended, 'own turn ended'); await idle(B);
 });
 
