@@ -32,8 +32,12 @@ test('the real shapes: cd X && write, B=X; ... $B/..., and relative cd from a fo
   inside(`mkdir -p ${FX}/new/deep && cd ${FX}/new/deep && touch a.txt`);
 });
 
-test('after ; or a new line the write is judged in the old folder too, and the refusal says to use &&', () => {
-  for (const cmd of [`cd ${FX}; cat > test/x.test.js <<'EOF'\nx\nEOF`, `cd ${FX}\necho hi > out.txt`, `cd ${FX} && echo a > f; echo b > g`]) {
+test('after ; or a new line: a cd into a folder that exists is taken to succeed; one that may fail leaves the old folder possible', () => {
+  // a cd into a folder that exists and can be entered when the command is judged: the next command runs there
+  // (Maestro's decision, 2026-11-28: ordinary `cd W && x; y` work is no longer refused)
+  for (const cmd of [`cd ${FX}; cat > test/x.test.js <<'EOF'\nx\nEOF`, `cd ${FX}\necho hi > out.txt`, `cd ${FX} && echo a > f; echo b > g`]) inside(cmd);
+  // a cd that may fail (its folder isn't there yet): the write is judged in the old folder too, and the refusal says to use &&
+  for (const cmd of [`cd ${FX}/not-yet; cat > test/x.test.js <<'EOF'\nx\nEOF`, `cd ${FX}/not-yet\necho hi > out.txt`, `cd ${FX}/not-yet && echo a > f; echo b > g`]) {
     const res = r(cmd);
     assert.strictEqual(res.cls, 'write_outside', JSON.stringify(cmd));
     assert.match(res.reason, /join it with &&/);
