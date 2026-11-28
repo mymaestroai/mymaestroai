@@ -671,3 +671,16 @@ test('(w) a same-person reconnect carries the new session: the original session 
   } finally { revoked.delete('session:sA'); }
   await idle(B);
 });
+
+test('(x) a queued send that finds the agent idle runs at once and still names its client_id (origin.queued), so the page draws it once', async () => {
+  starts.length = 0;
+  await idle(B);
+  const c = person(B, 'idle-x', { client_id: 'ix' });
+  await until(() => startedMessages().includes('idle-x'), 'turn started at once');
+  assert.strictEqual(c.queued().length, 0, 'no waiting: the agent was free');
+  const s = starts.find(x => x.message === 'idle-x');
+  assert.strictEqual(s.kind, 'user');
+  assert.strictEqual(s.queued, 'ix');
+  await until(() => c.ended, 'response ended');
+  await idle(B);
+});

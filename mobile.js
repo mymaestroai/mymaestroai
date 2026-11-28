@@ -10529,7 +10529,7 @@ function qomOwnsTurn(agent, origin) {
   const r = qomReleased.get(id);
   if (r) return r.agent === agent;
   const w = qomWait.get(id);
-  return !!(w && w.agent === agent && !w.refused);
+  return !!(w && w.agent === agent && !w.ended && !w.refused);   // ended: replaced by another tab, which holds the stream
 }
 // The phone's re-attach waits only while one of its released messages is being handed to its own stream (at most 30 s).
 function qomHandingOff(agent) {

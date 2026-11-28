@@ -14714,7 +14714,7 @@
       const r = qomReleased.get(id);
       if (r) return r.agent === agent;
       const w = qomWait.get(id);
-      return !!(w && w.agent === agent && !w.refused);
+      return !!(w && w.agent === agent && !w.ended && !w.refused);   // ended: replaced by another tab, which holds the stream
     }
     function qomKey() { return 'mmQueuedOwnerMessages'; }
     // Who is signed in: the account id, '' when the hub has no accounts, null while the page does not know yet (nothing is restored or sent then).

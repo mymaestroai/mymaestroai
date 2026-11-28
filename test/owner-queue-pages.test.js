@@ -932,6 +932,9 @@ for (const [label, SRC] of [['desktop', APP], ['phone', MOBILE]]) {
     assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'user', queued: 'cid-other' }), false, 'another device\'s waiting message');
     assert.strictEqual(api.qomOwnsTurn('helper', { kind: 'user', queued: 'cid-1' }), false);
     assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'consultation', queued: 'cid-1' }), false);
+    qomWait.get('cid-1').ended = true;
+    assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'user', queued: 'cid-1' }), false, 'ended (replaced by another tab, which holds the stream): not claimed');
+    qomWait.get('cid-1').ended = false;
     qomWait.get('cid-1').refused = true;
     assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'user', queued: 'cid-1' }), false, 'a refused message never ran');
     qomWait.clear();
