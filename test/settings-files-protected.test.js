@@ -243,7 +243,10 @@ test('round 5 follow-ups: bash -s reads stdin, only a real pipe feeds a shell, o
     const t0 = process.hrtime.bigint();
     const hit = tp.touchesSettingsFile({ tool: 'Bash', input: { command: big }, cwd: cwdOf(lead) });
     const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-    assert.ok(ms < 1000, `pathological nesting took ${ms} ms`);
+    // The bound catches runaway work, not a slow or loaded machine: the check grows about as fast as the command (5 levels =
+    // 0.9 MB, about 140 ms here; a loaded CI runner took 1.3 s against the old 1 s bound), while a runaway grows by orders
+    // of magnitude per level.
+    assert.ok(ms < 10000, `pathological nesting took ${ms} ms`);
     assert.strictEqual(hit, want, 'pathological nesting is judged');
     const d = dec(lead, 'Bash', { command: nest(inner, 3, 6) });
     if (want) assertRefused(d, 'pathological, names a protected file'); else assert.notStrictEqual(d.cls, 'settings_file', 'pathological, no protected name');
