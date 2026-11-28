@@ -1873,14 +1873,28 @@ async function handleHttpRequest(req, res) {
       // The owner's own message (same test as /api/chat below): lets connector_access be offered in this turn.
       if (body && typeof body === 'object') body.owner_turn = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService && access.isAdmin(req.hubUser);
       // Identity comes only from the authenticated session (req.hubUser), never from the body.
-      return handleChatStream(body, res, { userId: (req.hubUser && req.hubUser.id) || null, service: !!req.hubService, accounts: hubAuth.hasUsers(), admin: access.isAdmin(req.hubUser), person: !req.hubToken && !req.hubService });   // person: a browser session, not a program (queue_behind_consult is for people only)
+      // A waiting message (queue_behind_consult) checks access again when it is released (lib/sdk-chat pumpOwnerWaiters): the person's
+      // account must still exist, not be disabled, and still may use this agent (the same test as the AGENT_BODY rule above).
+      const askedUserId = (req.hubUser && req.hubUser.id) || null;
+      const sessionIsUser = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService;
+      const freshUser = () => (askedUserId ? hubAuth.getUser(askedUserId) : null);
+      const recheck = () => {
+        if (!askedUserId) return !hubAuth.hasUsers();
+        const u = freshUser();
+        if (!u || u.disabled) return false;
+        if (access.isAdmin(u)) return true;
+        const agentName = body && body.agent;
+        return !!agentName && access.canAccessAgent(u, agentName, { agents: require('./lib/agents').getAgentsSync(), resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) });
+      };
+      const ownerTurnNow = () => { const u = freshUser(); return sessionIsUser && !!u && !u.disabled && access.isAdmin(u); };
+      return handleChatStream(body, res, { userId: askedUserId, service: !!req.hubService, accounts: hubAuth.hasUsers(), admin: access.isAdmin(req.hubUser), person: !req.hubToken && !req.hubService, recheck, ownerTurnNow });   // person: a browser session, not a program (queue_behind_consult is for people only)
     }
 
     // Owner takeover: the person's message is waiting behind another agent's consultation of this agent; pause that consultation now.
     if (pathname === '/api/chat/takeover' && req.method === 'POST') {
       if (req.hubToken || req.hubService) return jsonResponse(res, 403, { ok: false, error: 'Only a person at the browser can pause a consultation.' });
       const body = JSON.parse(await readBody(req));
-      return jsonResponse(res, 200, require('./lib/sdk-chat').takeoverConsultation(String(body?.agent || ''), { clientId: body?.client_id }));
+      return jsonResponse(res, 200, require('./lib/sdk-chat').takeoverConsultation(String(body?.agent || ''), { clientId: body?.client_id, userId: req.hubUser ? req.hubUser.id : '' }));
     }
 
     if (pathname === '/api/chat' && req.method === 'POST') {

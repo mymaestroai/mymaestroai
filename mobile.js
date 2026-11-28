@@ -63,6 +63,7 @@ async function api(path, opts = {}) {
     redirectingToLogin = true;
     try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }   // no session: the last person's theme must not stay here
     try { if (window.HubLooks) window.HubLooks.forgetBanner(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
+    try { qomForgetAll(); } catch { /* blocked storage */ }   // waiting messages belong to a person: none stay for the next one
     location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search);
   }
   return res;
@@ -10520,16 +10521,30 @@ function setSendMode(own) {
 // consultation so it runs at once. The same words and logic are on the desktop page (app.js); Simple uses both pages.
 const qomWait = new Map();   // client_id -> the waiting message { chatId, agent, message, images, userEl, ts, client_id, position, behindName, fromName, line, ... }
 function qomKey() { return 'mmQueuedOwnerMessages'; }
-// Waiting messages kept on this device; one older than 6 hours is dropped.
-function qomStored() {
+// Who is signed in: the account id, '' when the hub has no accounts, null while the page does not know yet (nothing is restored or sent then).
+function qomUser() {
+  const me = typeof hubMe !== 'undefined' ? hubMe : null;
+  if (!me) return null;
+  return me.user && me.user.id != null ? String(me.user.id) : '';
+}
+// Waiting messages kept on this device (every person's); one older than 6 hours is dropped.
+function qomAll() {
   let list = [];
   try { list = JSON.parse(localStorage.getItem(qomKey()) || '[]'); } catch (e) { list = []; }
   const now = Date.now();
   return (Array.isArray(list) ? list : []).filter(e => e && typeof e.agent === 'string' && typeof e.client_id === 'string' && typeof e.message === 'string' && now - Number(e.ts) < 6 * 3600 * 1000);
 }
+// Only this person's waiting messages (nothing while the page does not know who is signed in).
+function qomStored(user) {
+  const u = user === undefined ? qomUser() : user;
+  if (u === null) return [];
+  return qomAll().filter(e => String(e.user || '') === u);
+}
 function qomSave(list) { try { localStorage.setItem(qomKey(), JSON.stringify(list)); } catch (e) { /* storage off or full: the message still waits on this page */ } }
-function qomKeep(w) { qomSave(qomStored().filter(e => e.client_id !== w.client_id).concat([{ agent: w.agent, client_id: w.client_id, message: w.message, ts: w.ts }])); }
-function qomForget(id) { qomSave(qomStored().filter(e => e.client_id !== id)); }
+function qomKeep(w) { const u = qomUser() || ''; qomSave(qomAll().filter(e => !(e.client_id === w.client_id && String(e.user || '') === u)).concat([{ agent: w.agent, client_id: w.client_id, message: w.message, ts: w.ts, user: u }])); }
+function qomForget(id) { const u = qomUser(); if (u === null) return; qomSave(qomAll().filter(e => !(e.client_id === id && String(e.user || '') === u))); }
+// Sign-out: no waiting message stays on this device for the next person.
+function qomForgetAll() { try { localStorage.removeItem(qomKey()); } catch (e) { /* blocked storage */ } }
 function qomNewId() { return `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`; }
 function qomHidden() { return typeof document !== 'undefined' && !!document.hidden; }
 function qomWords(behind, from, position) {
@@ -10688,7 +10703,7 @@ async function qomRun(w) {
 }
 // Send every kept waiting message again with its own client_id (the hub lets the new request take the old one's place, or answers already_sent).
 function qomResendAll() {
-  if (qomHidden()) return;
+  if (qomHidden() || qomUser() === null) return;   // not while the page does not know who is signed in
   for (const e of qomStored()) {
     if (qomWait.has(e.client_id)) continue;
     const w = qomRestore(e);
@@ -16530,6 +16545,7 @@ async function paintMenuCredit() {
 async function signOut() {
   try { if (window.HubLooks) window.HubLooks.forgetTheme(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
   try { if (window.HubLooks) window.HubLooks.forgetBanner(window.HubLooks.storageOf(window)); } catch { /* blocked storage */ }
+  try { qomForgetAll(); } catch { /* blocked storage */ }
   try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
   location.href = '/login';
 }

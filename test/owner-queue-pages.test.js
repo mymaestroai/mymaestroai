@@ -59,12 +59,12 @@ function makeStream() {
   const ev = (o) => push(`data: ${JSON.stringify(o)}\n\n`);
   return { response: { ok: true, status: 200, body: { getReader: () => reader } }, push, end, ev, reader };
 }
-const memStorage = (init) => { const m = new Map(Object.entries(init || {})); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, m }; };
+const memStorage = (init) => { const m = new Map(Object.entries(init || {})); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: (k) => { m.delete(k); }, m }; };
 const NAMES = { lead: 'Lead', helper: 'Helper' };
-const QOM_SHARED = ['qomKey', 'qomStored', 'qomSave', 'qomKeep', 'qomForget', 'qomNewId', 'qomHidden', 'qomWords', 'qomLineText', 'qomWaiting', 'qomButton', 'qomPaint', 'qomTakeover', 'qomScan', 'qomEnd', 'qomEvent', 'qomStarted', 'qomRun', 'qomResendAll', 'qomEnqueue', 'qomName', 'qomPost', 'qomStream', 'qomReady', 'qomRestore', 'qomReread', 'qomBegin', 'qomOnConsult', 'qomSendNew', 'qomDecorate', 'qomPaintBusy'];
+const QOM_SHARED = ['qomKey', 'qomUser', 'qomAll', 'qomForgetAll', 'qomStored', 'qomSave', 'qomKeep', 'qomForget', 'qomNewId', 'qomHidden', 'qomWords', 'qomLineText', 'qomWaiting', 'qomButton', 'qomPaint', 'qomTakeover', 'qomScan', 'qomEnd', 'qomEvent', 'qomStarted', 'qomRun', 'qomResendAll', 'qomEnqueue', 'qomName', 'qomPost', 'qomStream', 'qomReady', 'qomRestore', 'qomReread', 'qomBegin', 'qomOnConsult', 'qomSendNew', 'qomDecorate', 'qomPaintBusy'];
 
 // ── desktop ──
-function desk({ status = { busy: true, consultedBy: 'helper' }, chatOver = {}, stored = {}, hidden = false } = {}) {
+function desk({ status = { busy: true, consultedBy: 'helper' }, chatOver = {}, stored = {}, hidden = false, me = { user: { id: 'sam' } } } = {}) {
   const doc = makeDoc(); doc.hidden = hidden;
   const bar = new El('div'); doc.root.appendChild(bar);
   const statusText = new El('span'); statusText.id = 'status-text-c1'; bar.appendChild(statusText);
@@ -75,7 +75,7 @@ function desk({ status = { busy: true, consultedBy: 'helper' }, chatOver = {}, s
   const streams = [];
   const answers = {};   // url -> async () => Response-like
   const ctx = {
-    document: doc, chats: { c1: chat }, skipInterjectOnce: new Set(), agentStatus: { lead: status }, busyRun: {}, localStorage: memStorage(stored), tzSentAt: 0,
+    window: { hubMe: me }, document: doc, chats: { c1: chat }, skipInterjectOnce: new Set(), agentStatus: { lead: status }, busyRun: {}, localStorage: memStorage(stored), tzSentAt: 0,
     qomWait: new Map(), setTimeout: () => 0, clearTimeout() {}, zoneHeader: () => ({}),
     agentDisplayName: (n) => NAMES[n] || n, findSoloChat: (a) => (a === 'lead' ? chat : null),
     appendMessageWithImages: (id, role, content) => { const d = new El('div'); d.own = content; d.className = `msg ${role}`; msgs.appendChild(d); return 'm1'; },
@@ -227,7 +227,8 @@ test('desktop: the waiting message is kept in localStorage; a lost stream is sen
   const id = d.calls.fetch[0].body.client_id;
   const kept = JSON.parse(d.ctx.localStorage.getItem('mmQueuedOwnerMessages'));
   assert.strictEqual(kept.length, 1);
-  assert.deepStrictEqual(Object.keys(kept[0]).sort(), ['agent', 'client_id', 'message', 'ts']);
+  assert.deepStrictEqual(Object.keys(kept[0]).sort(), ['agent', 'client_id', 'message', 'ts', 'user']);
+  assert.strictEqual(kept[0].user, 'sam', 'the entry belongs to the signed-in person');
   assert.strictEqual(kept[0].client_id, id);
   assert.strictEqual(kept[0].agent, 'lead');
   assert.strictEqual(kept[0].message, 'Please check the plan');
@@ -256,8 +257,8 @@ test('desktop: the waiting message is kept in localStorage; a lost stream is sen
 });
 
 test('desktop: a page that loaded with a kept message draws and sends it again with its client_id; entries older than 6 hours are dropped; replaced ends quietly', async () => {
-  const fresh = { agent: 'lead', client_id: 'qkeep1', message: 'Still waiting', ts: Date.now() - 60000 };
-  const old = { agent: 'lead', client_id: 'qold1', message: 'Ancient', ts: Date.now() - 7 * 3600 * 1000 };
+  const fresh = { agent: 'lead', client_id: 'qkeep1', message: 'Still waiting', ts: Date.now() - 60000, user: 'sam' };
+  const old = { agent: 'lead', client_id: 'qold1', message: 'Ancient', ts: Date.now() - 7 * 3600 * 1000, user: 'sam' };
   const d = desk({ stored: { mmQueuedOwnerMessages: JSON.stringify([fresh, old]) } });
   d.api.qomResendAll();
   await tick();
@@ -309,7 +310,7 @@ test('desktop: the busy line (header text and chat card) shows Answer me now onl
 });
 
 // ── phone ──
-function phone({ live = { lead: { busy: true, consultedBy: 'helper' } }, stored = {}, own = false, origin = null } = {}) {
+function phone({ live = { lead: { busy: true, consultedBy: 'helper' } }, stored = {}, own = false, origin = null, me = { user: { id: 'sam' } } } = {}) {
   const doc = makeDoc();
   const head = new El('div'); doc.root.appendChild(head);
   const busy = new El('button'); busy.id = 'chat-busy'; head.appendChild(busy);
@@ -320,7 +321,7 @@ function phone({ live = { lead: { busy: true, consultedBy: 'helper' } }, stored 
   const streams = []; const answers = {};
   const sstreams = new Map(); if (own) sstreams.set('lead', {});
   const ctx = {
-    document: doc, current: 'lead', screen: 'chat', live, streams: sstreams, reattaches: new Map(), pendingImages: [], imagesPreparing: new Set(), sendWaiting: false, tzSentAt: 0,
+    hubMe: me, document: doc, current: 'lead', screen: 'chat', live, streams: sstreams, reattaches: new Map(), pendingImages: [], imagesPreparing: new Set(), sendWaiting: false, tzSentAt: 0,
     localStorage: memStorage(stored), qomWait: new Map(), setTimeout: () => 0, clearTimeout() {}, zoneHeader: () => ({}),
     turnOrigins: origin ? { lead: origin } : {}, openTurns: {},
     $: (id) => doc.getElementById(id), chatEl: () => msgs, displayName: (n) => NAMES[n] || n,
@@ -436,7 +437,7 @@ test('phone: kept in localStorage; a lost stream is sent again with the same cli
   assert.strictEqual(linesOf(p.msgs).length, 0);
   assert.deepStrictEqual(p.calls.reread, ['lead']);
   // a reload: kept entries older than 6 hours are dropped, a fresh one is drawn and sent again
-  const q = phone({ stored: { mmQueuedOwnerMessages: JSON.stringify([{ agent: 'lead', client_id: 'qk', message: 'kept', ts: Date.now() - 1000 }, { agent: 'lead', client_id: 'qo', message: 'old', ts: Date.now() - 7 * 3600 * 1000 }]) } });
+  const q = phone({ stored: { mmQueuedOwnerMessages: JSON.stringify([{ agent: 'lead', client_id: 'qk', message: 'kept', ts: Date.now() - 1000, user: 'sam' }, { agent: 'lead', client_id: 'qo', message: 'old', ts: Date.now() - 7 * 3600 * 1000, user: 'sam' }]) } });
   q.api.qomResendAll();
   await tick();
   assert.deepStrictEqual(q.calls.api.map(c => c.body.client_id), ['qk']);
@@ -486,4 +487,59 @@ test('both pages: the same words, the same storage key, and the service worker i
   assert.match(APP, /qomOnConsult\(chat\.agent, chat\)\) return qomSendNew\(/);
   assert.match(MOBILE, /if \(!fallback && typeof qomOnConsult === 'function' && qomOnConsult\(agent\)\) \{ await qomSendNew\(agent\); return; \}\s*\n\s*if \(!fallback && \(isBusy\(agent\)/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8'), /const VERSION = 'hub-mobile-v113';/);
+});
+
+// ── person scope (both pages) ──
+const entry = (id, user, extra = {}) => ({ agent: 'lead', client_id: id, message: `m-${id}`, ts: Date.now() - 1000, ...(user === undefined ? {} : { user }), ...extra });
+
+test('desktop: waiting messages are kept per person; another person\'s entries are neither restored nor sent, and keeping one leaves the others in the key', async () => {
+  const d = desk({ me: { user: { id: 'sam' } }, stored: { mmQueuedOwnerMessages: JSON.stringify([entry('mine', 'sam'), entry('theirs', 'lee'), entry('nobody')]) } });
+  assert.deepStrictEqual(d.api.qomStored().map(e => e.client_id), ['mine']);
+  assert.deepStrictEqual(d.api.qomStored('lee').map(e => e.client_id), ['theirs']);
+  d.api.qomResendAll();
+  await tick();
+  assert.deepStrictEqual(d.calls.fetch.map(c => c.body.client_id), ['mine'], 'only this person\'s message is sent again');
+  await d.api.sendSoloMessage('c1');
+  await tick();
+  const all = JSON.parse(d.ctx.localStorage.getItem('mmQueuedOwnerMessages'));
+  assert.ok(all.some(e => e.client_id === 'theirs' && e.user === 'lee'), 'the other person\'s entry is still stored');
+  assert.ok(all.some(e => e.user === 'sam' && e.message === 'Please check the plan'));
+});
+
+test('desktop: nothing is restored or sent until the page knows who is signed in; no accounts -> the empty person', async () => {
+  const d = desk({ me: null, stored: { mmQueuedOwnerMessages: JSON.stringify([entry('mine', 'sam'), entry('plain', '')]) } });
+  assert.strictEqual(d.api.qomStored().length, 0);
+  d.api.qomResendAll();
+  await tick();
+  assert.strictEqual(d.calls.fetch.length, 0, 'nothing sent while hubMe is not loaded');
+  assert.strictEqual(d.msgs.children.length, 0, 'nothing drawn');
+  d.vctx.window.hubMe = { user: { id: 'sam' } };
+  d.api.qomResendAll();
+  await tick();
+  assert.deepStrictEqual(d.calls.fetch.map(c => c.body.client_id), ['mine']);
+  const n = desk({ me: { user: null }, stored: { mmQueuedOwnerMessages: JSON.stringify([entry('mine', 'sam'), entry('plain', '')]) } });
+  assert.deepStrictEqual(n.api.qomStored().map(e => e.client_id), ['plain']);
+});
+
+test('desktop: sign-out removes the whole key (and the page calls it where it forgets the theme)', () => {
+  const d = desk({ stored: { mmQueuedOwnerMessages: JSON.stringify([entry('mine', 'sam'), entry('theirs', 'lee')]) } });
+  d.api.qomForgetAll();
+  assert.strictEqual(d.ctx.localStorage.getItem('mmQueuedOwnerMessages'), null);
+  assert.match(fnSource(APP, 'signOut'), /qomForgetAll\(\)/);
+});
+
+test('phone: per person, nothing before hubMe is loaded, sign-out removes the key', async () => {
+  const p = phone({ me: { user: { id: 'sam' } }, stored: { mmQueuedOwnerMessages: JSON.stringify([entry('mine', 'sam'), entry('theirs', 'lee'), entry('nobody')]) } });
+  assert.deepStrictEqual(p.api.qomStored().map(e => e.client_id), ['mine']);
+  p.api.qomResendAll();
+  await tick();
+  assert.deepStrictEqual(p.calls.api.map(c => c.body.client_id), ['mine']);
+  const w = phone({ me: null, stored: { mmQueuedOwnerMessages: JSON.stringify([entry('mine', 'sam')]) } });
+  w.api.qomResendAll();
+  await tick();
+  assert.strictEqual(w.calls.api.length, 0, 'nothing sent while hubMe is not loaded');
+  p.api.qomForgetAll();
+  assert.strictEqual(p.ctx.localStorage.getItem('mmQueuedOwnerMessages'), null);
+  assert.match(fnSource(MOBILE, 'signOut'), /qomForgetAll\(\)/);
+  assert.match(MOBILE, /forgetBanner\(window\.HubLooks\.storageOf\(window\)\); \} catch \{[^\n]*\n\s*try \{ qomForgetAll\(\); \}[^\n]*\n\s*location\.href = '\/login\?next='/);
 });
