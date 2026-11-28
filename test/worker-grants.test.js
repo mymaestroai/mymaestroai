@@ -101,3 +101,39 @@ test('the policy gate builds a worker\'s record with workerRecord', () => {
   assert.match(src, /return workerGrants\.workerRecord\(name, parent, \{ isWalletAgent: \(n\) => walletTools\.isWalletAgent\(n\) \}\);/);
   assert.ok(!src.includes("Roots are not inherited: a worker stays a worker"));
 });
+
+test('a wallet parent passes on its denials, never its grants; a wallet check that fails is treated the same', () => {
+  const parent = { name: 'trader', category: 'worker', policy: { roots: [ROBOT], overrides: { web: 'deny', send: 'allow', destroy: 'allow' } }, localNetwork: true };
+  for (const isWalletAgent of [(n) => n === 'trader', () => { throw new Error('x'); }]) {
+    const rec = WG.workerRecord(W, parent, { isWalletAgent });
+    assert.deepEqual(rec.policy, { overrides: { web: 'deny' } });
+    assert.equal(rec.localNetwork, undefined);
+    const pol = tp.policyFor(rec);
+    assert.equal(pol.rules.web, 'deny', 'refused web like its parent');
+    assert.equal(pol.rules.send, 'deny');
+    assert.equal(pol.rules.destroy, 'deny');
+  }
+  const narrowed = WG.workerRecord(W, { name: 'x', policy: { overrides: { web: 'deny' } } });
+  assert.equal(tp.policyFor(narrowed).rules.web, 'deny', 'any parent\'s denial comes along');
+});
+
+test('a parent over its daily cap binds its workers: an inherited allow becomes ask', async () => {
+  const { createGate } = L('policy-gate');
+  const rec = WG.workerRecord(W, { name: 'magellan', category: 'primary', policy: { overrides: { send: 'allow' } } });
+  const mk = (over) => createGate({ getAgent: async () => rec, approvals: null, approvalsOn: () => false, log: () => {},
+    ledger: { overCap: (n) => (over.includes(n) ? { capped: true, reason: `${n} over its daily cap` } : { capped: false }) } });
+  const input = { command: 'curl -X POST https://example.com/hook -d x' };
+  const free = await mk([]).check({ agentName: W, tool: 'Bash', input, cwd: '/srv' });
+  assert.equal(free.allowed, true);
+  assert.ok(!/cards are off/.test(free.decision.reason || ''), 'below the cap: a plain allow');
+  const capped = await mk(['magellan']).check({ agentName: W, tool: 'Bash', input, cwd: '/srv' });
+  assert.match(capped.decision.reason || '', /cards are off/, 'the parent\'s cap turned the allow into an ask (cards off: allowed with that reason)');
+});
+
+test('the command lockbox judges a worker by the same record as the gate', () => {
+  const { createWire } = L('lockbox/wire');
+  const parent = granted();
+  const wire = createWire({ getAgents: () => [parent], getVirtual: (n) => (n === W ? { parent: 'magellan' } : null), getSetting: () => undefined, isWalletAgent: () => false });
+  assert.deepEqual(wire.resolveAgent(W).rulesRecord, WG.workerRecord(W, parent));
+  assert.deepEqual(wire.resolveAgent(W).rulesRecord.policy.roots, [ROBOT]);
+});
