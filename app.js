@@ -14707,12 +14707,12 @@
     const qomWait = new Map();   // client_id -> the waiting message { chatId, agent, message, images, userEl, ts, client_id, position, behindName, fromName, line, ... }
     // A turn the hub starts for one of this page's own waiting messages carries that message's client_id (origin.queued):
     // it is this page's turn (its stream attaches a moment later), so the turn_start mirror must not draw it again.
-    const qomReleased = new Map();   // client_id -> { agent, ts, done? }: from the release; kept 5 min after a completed hand-off (turn_start may come late)
+    const qomReleased = new Map();   // client_id -> { agent, ts, done? }: from the release; once done, kept for the life of the page (a turn_start may be replayed late)
     function qomOwnsTurn(agent, origin) {
       const id = origin && origin.kind === 'user' && typeof origin.queued === 'string' ? origin.queued : null;
       if (!agent || !id) return false;
       const r = qomReleased.get(id);
-      if (r) return r.agent === agent && (!r.done || Date.now() - r.done < 300000);
+      if (r) return r.agent === agent;
       const w = qomWait.get(id);
       return !!(w && w.agent === agent && !w.ended && !w.refused);   // ended: replaced by another tab, which holds the stream
     }
@@ -14858,7 +14858,6 @@
     }
     // The first normal event arrived: the line goes, the request carries on as a completely normal turn stream.
     function qomStarted(w, reader, rest) {
-      for (const [id, r] of qomReleased) if (r.done && Date.now() - r.done > 300000) qomReleased.delete(id);
       qomReleased.set(w.client_id, { agent: w.agent, ts: Date.now() });   // claimed while qomBegin hands the turn to the page's stream
       qomEnd(w, true);
       const bytes = new TextEncoder().encode(rest);
@@ -14996,7 +14995,7 @@
         const out = await sendSoloMessage(w.chatId, 0, { fallback: { text: w.message, images: w.images || [] }, qomTurn: { response, userEl: w.userEl } });
         handed = true;
         return out;
-      } finally {   // drawn by this page: the id stays claimed a while (a late turn_start); cancelled or failed: released at once
+      } finally {   // drawn by this page: the id stays claimed for the life of the page (a late or replayed turn_start; a stream lost part-way re-attaches itself); cancelled or failed: released at once
         const r = qomReleased.get(w.client_id);
         if (handed && r) r.done = Date.now(); else qomReleased.delete(w.client_id);
       }

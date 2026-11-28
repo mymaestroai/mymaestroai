@@ -942,8 +942,8 @@ for (const [label, SRC] of [['desktop', APP], ['phone', MOBILE]]) {
     assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'user', queued: 'cid-2' }), true, 'released, being handed to the page\'s stream');
     qomReleased.set('cid-2', { agent: 'lead', ts: Date.now() - 60000, done: Date.now() - 1000 });
     assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'user', queued: 'cid-2' }), true, 'drawn by this page: a late or replayed turn_start is still this page\'s');
-    qomReleased.set('cid-2', { agent: 'lead', ts: Date.now() - 400000, done: Date.now() - 301000 });
-    assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'user', queued: 'cid-2' }), false, 'after 5 minutes: not claimed');
+    qomReleased.set('cid-2', { agent: 'lead', ts: Date.now() - 4000000, done: Date.now() - 3600000 });
+    assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'user', queued: 'cid-2' }), true, 'an hour later (a turn_start replayed after a long disconnect): still this page\'s');
     qomReleased.delete('cid-2');
     assert.strictEqual(api.qomOwnsTurn('lead', { kind: 'user', queued: 'cid-2' }), false, 'cancelled or failed: no longer claimed');
     assert.match(fnSource(SRC, 'qomStarted'), /qomReleased\.set\(w\.client_id, \{ agent: w\.agent, ts: Date\.now\(\) \}\);[^\n]*\n\s*qomEnd\(w, true\);/);
