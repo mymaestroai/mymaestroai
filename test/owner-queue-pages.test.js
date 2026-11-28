@@ -967,3 +967,7 @@ test('wiring: the desktop turn_start mirror, the phone turn_start and the phone 
   assert.match(fnSource(MOBILE, 'onTurnStart'), /const own = ev\.origin\?\.kind === 'user' && \(ownTurnFor\(ev\.agent\) \|\| \(typeof qomOwnsTurn === 'function' && qomOwnsTurn\(ev\.agent, ev\.origin\)\)\);/);
   assert.match(fnSource(MOBILE, 'reattachIfIdle'), /if \(typeof qomHandingOff === 'function' && qomHandingOff\(agent\)\) return;/);
 });
+test('both pages: a handed-over turn is read even when its waiting entry has no text and no pictures (a caption-less photo restored in another tab)', () => {
+  assert.match(fnSource(MOBILE, 'sendMessage'), /if \(!text && !images\.length && !\(fallback && fallback\.response\)\) \{ notify\(new Error\('nothing to send'\)\); return; \}/);
+  assert.match(fnSource(APP, 'sendSoloMessage'), /if \(!content && pendingImages\.length === 0 && !qomTurn\) return;/);
+});

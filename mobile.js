@@ -13600,7 +13600,7 @@ async function sendMessage(fallback) {
   const input = $('msg-input');
   const text = fallback ? fallback.text : input.value.trim();
   const images = fallback ? (fallback.images || []) : pendingImages.slice();   // a fallback keeps the interjection's pictures
-  if (!text && !images.length) { notify(new Error('nothing to send')); return; }
+  if (!text && !images.length && !(fallback && fallback.response)) { notify(new Error('nothing to send')); return; }   // a handed-over turn (qomBegin) runs already: always read its stream
 
   if (!fallback) {
     input.value = '';

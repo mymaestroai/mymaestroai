@@ -15187,7 +15187,7 @@
       if (!retryCount) { chat.voiceTurn = !!chat.voiceDictated; chat.voiceDictated = false; }   // this reply follows a mic dictation: read it aloud when it ends (if the device asks for that)
 
       // Need content OR images to send
-      if (!content && pendingImages.length === 0) return;
+      if (!content && pendingImages.length === 0 && !qomTurn) return;   // a handed-over turn (qomBegin) runs already: always read its stream
 
       // Clear paused state if resuming
       if (chat.paused) {
