@@ -73,6 +73,8 @@ function makeDoc() {
 }
 const flush = async () => { for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r)); };
 const all = (p, sel) => p.querySelectorAll(sel);
+// every More box of the card open (the voice options have their own box under the voice row; the rest are in the section's box)
+const openMore = (card) => { for (let i = 0; i < 6; i++) { const h = Array.from(all(card.el(), '.ac-more-head')).find((b) => b.getAttribute('aria-expanded') !== 'true'); if (!h) break; h.click(); } };
 const rowOf = (p, id) => all(p, '.ac-row').find((r) => r.getAttribute('data-ac-row') === id);
 const rowIds = (p) => all(p, '.ac-row').map((r) => r.getAttribute('data-ac-row'));
 
@@ -191,7 +193,7 @@ test('every record of Basics and Role and team has a row (the recordings, the mo
 
 test('records whose control lives on a chip or repeats a row (the three notification triples, the phone model picker, the usage badge) are not drawn', async () => {
   const t = await opened({}, { section: 'basics' });
-  const more = all(t.card.el(), '.ac-more-head')[0]; more.click();
+  openMore(t.card);
   const ids = rowIds(t.card.el());
   for (const id of ['OPT-0475', 'OPT-0866', 'OPT-1075', 'OPT-0878', 'OPT-0178', 'OPT-0137', 'OPT-0702', 'OPT-0046']) assert.ok(!ids.includes(id), id + ' is not on the card');
   assert.deepStrictEqual(ids.slice(0, 5), ['OPT-0047', 'OPT-0057', 'OPT-0168', 'OPT-0023', 'OPT-0063']);
@@ -405,7 +407,7 @@ test('Notifications: the stored kinds show as the preset ("Only when I\'m away")
 
 test('Notifications, the three kinds under More: a select each, saved as one kind; a member may use all of them', async () => {
   const t = await opened({ me: MEMBER });
-  all(t.card.el(), '.ac-more-head')[0].click();
+  openMore(t.card);
   const q = rowOf(t.card.el(), 'OPT-0169');
   assert.deepStrictEqual(all(q, 'option').map((o) => o.textContent), ['Use my default', 'On', 'Off', "Only when I'm away"]);
   await pick(all(q, 'select')[0], 'away');
@@ -426,7 +428,7 @@ test('Voice: "Same as all agents" while none of the four voice fields is set, wi
   assert.deepStrictEqual(all(row, 'option').map((o) => o.textContent), ['Same as all agents', 'Its own voice']);
   assert.strictEqual(all(row, 'select')[0].value, 'same');
   assert.match(row.textContent, /Using the default for all agents/);
-  all(t.card.el(), '.ac-more-head')[0].click();
+  openMore(t.card);
   assert.ok(!rowIds(t.card.el()).includes('OPT-0022'), 'the voice options wait for "Its own voice"');
   assert.strictEqual(B.hasOwnVoice({ voice: { voice: '', stt: 'local', tts: 'local' } }), false);
   for (const v of [{ voice: 'amber' }, { stt: 'openai' }, { tts: 'google' }, { tts: 'openai', cloudVoice: 'coral' }]) assert.strictEqual(B.hasOwnVoice({ voice: v }), true, JSON.stringify(v));
@@ -552,7 +554,7 @@ test('Voice: back to "Same as all agents" clears the voice (PATCH {voice:null});
 
 test('Voice: an ElevenLabs voice needs its ID; a cloud engine for an agent kept on this computer asks first and says who may confirm', async () => {
   const t = await opened({ tweak: (l) => { l[1].voice = { voice: 'amber', stt: 'local', tts: 'local' }; l[1].keptOnBox = true; }, confirm: false });
-  all(t.card.el(), '.ac-more-head')[0].click();
+  openMore(t.card);
   await pick(all(rowOf(t.card.el(), 'OPT-0025'), 'input')[0], 'short');
   assert.match(rowOf(t.card.el(), 'OPT-0025').textContent, /Enter the ElevenLabs voice ID \(10 to 40 letters and digits\)/);
   assert.strictEqual(writes(t).length, 0);
@@ -561,7 +563,7 @@ test('Voice: an ElevenLabs voice needs its ID; a cloud engine for an agent kept 
   assert.match(t.confirms[0], /data is meant to stay on this computer[\s\S]*Google[\s\S]*Only the owner of this Maestro can confirm this/);
   assert.strictEqual(writes(t).length, 0, 'not confirmed, nothing saved');
   const ok = await opened({ tweak: (l) => { l[1].voice = { voice: 'amber', stt: 'local', tts: 'local' }; l[1].keptOnBox = true; } });
-  all(ok.card.el(), '.ac-more-head')[0].click();
+  openMore(ok.card);
   ok.state.fail['PATCH /api/agents/harbor'] = { status: 403, error: 'owner_confirmation_required' };
   await pick(all(rowOf(ok.card.el(), 'OPT-0022'), 'select')[0], 'google');
   assert.deepStrictEqual(ok.calls.filter((c) => c.method === 'PATCH').map((c) => c.body), [{ voice: { stt: 'google', cloudConfirm: true } }]);
@@ -655,7 +657,7 @@ test('Call display: a refusal from the hub is shown on the row and the saved val
 
 test('Call timing: Patient saves the preset, Custom the four numbers (and drops the preset); one number sends only itself', async () => {
   const t = await opened();
-  all(t.card.el(), '.ac-more-head')[0].click();
+  openMore(t.card);
   assert.ok(!rowIds(t.card.el()).includes('OPT-0029'));
   await pick(all(rowOf(t.card.el(), 'OPT-0028'), 'select')[0], 'patient');
   assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voiceDefaults: { preset: 'patient' } }]);
@@ -671,7 +673,7 @@ test('Call timing: Patient saves the preset, Custom the four numbers (and drops 
 test('R3-4: the pause and wait rows are selects offering only the values the server accepts (lib/ui-voice lists)', async () => {
   const voice = require('../lib/ui-voice');
   const t = await opened();
-  all(t.card.el(), '.ac-more-head')[0].click();
+  openMore(t.card);
   await pick(all(rowOf(t.card.el(), 'OPT-0028'), 'select')[0], 'custom');
   const optionsOf = (id) => {
     const s = all(rowOf(t.card.el(), id), 'select');
@@ -690,12 +692,12 @@ test('R3-4: the pause and wait rows are selects offering only the values the ser
 
 test('Recordings: only the owner of the Maestro may change them (the route\'s rule); the body carries only the changed key (the server merges)', async () => {
   const t = await opened({ tweak: (l) => { l[1].recordings = { keep: false, allowed: ['u1'], keepReplies: false, consentLine: 'Hi', mic: 'processed', announce: 'first' }; } });
-  all(t.card.el(), '.ac-more-head')[0].click();
+  openMore(t.card);
   const keep = all(rowOf(t.card.el(), 'OPT-0033'), 'input')[0];
   keep.checked = true; keep.dispatch('change'); await flush();
   assert.deepStrictEqual(writes(t).map((c) => [c.method, c.url, c.body]), [['PATCH', '/api/agents/harbor', { recordings: { keep: true } }]]);
   const notOwner = await opened({ me: { isAdmin: true, isOwner: false, user: { id: 'u9' } } });
-  all(notOwner.card.el(), '.ac-more-head')[0].click();
+  openMore(notOwner.card);
   const row = rowOf(notOwner.card.el(), 'OPT-0033');
   assert.strictEqual(all(row, 'input').length, 0);
   assert.match(row.textContent, /This can't be changed right now\./);
@@ -703,7 +705,7 @@ test('Recordings: only the owner of the Maestro may change them (the route\'s ru
 
 test('Model extras and limits: keep model, Auto per message, speed and price, longest reply, cheapest and fallback model', async () => {
   const t = await opened({ tweak: (l) => { l[1].tierOptions = ['standard', 'fast']; l[1].tierLabels = { standard: 'Standard', fast: 'Fast (costs more)' }; } });
-  all(t.card.el(), '.ac-more-head')[0].click();
+  openMore(t.card);
   const pin = all(rowOf(t.card.el(), 'OPT-0049'), 'input')[0]; pin.checked = true; pin.dispatch('change'); await flush();
   await pick(all(rowOf(t.card.el(), 'OPT-0058'), 'select')[0], 'fast');
   const mx = all(rowOf(t.card.el(), 'OPT-0066'), 'input')[0]; mx.value = '4000'; mx.dispatch('change'); await flush();
@@ -716,10 +718,10 @@ test('Model extras and limits: keep model, Auto per message, speed and price, lo
 // ported (P4-2) from test/service-tier.test.js, which pinned these two cases on the old agent page
 test('Speed and price: the row is hidden when only Standard is offered; a saved tier the model does not offer reads as Standard', async () => {
   const one = await opened({ tweak: (l) => { l[1].tierOptions = ['standard']; } });
-  all(one.card.el(), '.ac-more-head')[0].click();
+  openMore(one.card);
   assert.ok(!rowIds(one.card.el()).includes('OPT-0058'), 'hidden when only Standard is offered');
   const odd = await opened({ tweak: (l) => { l[1].tierOptions = ['standard', 'fast']; l[1].tierLabels = { standard: 'Standard', fast: 'Fast (costs more)' }; l[1].tier = 'economy'; } });
-  all(odd.card.el(), '.ac-more-head')[0].click();
+  openMore(odd.card);
   const sel = all(rowOf(odd.card.el(), 'OPT-0058'), 'select')[0];
   assert.strictEqual(sel.value, 'standard', 'an unsupported saved tier shows as Standard');
   assert.strictEqual(writes(odd).length, 0, 'showing it writes nothing');
@@ -729,7 +731,7 @@ test('Speed and price: the help line differs per provider (Economy offered or no
   const three = ['standard', 'fast', 'economy'];
   const help = async (model, tierOptions) => {
     const t = await opened({ tweak: (l) => { l[1].model = model; l[1].tierOptions = tierOptions; } });
-    all(t.card.el(), '.ac-more-head')[0].click();
+    openMore(t.card);
     return rowOf(t.card.el(), 'OPT-0058').textContent;
   };
   assert.match(await help('google/gemini-3-pro', three), /Gemini may often run Economy requests at Standard when it is busy\./);
@@ -741,7 +743,7 @@ test('Speed and price: the help line differs per provider (Economy offered or no
 
 test('Longest reply stays live for a member (the route lets a member set it); the other model extras do not', async () => {
   const t = await opened({ me: MEMBER });
-  all(t.card.el(), '.ac-more-head')[0].click();
+  openMore(t.card);
   assert.strictEqual(all(rowOf(t.card.el(), 'OPT-0066'), 'input').length, 1);
   assert.strictEqual(all(rowOf(t.card.el(), 'OPT-0075'), 'select').length, 0);
   assert.match(rowOf(t.card.el(), 'OPT-0075').textContent, /Only an admin can change this\./);
@@ -882,7 +884,7 @@ test('a member sees Basics only: no Role and team section, so no rename, owner, 
 // ---- 8b. phase 3 round 1: one save at a time, whole objects from a fresh read, lazy lists retry ---------------------------------
 test('Voice: only the changed key is sent (the server merges); what is checked (cloud confirmation) is read fresh', async () => {
   const t = await opened({ tweak: (l) => { l[1].voice = { voice: 'amber', stt: 'local', tts: 'local' }; } });
-  all(t.card.el(), '.ac-more-head')[0].click();
+  openMore(t.card);
   t.state.agents[1].voice = { voice: 'amber', stt: 'google', tts: 'local' };   // changed elsewhere; the card has not heard yet
   t.calls.length = 0;
   await pick(all(rowOf(t.card.el(), 'OPT-0026'), 'select')[0], '');
@@ -893,7 +895,7 @@ test('Voice: only the changed key is sent (the server merges); what is checked (
 
 test('Voice: going back to this computer for speech sends tts and removes the stored cloud voice with null', async () => {
   const t = await opened({ tweak: (l) => { l[1].voice = { voice: '', stt: 'local', tts: 'openai', cloudVoice: 'nova' }; } });
-  all(t.card.el(), '.ac-more-head')[0].click();
+  openMore(t.card);
   await pick(all(rowOf(t.card.el(), 'OPT-0024'), 'select')[0], 'local');
   assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voice: { tts: 'local', cloudVoice: null } }]);
 });
@@ -901,7 +903,7 @@ test('Voice: going back to this computer for speech sends tts and removes the st
 // Ported from the old agent page's cloud voice tests (ui-voice-cloud.test.js): the lists, no confirm for a normal agent, ask once for a kept one.
 test('Voice: the cloud voice lists; OpenAI and Google never send the other provider\'s voice; a normal agent asks nothing; a kept agent asks once for a new engine', async () => {
   const t = await opened({ tweak: (l) => { l[1].voice = { voice: 'amber', stt: 'local', tts: 'local' }; } });
-  all(t.card.el(), '.ac-more-head')[0].click();
+  openMore(t.card);
   const opts = all(all(rowOf(t.card.el(), 'OPT-0024'), 'select')[0], 'option').map((o) => o.getAttribute('value'));
   for (const v of ['local', 'openai:coral', 'openai:nova', 'google:Kore', 'google:Puck']) assert.ok(opts.includes(v), v + ' offered: ' + opts.join(','));
   await pick(all(rowOf(t.card.el(), 'OPT-0024'), 'select')[0], 'openai:coral');
@@ -912,7 +914,7 @@ test('Voice: the cloud voice lists; OpenAI and Google never send the other provi
   assert.deepStrictEqual(writes(t).map((c) => c.body), [{ voice: { tts: 'google', cloudVoice: 'Kore' } }]);
   // a kept agent: one question for the new engine, none for going back to local
   const k = await opened({ tweak: (l) => { l[1].voice = { voice: 'amber', stt: 'local', tts: 'local' }; l[1].keptOnBox = true; } });
-  all(k.card.el(), '.ac-more-head')[0].click();
+  openMore(k.card);
   await pick(all(rowOf(k.card.el(), 'OPT-0024'), 'select')[0], 'openai:coral');
   assert.strictEqual(k.confirms.length, 1);
   assert.deepStrictEqual(writes(k).map((c) => c.body), [{ voice: { tts: 'openai', cloudVoice: 'coral', cloudConfirm: true } }]);
@@ -932,7 +934,7 @@ test('Voice: "Its own voice" with nothing saved yet reads "(choose below)"; once
 
 test('a second change while a save is in flight is blocked (every control disabled); the next timing body is the Custom switch with the numbers read fresh', async () => {
   const t = await opened();
-  all(t.card.el(), '.ac-more-head')[0].click();
+  openMore(t.card);
   let release; t.state.gate = new Promise((r) => { release = r; });
   await pick(all(rowOf(t.card.el(), 'OPT-0063'), 'select')[0], 'pack:fox');
   const p = t.card.el();
@@ -1017,7 +1019,7 @@ test('R4-1: no row code calls fetch directly (every request goes through the car
 
 test('R4-4: the voice speed row is 0.75 to 1.5 in steps of 0.05, and 2.0 is refused before anything is sent; sensitivity is 0 to 100', async () => {
   const t = await opened({ tweak: (a) => { a[1].voiceDefaults = { endPause: 1200, continueWait: 3000, interruptSensitivity: 50, voiceSpeed: 1 }; } });
-  all(t.card.el(), '.ac-more-head')[0].click();
+  openMore(t.card);
   const input = all(rowOf(t.card.el(), 'OPT-0032'), 'input')[0];
   assert.deepStrictEqual(['min', 'max', 'step'].map((k) => input.getAttribute(k)), ['0.75', '1.5', '0.05']);
   t.calls.length = 0;
@@ -1034,7 +1036,7 @@ test('R4-4: the voice speed row is 0.75 to 1.5 in steps of 0.05, and 2.0 is refu
 
 test('R5-3: a voice speed that is not a multiple of 0.05, and a sensitivity that is not a whole number, are refused before saving', async () => {
   const t = await opened({ tweak: (a) => { a[1].voiceDefaults = { endPause: 1200, continueWait: 3000, interruptSensitivity: 50, voiceSpeed: 1 }; } });
-  all(t.card.el(), '.ac-more-head')[0].click();
+  openMore(t.card);
   t.calls.length = 0;
   for (const bad of ['1.07', '0.8333', '1.001']) {
     const input = all(rowOf(t.card.el(), 'OPT-0032'), 'input')[0];
@@ -1202,4 +1204,30 @@ test('Optimize team: for a main agent with a team; the help line reads the estim
   const nav = []; phone.win.navigate = (a, b) => nav.push([a, b]);
   btnOf(rowOf(phone.card.el(), 'OPT-0139'), 'Optimize team').click(); await flush();
   assert.deepStrictEqual(nav, [['chat', 'quill']], 'the phone opens the chat with navigate');
+});
+
+test('leftovers: the voice options have their own More box right under the voice row; the rest stay in the section box at the end', async () => {
+  const t = await opened();
+  const voiceRow = rowOf(t.card.el(), 'OPT-0023');
+  const body = voiceRow.parentNode;
+  const kids = Array.from(body.children);
+  const at = kids.indexOf(voiceRow);
+  const next = kids[at + 1];
+  assert.ok(next && String(next.className).includes('ac-more-head'), 'the box comes right after the voice row');
+  assert.match(next.textContent, /^▸ More voice options: /);
+  const last = kids.filter((k) => String(k.className).includes('ac-more-head')).pop();
+  assert.notStrictEqual(last, next, 'the other hidden rows keep their own box');
+  assert.match(last.textContent, /^▸ More: /);
+  assert.ok(!/Listens with|ElevenLabs voice ID/.test(last.textContent), 'no voice option is named in the section box');
+  // choosing its own voice opens this box (the voice options draw only for an agent with its own voice)
+  await pick(all(rowOf(t.card.el(), 'OPT-0023'), 'select')[0], 'own');
+  const ids = rowIds(t.card.el());
+  for (const id of ['OPT-0022', 'OPT-0024']) assert.ok(ids.includes(id), id + ' opens under the voice row');
+  assert.ok(ids.indexOf('OPT-0022') < ids.indexOf('OPT-0063'), 'above Call display');
+});
+
+test('leftovers: a link to a voice option opens the voice options box', async () => {
+  const t = await opened(undefined, { row: 'OPT-0024' });
+  const head = Array.from(all(t.card.el(), '.ac-more-head')).find((h) => /More voice options/.test(h.textContent));
+  assert.strictEqual(head.getAttribute('aria-expanded'), 'true');
 });

@@ -30,7 +30,7 @@ test('an Expert values row: label then help then "Default: ..." on the left, the
   const h = rowHtml(r);
   const left = h.slice(h.indexOf('class="st-xl"'), h.indexOf('class="st-xr"'));
   const right = h.slice(h.indexOf('class="st-xr"'));
-  assert.match(left, /^class="st-xl"><label for="st-p5c-filesMaxUploadMb">Biggest upload \(MB\)<\/label><div class="st-hint st-xhelp">The largest single file that can be uploaded to a Files folder\. <span id="st-p5c-filesMaxUploadMb-def">Default: 512 MB\.<\/span><\/div>/, 'the label first (its ⓘ goes right after it), then one dim paragraph: the help sentence, then Default');
+  assert.match(left, /^class="st-xl"><label for="st-p5c-filesMaxUploadMb">Biggest upload<\/label><div class="st-hint st-xhelp">The largest single file that can be uploaded to a Files folder\. <span id="st-p5c-filesMaxUploadMb-def">Default: 512 MB\.<\/span><\/div>/, 'the label first (its ⓘ goes right after it), then one dim paragraph: the help sentence, then Default');
   assert.ok(!left.includes('<input'), 'no control on the left');
   assert.match(right, /<input type="number" id="st-p5c-filesMaxUploadMb" data-setting="OPT-0951" min="1" max="100000" step="1" placeholder="512"/);
   assert.match(right, /<span[^>]*>MB<\/span>/, 'the unit follows the box');
@@ -64,7 +64,7 @@ test('every row of the table keeps its ids, data-setting and save path in the ne
 });
 
 test('the layout CSS: two columns, the right one drops under the left at 720 px and in the phone frame', () => {
-  assert.match(idx, /\.st-xrow \{ display: grid; grid-template-columns: minmax\(0, 1fr\) minmax\(0, 340px\);/);
+  assert.match(idx, /\.st-xrow \{ display: grid; grid-template-columns: minmax\(0, 1fr\) 340px;/);   // a fixed right track: every box starts at the same x
   assert.match(idx, /@media \(max-width: 720px\) \{\s*\.st-xrow \{ grid-template-columns: minmax\(0, 1fr\); \}\s*\.st-xrow \.st-xr \{ max-width: 340px; \}/);
   assert.match(idx, /html\.mm-settings-only \.st-xrow \{ grid-template-columns: minmax\(0, 1fr\); \}/);
   assert.match(idx, /\.st-xrow \.st-xl > label \{[^}]*text-align: left/);
@@ -170,7 +170,7 @@ test('Workers at once: number boxes are dark fields, each service row has its ow
   assert.match(app, /input\.dataset\.provider = c\.provider;/, 'the data value stays "local"');
 });
 test('Notice-long-waits checkbox: the box and its words on one line, its ⓘ after the label', () => {
-  const m = app.match(/<label class="gs-sub"([^>]*)><input type="checkbox" id="st-hw-notice"[^>]*> Tell the lead when an agent has no build partner<\/label>/);
-  assert.ok(m, 'the label wraps the box and the words');
-  assert.ok(/flex-basis:auto/.test(m[1]), 'the label is as wide as its words (not the 100 px label column), so the words do not wrap beside the box and the ⓘ follows on the same line');
+  const m = app.match(/<label class="gs-sub st-check"([^>]*)><input type="checkbox" id="st-hw-notice"[^>]*> <span>Tell the lead when an agent has no build partner<\/span><\/label>/);
+  assert.ok(m, 'the label wraps the box and the words (in a span, so the ⓘ ends the words)');
+  assert.ok(/flex-basis:auto/.test(m[1]), 'the label is as wide as its words (not the 100 px label column), so the ⓘ follows on the same line');
 });

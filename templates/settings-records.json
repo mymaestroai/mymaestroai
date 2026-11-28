@@ -1,5 +1,5 @@
 {
-  "version": "8262b4c6af0c3a90e7806fca8151d95f4ada5d2c",
+  "version": "108cb3271e02104cc5d2cb585ca4e953a95860b9",
   "records": [
     {
       "id": "OPT-0001",
@@ -28468,7 +28468,7 @@
     {
       "id": "OPT-0951",
       "kind": "setting",
-      "name": "Biggest upload (MB)",
+      "name": "Biggest upload",
       "labels": [
         "filesMaxUploadMb"
       ],
@@ -28503,7 +28503,7 @@
     {
       "id": "OPT-0952",
       "kind": "setting",
-      "name": "Biggest zip download (MB)",
+      "name": "Biggest zip download",
       "labels": [
         "filesZipMaxMb"
       ],

@@ -176,7 +176,7 @@ test('after a save the stored value is read back: "back to the default" only whe
   assert.strictEqual(stuck.data.filesMaxUploadMb, 100, 'the screen shows what the hub holds');
   const ok = fakeSaver({ data: { filesMaxUploadMb: 100 }, back: () => ({}) });
   await ok.saver.save('OPT-0951', true);
-  assert.deepStrictEqual(ok.toasts, ['Biggest upload (MB): back to the default.']);
+  assert.deepStrictEqual(ok.toasts, ['Biggest upload: back to the default.']);
   assert.ok(!('filesMaxUploadMb' in ok.data));
 });
 
@@ -238,7 +238,7 @@ test('(C) a draft in another row is untouched; a value the page\'s own check ref
   const f = fakeSaver({ data: {} });
   f.raws['OPT-0951'] = 'many';
   await f.saver.save('OPT-0951');
-  assert.deepStrictEqual(f.toasts, ['Biggest upload (MB) must be a number from 1 to 100000.']);
+  assert.deepStrictEqual(f.toasts, ['Biggest upload must be a number from 1 to 100000.']);
   assert.deepStrictEqual(f.events, [], 'no repaint, no lock');
   assert.deepStrictEqual(f.posts, []);
   const g = fakeSaver({ data: {} });
