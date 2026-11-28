@@ -52,7 +52,7 @@ test('the agent\'s own workspace counts; a member\'s and the wallet agent\'s key
   const ws = path.join(tp.HUB_ROOT, 'workspaces', 'torque', 'id_ed25519');
   assert.notEqual(bash(worker(null), `cat ${ws}`).cls, 'admin');
   const member = { name: 'm', category: 'primary', owner: 'u1', policy: { roots: [X] } };
-  assert.deepEqual(tp.policyFor(member, { isMemberOwned: () => true }).keyRoots, []);
+  assert.deepEqual(tp.policyFor(member, { isMemberOwned: () => true, memberDefaults: () => ({}), ownerGrants: () => ({}) }).keyRoots, []);
   const wallet = { name: 'w', category: 'worker', policy: { roots: [X] } };
   assert.deepEqual(tp.policyFor(wallet, { isWalletAgent: () => true }).keyRoots, []);
 });
