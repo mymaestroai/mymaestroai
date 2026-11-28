@@ -60,7 +60,8 @@ async function boot() {
       const service = !!req.headers[hubAuth.SERVICE_HEADER];   // the hub's own loopback call
       const token = !!req.headers['x-test-token'];
       const userId = req.headers['x-test-user'] || null;   // the signed-in account of this request (the real route takes it from the session)
-      const ctx = { service, person: !token && !service, userId, admin: !!userId && admins.has(userId), ...(userId ? { recheck: () => !revoked.has(userId), ownerTurnNow: () => admins.has(userId), refresh: () => ({ admin: admins.has(userId) }) } : {}) };
+      const session = req.headers['x-test-session'] || null;   // one browser session of the account (two sessions of one account can differ)
+      const ctx = { service, person: !token && !service, userId, admin: !!userId && admins.has(userId), ...(userId ? { recheck: () => !revoked.has(userId) && !(session && revoked.has(`session:${session}`)), ownerTurnNow: () => admins.has(userId), refresh: () => ({ admin: admins.has(userId) }) } : {}) };
       await sdkChat.handleChatStream(body, res, ctx);
       handled++;
       if (!res.writableEnded) res.end();
@@ -71,10 +72,10 @@ async function boot() {
 after(() => { try { T.setTestStreamer(null); } catch {} try { server.close(); server.closeAllConnections && server.closeAllConnections(); } catch {} });
 
 /** A client of /api/chat/stream: events (parsed data lines), status, raw text, and whether it ended. */
-function client(body, { token = false, user = null } = {}) {
+function client(body, { token = false, user = null, session = null } = {}) {
   const c = { events: [], status: null, raw: '', ended: false, pings: 0 };
   const data = JSON.stringify(body);
-  c.req = http.request({ hostname: '127.0.0.1', port: Number(process.env.PORT), path: '/api/chat/stream', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data), ...(token ? { 'x-test-token': '1' } : {}), ...(user ? { 'x-test-user': user } : {}) } }, (res) => {
+  c.req = http.request({ hostname: '127.0.0.1', port: Number(process.env.PORT), path: '/api/chat/stream', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data), ...(token ? { 'x-test-token': '1' } : {}), ...(user ? { 'x-test-user': user } : {}), ...(session ? { 'x-test-session': session } : {}) } }, (res) => {
     c.status = res.statusCode;
     res.on('data', (chunk) => {
       c.raw += chunk;
@@ -603,5 +604,66 @@ test('(t) release uses the account as it is now: an admin demoted while the mess
   const run2 = starts.find(s => s.message === 'owner-t-ada2');
   assert.strictEqual(run2.admin, true); assert.strictEqual(run2.ownerTurn, true);
   admins.delete('ada');
+  await idle(B);
+});
+
+test('(u) the receipt is claimed at dispatch: a retry queued while the store was unreadable, store back with the original receipt before release -> already_sent, no turn', async () => {
+  starts.length = 0;
+  fs.writeFileSync(startedFile(), '[1,');
+  T.resetOwnerStarted();
+  const g = gate('consult-u');
+  const consultP = (await consultStart(A, 'consult-u', 'w-u')).p;
+  const retry = person(B, 'owner-u', { client_id: 'cu1' }, { user: 'sam' });
+  await until(() => retry.queued().length >= 1, 'queued although the store is unreadable');
+  assert.strictEqual(T.ownerStartedUnusable(), true);
+  // the store comes back, holding the receipt of the original send
+  fs.writeFileSync(startedFile(), JSON.stringify([{ key: `${B}\0sam\0cu1`, at: Date.now() }]));
+  T.ownerStartedRetryNow();
+  g.open(); await consultP;
+  await until(() => retry.ended, 'released and answered');
+  assert.deepStrictEqual(ofType(retry, 'already_sent'), [{ type: 'already_sent', client_id: 'cu1' }]);
+  assert.deepStrictEqual(ofType(retry, 'error'), []);
+  assert.ok(!startedMessages().includes('owner-u'), 'no turn ran');
+  assert.strictEqual(sdkChat.ownerWaitersFor(B), 0);
+  await idle(B);
+});
+
+test('(v) a same-person reconnect carries the new session: the new session revoked -> release refused (403), no turn', async () => {
+  starts.length = 0;
+  fs.writeFileSync(startedFile(), '[]');
+  T.resetOwnerStarted();
+  const g = gate('consult-v');
+  const consultP = (await consultStart(A, 'consult-v', 'w-v')).p;
+  const first = person(B, 'owner-v', { client_id: 'cv1' }, { user: 'sam', session: 'sA' });
+  await until(() => first.queued().length >= 1, 'first queued');
+  const second = person(B, 'owner-v', { client_id: 'cv1' }, { user: 'sam', session: 'sB' });
+  await until(() => second.queued().length >= 1 && ofType(first, 'replaced').length === 1, 'connection moved');
+  revoked.add('session:sB');
+  try {
+    g.open(); await consultP;
+    await until(() => second.ended, 'second answered');
+    assert.deepStrictEqual(ofType(second, 'error'), [{ type: 'error', error: 'You no longer have access to this agent.', status: 403 }]);
+    assert.ok(!startedMessages().includes('owner-v'), 'no turn ran');
+  } finally { revoked.delete('session:sB'); }
+  await idle(B);
+});
+
+test('(w) a same-person reconnect carries the new session: the original session revoked -> the message runs for the new one', async () => {
+  starts.length = 0;
+  fs.writeFileSync(startedFile(), '[]');
+  T.resetOwnerStarted();
+  const g = gate('consult-w');
+  const consultP = (await consultStart(A, 'consult-w', 'w-w')).p;
+  const first = person(B, 'owner-w', { client_id: 'cw1' }, { user: 'sam', session: 'sA' });
+  await until(() => first.queued().length >= 1, 'first queued');
+  const second = person(B, 'owner-w', { client_id: 'cw1' }, { user: 'sam', session: 'sB' });
+  await until(() => second.queued().length >= 1 && ofType(first, 'replaced').length === 1, 'connection moved');
+  revoked.add('session:sA');
+  try {
+    g.open(); await consultP;
+    await until(() => second.ended, 'second answered');
+    assert.deepStrictEqual(ofType(second, 'error'), []);
+    assert.ok(startedMessages().includes('owner-w'), 'the message ran');
+  } finally { revoked.delete('session:sA'); }
   await idle(B);
 });
