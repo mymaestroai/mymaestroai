@@ -43,3 +43,10 @@ test('a .. path set in a variable earlier in the same command is judged where it
   assert.equal(dec(worker, `D=${X}/link/.. && cp /dev/null "$D/out.txt"`).cls, 'admin');
   assert.equal(dec(worker, `D=${X}/sub/..; cp /dev/null $D/out.txt`).cls, 'write_inside', 'through plain folders: as before');
 });
+
+test('review: a redirection on a cd is judged through the link; cd -L is followed like a plain cd', () => {
+  assert.equal(dec(worker, `cd . > ${X}/link/../out.txt`).cls, 'admin', 'the redirection opens its file the kernel\'s way');
+  assert.equal(dec(worker, `cd > ${X}/link/../out.txt`).cls, 'admin', 'a bare > with its target as the next word');
+  assert.equal(dec(worker, `cd >${X}/link/../o2.txt sub`).cls, 'admin');
+  assert.equal(dec(member, 'cd -L sub && cp /dev/null result.txt', memberOpts).decision, 'allow', 'an ordinary write after cd -L');
+});
