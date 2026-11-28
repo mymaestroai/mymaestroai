@@ -2378,7 +2378,10 @@
     .st-row label.st-check { display: inline-flex; align-items: flex-start; gap: 8px; text-align: left; margin-bottom: 0; }
     .st-row label.st-check > input[type="checkbox"] { flex: none; margin-top: 2px; }
     .st-row label.st-check > span { min-width: 0; }
-    html.mm-settings-only .st-row > label.st-check { flex: 0 1 auto !important; max-width: calc(100% - 44px) !important; }
+    /* the words take the row's width, so the ⓘ (put right after the label) sits at the row's right edge, level with the first line, never over the words */
+    .st-row > label.st-check { flex: 1 1 auto; }
+    .st-row > label.st-check + .st-info { margin-left: auto; align-self: flex-start; }
+    html.mm-settings-only .st-row > label.st-check { flex: 1 1 auto !important; max-width: calc(100% - 44px) !important; }
     /* A row that ends in a toggle: the ⓘ (put after the toggle by the help script) is shown right after the label text. */
     .st-row:has(> .toggle-switch, > span > .toggle-switch) > label:first-child { order: -2; }
     .st-row:has(> .toggle-switch, > span > .toggle-switch) > .st-info { order: -1; }

@@ -49,7 +49,9 @@ test('A3: the build-partner checkbox and its words share one line, the info butt
   assert.match(rule('.st-row label.st-check'), /display: inline-flex/);
   assert.match(rule('.st-row label.st-check'), /align-items: flex-start/);
   assert.match(rule('.st-row label.st-check > input[type="checkbox"]'), /flex: none/);
-  assert.match(html, /html\.mm-settings-only \.st-row > label\.st-check \{[^}]*flex: 0 1 auto !important/);
+  // the words take the row's width and the ⓘ sits at the row's right edge, level with the first line (Easel: it covered "lead")
+  assert.match(html, /\.st-row > label\.st-check \+ \.st-info \{ margin-left: auto; align-self: flex-start; \}/);
+  assert.match(html, /html\.mm-settings-only \.st-row > label\.st-check \{[^}]*flex: 1 1 auto !important/);
 });
 
 test('A4: no Expert values name repeats the unit shown after its box', () => {
