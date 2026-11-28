@@ -169,3 +169,15 @@ test('the card\'s "What it may do right now" line names the home network when th
   assert.match(src, /to the home network: allowed/);
   assert.ok(ROWS['OPT-0015']);
 });
+
+test('review: the print-only flags count only as ssh\'s own options; queries and option values are not hosts; unknown operands may be remote', () => {
+  for (const c of ['ssh 8.8.8.8 ls -G', 'ssh 8.8.8.8 curl -G url', 'ssh -oVisualHostKey=no 8.8.8.8 true', 'ssh -o GlobalKnownHostsFile=/x 8.8.8.8',
+    'ssh -iGkey 8.8.8.8', 'scp f $DEST', 'rsync -a d "$DEST"', 'sftp -b batch host.example.com']) {
+    assert.equal(decide(worker(false), c).cls, 'send', c);
+  }
+  for (const c of ['ssh -Q cipher', 'ssh -qV', 'rsync -a --exclude cache:old /tmp/a /tmp/b', 'rsync -a --exclude=cache:old /tmp/a /tmp/b', 'scp -i /tmp/k /tmp/a /tmp/b']) {
+    assert.notEqual(decide(worker(false), c).cls, 'send', c);
+  }
+  // a variable assigned literally in the same command is put in first: a remote value is caught by its colon
+  assert.equal(decide(worker(false), 'DEST=8.8.8.8:/tmp && scp f $DEST').cls, 'send');
+});
