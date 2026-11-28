@@ -42,7 +42,8 @@ test('listFolders: never a member tree, never data/, nothing for a member-owned 
 });
 
 test('resolveRoots expands ~ and resolves, keeping order (the page matches extraRoots[i] to granted[i])', () => {
-  assert.deepStrictEqual(resolveRoots(['~/x', '/a/../b', 'rel/p'], '/home/me'), ['/home/me/x', '/b', path.resolve('rel/p')]);
+  // a root with a .. part is never granted (lib/hub-home expandRoot): it keeps its place, as typed
+  assert.deepStrictEqual(resolveRoots(['~/x', '/a/../b', 'rel/p'], '/home/me'), ['/home/me/x', '/a/../b', path.resolve('rel/p')]);
   assert.deepStrictEqual(resolveRoots(undefined), []);
 });
 

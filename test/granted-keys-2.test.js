@@ -33,6 +33,9 @@ test('expandRoot fills in ~, $HOME, ${HOME} and ~<this user>, refuses ~<another 
   assert.equal(expandRoot('$HOMEX/robot', h, 'sam'), '$HOMEX/robot', 'only the whole word HOME');
   assert.equal(expandRoot('', h, 'sam'), null);
   assert.equal(expandRoot(7, h, 'sam'), null);
+  assert.equal(expandRoot('$HOME/link/../keys', h, 'sam'), null, 'a .. part is never granted');
+  assert.equal(expandRoot('/srv/a/../keys', h, 'sam'), null);
+  assert.equal(expandRoot('/srv/a..b/keys', h, 'sam'), '/srv/a..b/keys', 'only a whole .. part');
   assert.deepEqual(expandRoots(['~/a', '~owner/b', '$HOME/c'], h, 'sam'), ['/home/sam/a', '/home/sam/c']);
 });
 
@@ -70,4 +73,17 @@ test('the lockbox widening list (pathsOf) does not count a key in the agent\'s k
 
 test('resolveRoots expands $HOME and keeps a refused ~<another user> root in its place, as typed', () => {
   assert.deepEqual(resolveRoots(['$HOME/a', '~nobody-else-here/b', '~/c'], '/home/sam'), ['/home/sam/a', '~nobody-else-here/b', '/home/sam/c']);
+});
+
+test('review: a root with .. after a link grants neither the folder it spells nor the one the link reaches', () => {
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'granted-keys-2-dd-'));
+  for (const d of ['elsewhere/sub', 'elsewhere/keys', 'home/keys']) fs.mkdirSync(path.join(T, d), { recursive: true });
+  fs.writeFileSync(path.join(T, 'elsewhere/keys/id_ed25519'), 'k');
+  fs.writeFileSync(path.join(T, 'home/keys/id_ed25519'), 'k');
+  fs.symlinkSync(path.join(T, 'elsewhere/sub'), path.join(T, 'home/link'));
+  const a = worker([path.join(T, 'home/link') + '/../keys']);
+  const p = tp.policyFor(a);
+  assert.ok(!p.roots.some((r) => r.startsWith(T)) && !p.keyRoots.some((r) => r.startsWith(T)));
+  assert.equal(bash(a, `cat ${T}/home/keys/id_ed25519`).cls, 'admin', 'the folder the text spells');
+  assert.equal(bash(a, `cat ${T}/elsewhere/keys/id_ed25519`).cls, 'admin', 'the folder the link reaches');
 });
