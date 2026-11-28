@@ -62,3 +62,16 @@ test('a temporary worker inherits its parent\'s granted folder and may use the k
   assert.ok(tp.policyFor(tmpWorker).keyRoots.includes(path.resolve(X)));
   assert.equal(bash(tmpWorker, `cat ${X}/deploy.key`).decision, 'allow');
 });
+
+test('review: a .. through a linked folder, a failed lookup and a relative root give no exemption', () => {
+  const a = worker([X]);
+  fs.mkdirSync(path.join(OTHER, 'sub'), { recursive: true });
+  fs.symlinkSync(path.join(OTHER, 'sub'), path.join(X, 'l'));   // X/l/.. is OTHER, whose id_ed25519 is outside the grant
+  assert.equal(bash(a, `cat ${X}/l/../id_ed25519`).cls, 'admin', 'cat through a link and ..');
+  assert.equal(read(a, `${X}/l/../id_ed25519`).cls, 'admin', 'Read through a link and ..');
+  assert.equal(bash(a, `cd ${X}/l && cat ../id_ed25519`).cls, 'admin', 'cd into the link, then ..');
+  const orig = fs.realpathSync;
+  fs.realpathSync = (p, ...r) => { if (String(p).endsWith('deploy.key')) { const e = new Error('permission denied'); e.code = 'EACCES'; throw e; } return orig(p, ...r); };
+  try { assert.equal(bash(a, `cat ${X}/deploy.key`).cls, 'admin', 'a lookup that fails other than "not there"'); } finally { fs.realpathSync = orig; }
+  assert.equal(bash(worker(['tmp-relative']), `cat ${path.resolve('tmp-relative')}/id_ed25519`).cls, 'admin', 'a relative root is not counted');
+});
