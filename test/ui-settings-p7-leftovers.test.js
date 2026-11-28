@@ -45,7 +45,7 @@ test('A3: the build-partner checkbox and its words share one line, the info butt
   const at = app.indexOf('id="st-hw-notice"');
   assert.ok(at > 0);
   const line = app.slice(app.lastIndexOf('<label', at), app.indexOf('</label>', at) + 8);
-  assert.match(line, /^<label class="gs-sub st-check"[^>]*><input type="checkbox" id="st-hw-notice"[^>]*> <span>Tell the lead when an agent has no build partner<\/span><\/label>$/);
+  assert.match(line, /^<label class="gs-sub st-check"[^>]*><input type="checkbox" id="st-hw-notice"[^>]*> Tell the lead when an agent has no build partner<\/label>$/);
   assert.match(rule('.st-row label.st-check'), /display: inline-flex/);
   assert.match(rule('.st-row label.st-check'), /align-items: flex-start/);
   assert.match(rule('.st-row label.st-check > input[type="checkbox"]'), /flex: none/);

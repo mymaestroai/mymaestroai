@@ -170,7 +170,7 @@ test('Workers at once: number boxes are dark fields, each service row has its ow
   assert.match(app, /input\.dataset\.provider = c\.provider;/, 'the data value stays "local"');
 });
 test('Notice-long-waits checkbox: the box and its words on one line, its ⓘ after the label', () => {
-  const m = app.match(/<label class="gs-sub st-check"([^>]*)><input type="checkbox" id="st-hw-notice"[^>]*> <span>Tell the lead when an agent has no build partner<\/span><\/label>/);
-  assert.ok(m, 'the label wraps the box and the words (in a span, so the ⓘ ends the words)');
+  const m = app.match(/<label class="gs-sub st-check"([^>]*)><input type="checkbox" id="st-hw-notice"[^>]*> Tell the lead when an agent has no build partner<\/label>/);
+  assert.ok(m, 'the label wraps the box and the words (no span: the help script puts the ⓘ after the label, at the right edge of the row)');
   assert.ok(/flex-basis:auto/.test(m[1]), 'the label is as wide as its words (not the 100 px label column), so the ⓘ follows on the same line');
 });

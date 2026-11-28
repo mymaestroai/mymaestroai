@@ -4355,7 +4355,7 @@
           <input type="number" id="st-hw-minutes" min="0" max="240" step="1" value="${data.handOffWaitMinutes !== undefined && data.handOffWaitMinutes !== null && Number.isFinite(Number(data.handOffWaitMinutes)) ? Number(data.handOffWaitMinutes) : 10}" style="max-width:90px"> <span style="font-size:0.8rem;color:var(--text-dim)">minutes (0 turns it off)</span>
         </div>
         <div class="st-row">
-          <label class="gs-sub st-check" style="flex-basis:auto"><input type="checkbox" id="st-hw-notice" ${data.buildPartnerNotice !== false ? 'checked' : ''}> <span>Tell the lead when an agent has no build partner</span></label>
+          <label class="gs-sub st-check" style="flex-basis:auto"><input type="checkbox" id="st-hw-notice" ${data.buildPartnerNotice !== false ? 'checked' : ''}> Tell the lead when an agent has no build partner</label>
         </div>
         <div class="st-hint">An agent that waits a long time on its workers can't talk with you meanwhile. After two such waits in a week, the lead can offer you a build partner. Nothing is created without your yes.</div>
       </div>`;
