@@ -10542,7 +10542,7 @@ function qomStored(user) {
 }
 function qomSave(list) { try { localStorage.setItem(qomKey(), JSON.stringify(list)); } catch (e) { /* storage off or full: the message still waits on this page */ } }
 function qomKeep(w) { const u = qomUser() || ''; qomSave(qomAll().filter(e => !(e.client_id === w.client_id && String(e.user || '') === u)).concat([{ agent: w.agent, client_id: w.client_id, message: w.message, ts: w.ts, user: u }])); }
-function qomForget(id) { const u = qomUser(); if (u === null) return; qomSave(qomAll().filter(e => !(e.client_id === id && String(e.user || '') === u))); }
+function qomForget(id, user) { const u = user === undefined ? qomUser() : String(user || ''); if (u === null) return; qomSave(qomAll().filter(e => !(e.client_id === id && String(e.user || '') === u))); }
 // Sign-out: no waiting message stays on this device for the next person.
 function qomForgetAll() { try { localStorage.removeItem(qomKey()); } catch (e) { /* blocked storage */ } }
 function qomNewId() { return `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`; }
@@ -10625,7 +10625,7 @@ function qomScan(buffer) {
 function qomEnd(w, forget) {
   w.ended = true;
   if (w.line) { w.line.remove(); w.line = null; }
-  if (forget) { qomForget(w.client_id); qomWait.delete(w.client_id); }
+  if (forget) { qomForget(w.client_id, w.user); qomWait.delete(w.client_id); }
   qomPaintBusy(w.agent);
 }
 // true when the event ends the waiting
@@ -10646,8 +10646,15 @@ function qomEvent(w, ev) {
     case 'replaced': qomEnd(w, false); return true;   // a newer request with this client_id took over: this one ends quietly
     case 'already_sent': qomEnd(w, true); qomReread(w); return true;   // it already ran: the reply is in the chat history
     default:
+      if (ev.retry === true) {   // the hub could not take the message just now (it did not run): it stays waiting and goes again, the reason on its line meanwhile
+        w.pausing = false; w.running = false;
+        w.error = String(ev.error || 'The hub could not record this message. Trying again.');
+        qomPaint(w);
+        qomRetryLater(w);
+        return true;
+      }
       w.ended = true; w.refused = true; w.pausing = false;
-      qomForget(w.client_id); qomWait.delete(w.client_id);
+      qomForget(w.client_id, w.user); qomWait.delete(w.client_id);
       w.error = `Not sent: ${ev.error || 'the hub refused the message.'}`;
       qomPaint(w);
       return true;
@@ -10666,6 +10673,9 @@ function qomStarted(w, reader, rest) {
 }
 async function qomRun(w) {
   if (w.running || w.ended) return;
+  if (qomUser() === null) { qomRetryLater(w); return; }   // not while the page does not know who is signed in
+  if (w.user === null || w.user === undefined) w.user = qomUser();   // sent before the page knew who is signed in: it is that person's
+  if (qomForeign(w)) { qomDrop(w); return; }   // another account is signed in now: this message is not sent
   w.running = true;
   const run = (w.runId = (w.runId || 0) + 1);
   w.ctl = new AbortController();
@@ -10674,7 +10684,7 @@ async function qomRun(w) {
     const resp = await qomStream(w, w.ctl);
     if (w.runId !== run) return;
     if (resp.status === 409 || !resp.ok) {
-      w.ended = true; w.refused = true; qomForget(w.client_id); qomWait.delete(w.client_id);
+      w.ended = true; w.refused = true; qomForget(w.client_id, w.user); qomWait.delete(w.client_id);
       w.error = resp.status === 409 ? `Not sent: ${w.behindName} is busy with another turn.` : `Not sent: HTTP ${resp.status}`;
       qomPaint(w);
       return;
@@ -10696,10 +10706,26 @@ async function qomRun(w) {
     if (w.runId !== run || w.ended) return;
     w.running = false;
     // The request was lost while the message still waits (network, page hidden): the same client_id goes again, now or when the page shows.
-    w.fails = (w.fails || 0) + 1;
-    clearTimeout(w.timer);
-    if (!qomHidden()) w.timer = setTimeout(qomResendAll, Math.min(30000, 2000 * 2 ** (w.fails - 1)));
+    qomRetryLater(w);
   }
+}
+// Send the waiting message again after a pause that grows with each failure (a lost connection, or the hub saying "try again").
+function qomRetryLater(w) {
+  w.fails = (w.fails || 0) + 1;
+  clearTimeout(w.timer);
+  if (!qomHidden()) w.timer = setTimeout(qomResendAll, Math.min(30000, 2000 * 2 ** (w.fails - 1)));
+}
+// A message sent by one account is never sent again by another: when the person signed in now is not who wrote it, it is dropped.
+function qomForeign(w) { const u = qomUser(); return u !== null && w.user !== null && w.user !== undefined && String(w.user) !== u; }
+function qomDrop(w) {
+  w.ended = true;
+  clearTimeout(w.timer);
+  try { if (w.ctl) w.ctl.abort(); } catch (e) { /* gone */ }
+  if (w.line) { w.line.remove(); w.line = null; }
+  if (w.userEl && w.drawn) { try { w.userEl.remove(); } catch (e) { /* gone */ } }
+  qomForget(w.client_id, w.user);
+  qomWait.delete(w.client_id);
+  qomPaintBusy(w.agent);
 }
 // Send every kept waiting message again with its own client_id (the hub lets the new request take the old one's place, or answers already_sent).
 function qomResendAll() {
@@ -10709,10 +10735,14 @@ function qomResendAll() {
     const w = qomRestore(e);
     if (w) { qomWait.set(e.client_id, w); qomPaint(w); }
   }
-  for (const w of [...qomWait.values()]) if (!w.ended && !w.running && qomReady(w)) qomRun(w);
+  for (const w of [...qomWait.values()]) {
+    if (!w.ended && qomForeign(w)) { qomDrop(w); continue; }
+    if (!w.ended && !w.running && qomReady(w)) qomRun(w);
+  }
 }
 function qomEnqueue(w) {
   w.position = 1; w.runId = 0;
+  w.user = qomUser();   // who sent it (null while the page does not know yet): every send of it says so (expect_user)
   qomWait.set(w.client_id, w);
   qomKeep(w);
   qomPaint(w);
@@ -10727,7 +10757,7 @@ function qomStream(w, ctl) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...zoneHeader() },
     signal: ctl.signal,
-    body: JSON.stringify({ agent: w.agent, message: w.message, images: w.images || [], confirm_tools: false, ...(typeof simpleChatExtra === 'function' ? simpleChatExtra(w.agent) : {}), queue_behind_consult: true, client_id: w.client_id }),
+    body: JSON.stringify({ agent: w.agent, message: w.message, images: w.images || [], confirm_tools: false, ...(typeof simpleChatExtra === 'function' ? simpleChatExtra(w.agent) : {}), queue_behind_consult: true, client_id: w.client_id, expect_user: String(w.user || '') }),
   });
 }
 // A waiting message is sent again only while its chat is on screen (the bubbles and the line are drawn there).
@@ -10737,7 +10767,7 @@ function qomRestore(e) {
   if (current !== e.agent || screen !== 'chat') return null;
   const userEl = addUserBubble(e.message, []);
   setBubbleTime(userEl, msgTimeLabel(e.ts));
-  return { agent: e.agent, message: e.message, images: [], userEl, ts: e.ts, client_id: e.client_id, position: 1, runId: 0, drawn: true, behindName: qomName(e.agent), fromName: qomName((live[e.agent] || {}).consultedBy) || 'another agent' };
+  return { agent: e.agent, message: e.message, images: [], userEl, ts: e.ts, client_id: e.client_id, user: String(e.user || ''), position: 1, runId: 0, drawn: true, behindName: qomName(e.agent), fromName: qomName((live[e.agent] || {}).consultedBy) || 'another agent' };
 }
 // The message already ran (the hub said already_sent): the reply is in the history, not on this page yet.
 function qomReread(w) {

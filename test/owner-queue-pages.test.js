@@ -61,7 +61,7 @@ function makeStream() {
 }
 const memStorage = (init) => { const m = new Map(Object.entries(init || {})); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: (k) => { m.delete(k); }, m }; };
 const NAMES = { lead: 'Lead', helper: 'Helper' };
-const QOM_SHARED = ['qomKey', 'qomUser', 'qomAll', 'qomForgetAll', 'qomStored', 'qomSave', 'qomKeep', 'qomForget', 'qomNewId', 'qomHidden', 'qomWords', 'qomLineText', 'qomWaiting', 'qomButton', 'qomPaint', 'qomTakeover', 'qomScan', 'qomEnd', 'qomEvent', 'qomStarted', 'qomRun', 'qomResendAll', 'qomEnqueue', 'qomName', 'qomPost', 'qomStream', 'qomReady', 'qomRestore', 'qomReread', 'qomBegin', 'qomOnConsult', 'qomSendNew', 'qomDecorate', 'qomPaintBusy'];
+const QOM_SHARED = ['qomKey', 'qomUser', 'qomAll', 'qomForgetAll', 'qomStored', 'qomSave', 'qomKeep', 'qomForget', 'qomNewId', 'qomHidden', 'qomWords', 'qomLineText', 'qomWaiting', 'qomButton', 'qomPaint', 'qomTakeover', 'qomScan', 'qomEnd', 'qomEvent', 'qomStarted', 'qomRun', 'qomResendAll', 'qomEnqueue', 'qomName', 'qomPost', 'qomStream', 'qomReady', 'qomRestore', 'qomReread', 'qomBegin', 'qomOnConsult', 'qomSendNew', 'qomDecorate', 'qomPaintBusy', 'qomRetryLater', 'qomForeign', 'qomDrop'];
 
 // ── desktop ──
 function desk({ status = { busy: true, consultedBy: 'helper' }, chatOver = {}, stored = {}, hidden = false, me = { user: { id: 'sam' } } } = {}) {
@@ -542,4 +542,111 @@ test('phone: per person, nothing before hubMe is loaded, sign-out removes the ke
   assert.strictEqual(p.ctx.localStorage.getItem('mmQueuedOwnerMessages'), null);
   assert.match(fnSource(MOBILE, 'signOut'), /qomForgetAll\(\)/);
   assert.match(MOBILE, /forgetBanner\(window\.HubLooks\.storageOf\(window\)\); \} catch \{[^\n]*\n\s*try \{ qomForgetAll\(\); \}[^\n]*\n\s*location\.href = '\/login\?next='/);
+});
+
+// ── a retry is from the account that sent the message; a refusal "try again" keeps it waiting ──
+const timersOf = (v) => { const t = []; v.setTimeout = (fn, ms) => { t.push(ms); return t.length; }; return t; };
+
+test('desktop: every stream request of a waiting message says who sent it (expect_user), first send and resend; no accounts -> the empty string', async () => {
+  const d = desk();
+  await d.api.sendSoloMessage('c1');
+  await tick();
+  assert.strictEqual(d.calls.fetch[0].body.expect_user, 'sam');
+  d.streams[0].end();
+  await tick();
+  d.api.qomResendAll();   // the in-memory waiter goes again
+  await tick();
+  assert.strictEqual(d.calls.fetch[1].body.expect_user, 'sam');
+  const kept = desk({ stored: { mmQueuedOwnerMessages: JSON.stringify([entry('kept1', 'sam')]) } });
+  kept.api.qomResendAll();
+  await tick();
+  assert.strictEqual(kept.calls.fetch[0].body.expect_user, 'sam', 'a restored message too');
+  const open = desk({ me: { user: null } });
+  await open.api.sendSoloMessage('c1');
+  await tick();
+  assert.strictEqual(open.calls.fetch[0].body.expect_user, '');
+});
+
+test('desktop: another account signed in -> the waiter is dropped (line, memory and kept entry), not sent; the other person\'s kept entries stay', async () => {
+  const d = desk({ stored: { mmQueuedOwnerMessages: JSON.stringify([entry('theirs', 'lee')]) } });
+  await d.api.sendSoloMessage('c1');
+  await tick();
+  const id = d.calls.fetch[0].body.client_id;
+  d.streams[0].end();
+  await tick();
+  assert.strictEqual(linesOf(d.msgs).length, 1);
+  d.vctx.window.hubMe = { user: { id: 'lee' } };   // someone else is signed in on this page now
+  d.api.qomResendAll();
+  await tick();
+  assert.ok(!d.calls.fetch.slice(1).some(f => f.body && f.body.client_id === id), 'the message of the first account is not sent again');
+  assert.ok(!d.vctx.qomWait.has(id), 'forgotten in memory');
+  const kept = JSON.parse(d.ctx.localStorage.getItem('mmQueuedOwnerMessages'));
+  assert.ok(!kept.some(e => e.client_id === id), 'its kept entry is gone');
+  assert.ok(kept.some(e => e.client_id === 'theirs'), 'the signed-in person\'s own entries are untouched');
+  // and qomRun itself refuses to send a foreign waiter
+  const w = { chatId: 'c1', agent: 'lead', message: 'x', images: [], ts: Date.now(), client_id: 'qf', user: 'sam', position: 1, runId: 0 };
+  d.vctx.qomWait.set('qf', w);
+  const before = d.calls.fetch.length;
+  await d.api.qomRun(w);
+  assert.strictEqual(d.calls.fetch.length, before);
+  assert.ok(!d.vctx.qomWait.has('qf'));
+});
+
+test('desktop: an error event with retry:true keeps the message waiting, shows the text on its line, and retries with a growing pause; any other error ends it', async () => {
+  const d = desk();
+  const timers = timersOf(d.vctx);
+  await d.api.sendSoloMessage('c1');
+  await tick();
+  const id = d.calls.fetch[0].body.client_id;
+  const msg = 'Your Maestro could not record this message, so it was not run. Try again in a moment.';
+  d.streams[0].ev({ type: 'error', error: msg, status: 503, retry: true });
+  await tick();
+  assert.ok(d.vctx.qomWait.has(id), 'still waiting');
+  assert.strictEqual(JSON.parse(d.ctx.localStorage.getItem('mmQueuedOwnerMessages')).length, 1, 'still kept');
+  assert.strictEqual(lineOf(d.msgs).children[0].textContent, msg, 'the reason is on the line');
+  assert.deepStrictEqual(timers, [2000]);
+  d.api.qomResendAll();
+  await tick();
+  assert.strictEqual(d.calls.fetch.length, 2, 'sent again with the same client_id');
+  assert.strictEqual(d.calls.fetch[1].body.client_id, id);
+  d.streams[1].ev({ type: 'error', error: msg, status: 503, retry: true });
+  await tick();
+  assert.deepStrictEqual(timers, [2000, 4000], 'backoff grows');
+  // a queued event clears the text; a plain error ends the message
+  d.api.qomResendAll(); await tick();
+  d.streams[2].ev({ type: 'queued', agent: 'lead', behind: { kind: 'consultation', from: 'helper' }, position: 1, client_id: id });
+  await tick();
+  assert.match(lineOf(d.msgs).children[0].textContent, /^Waiting:/);
+  d.streams[2].ev({ type: 'error', error: 'Signed in as someone else: this message was not sent.', status: 409 });
+  await tick();
+  assert.ok(!d.vctx.qomWait.has(id));
+  assert.match(lineOf(d.msgs).children[0].textContent, /^Not sent: Signed in as someone else/);
+});
+
+test('phone: expect_user on every send, a foreign waiter is dropped, retry:true keeps waiting with backoff', async () => {
+  const p = phone();
+  const timers = timersOf(p.vctx);
+  await p.api.qomSendNew('lead');
+  await tick();
+  const id = p.calls.api[0].body.client_id;
+  assert.strictEqual(p.calls.api[0].body.expect_user, 'sam');
+  const msg = 'Your Maestro could not record this message, so it was not run. Try again in a moment.';
+  p.streams[0].ev({ type: 'error', error: msg, status: 503, retry: true });
+  await tick();
+  assert.ok(p.vctx.qomWait.has(id), 'still waiting');
+  assert.strictEqual(lineOf(p.msgs).children[0].textContent, msg);
+  assert.deepStrictEqual(timers, [2000]);
+  p.api.qomResendAll();
+  await tick();
+  assert.strictEqual(p.calls.api.length, 2);
+  assert.strictEqual(p.calls.api[1].body.expect_user, 'sam');
+  p.streams[1].end();
+  await tick();
+  p.vctx.hubMe = { user: { id: 'lee' } };
+  p.api.qomResendAll();
+  await tick();
+  assert.strictEqual(p.calls.api.length, 2, 'not sent as the other account');
+  assert.ok(!p.vctx.qomWait.has(id));
+  assert.strictEqual(linesOf(p.msgs).length, 0);
+  assert.ok(!JSON.parse(p.ctx.localStorage.getItem('mmQueuedOwnerMessages') || '[]').some(e => e.client_id === id));
 });

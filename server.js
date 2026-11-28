@@ -513,6 +513,7 @@ async function handleHttpRequest(req, res) {
   req.hubUser = ident && (ident.kind === 'user' || ident.kind === 'legacy') ? ident.user : null;
   req.hubPendingTotp = !!(ident && ident.kind === 'user' && ident.pendingTotp);
   req.hubIdentKind = ident ? ident.kind : null;
+  req.hubSessionId = ident && ident.kind === 'user' && ident.session ? ident.session.id : null;   // the session row's id (a hash of the cookie, never the cookie): lets a held message ask later whether this sign-in still stands
   // The settings journal (lib/settings-journal) names who made a change: the signed-in person, or the hub's own service. The body
   // listeners are bound too (an http request's 'data' and 'end' callbacks otherwise run outside this request's context).
   {
@@ -1878,8 +1879,11 @@ async function handleHttpRequest(req, res) {
       const askedUserId = (req.hubUser && req.hubUser.id) || null;
       const sessionIsUser = req.hubIdentKind === 'user' && !req.hubPendingTotp && !req.hubToken && !req.hubService;
       const freshUser = () => (askedUserId ? hubAuth.getUser(askedUserId) : null);
+      const sessionId = req.hubSessionId || null;
       const recheck = () => {
         if (!askedUserId) return !hubAuth.hasUsers();
+        // The sign-in itself must still stand (not signed out, revoked, expired, or waiting for a TOTP code), not only the account.
+        if (!sessionId || !hubAuth.sessionStillValid(sessionId, askedUserId)) return false;
         const u = freshUser();
         if (!u || u.disabled) return false;
         if (access.isAdmin(u)) return true;
@@ -1887,7 +1891,9 @@ async function handleHttpRequest(req, res) {
         return !!agentName && access.canAccessAgent(u, agentName, { agents: require('./lib/agents').getAgentsSync(), resolveVirtual: (n) => temporalWorkersLib.getVirtual(n) });
       };
       const ownerTurnNow = () => { const u = freshUser(); return sessionIsUser && !!u && !u.disabled && access.isAdmin(u); };
-      return handleChatStream(body, res, { userId: askedUserId, service: !!req.hubService, accounts: hubAuth.hasUsers(), admin: access.isAdmin(req.hubUser), person: !req.hubToken && !req.hubService, recheck, ownerTurnNow });   // person: a browser session, not a program (queue_behind_consult is for people only)
+      // At release the whole context is rebuilt from the account as it is then (an admin demoted meanwhile runs as a member).
+      const refresh = () => (askedUserId ? { userId: askedUserId, accounts: hubAuth.hasUsers(), admin: access.isAdmin(freshUser()) } : {});
+      return handleChatStream(body, res, { userId: askedUserId, service: !!req.hubService, accounts: hubAuth.hasUsers(), admin: access.isAdmin(req.hubUser), person: !req.hubToken && !req.hubService, recheck, ownerTurnNow, refresh });   // person: a browser session, not a program (queue_behind_consult is for people only)
     }
 
     // Owner takeover: the person's message is waiting behind another agent's consultation of this agent; pause that consultation now.

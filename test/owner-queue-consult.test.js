@@ -25,6 +25,7 @@ const until = async (fn, what, ms = 4000) => { const end = Date.now() + ms; whil
 
 // How each message behaves: a turn whose message has a gate waits for it (or for its abort); the rest end at once.
 const revoked = new Set(); // accounts that lost access while their message waited
+const admins = new Set();  // accounts that are admins right now (read again when a held message is released)
 let handled = 0;           // route handlers that finished
 const gates = new Map();   // message -> { open(), opened }
 const starts = [];         // { agent, message, kind } in the order the turns began
@@ -37,10 +38,10 @@ async function boot() {
   sdkChat = require(path.join(ISO.lib, 'sdk-chat'));
   cq = require(path.join(ISO.lib, 'consult-queue'));
   T = sdkChat.__turn;
-  T.setTestStreamer(async ({ agent, res, signal, message: full }) => {
+  T.setTestStreamer(async ({ agent, res, signal, message: full, ownerTurn, admin }) => {
     const message = full.replace(/^\[Consultation from agent "[^"]*"\]\n\n/, '').replace(/^\[This request was sent at[^\]]*\]\n\n/, '');
     const t = T.turnRegistry.get(agent);
-    starts.push({ agent, message, kind: t && t.origin ? t.origin.kind : null });
+    starts.push({ agent, message, kind: t && t.origin ? t.origin.kind : null, ownerTurn, admin });
     const consult = t && t.origin && t.origin.kind === 'consultation';
     if (consult && /partial/.test(message)) T.sendSSE(res, T.makeChunk('partial text ', 'm'));
     const g = [...gates].filter(([k]) => message.startsWith(k)).map(([, v]) => v).pop();
@@ -59,7 +60,7 @@ async function boot() {
       const service = !!req.headers[hubAuth.SERVICE_HEADER];   // the hub's own loopback call
       const token = !!req.headers['x-test-token'];
       const userId = req.headers['x-test-user'] || null;   // the signed-in account of this request (the real route takes it from the session)
-      const ctx = { service, person: !token && !service, userId, ...(userId ? { recheck: () => !revoked.has(userId), ownerTurnNow: () => false } : {}) };
+      const ctx = { service, person: !token && !service, userId, admin: !!userId && admins.has(userId), ...(userId ? { recheck: () => !revoked.has(userId), ownerTurnNow: () => admins.has(userId), refresh: () => ({ admin: admins.has(userId) }) } : {}) };
       await sdkChat.handleChatStream(body, res, ctx);
       handled++;
       if (!res.writableEnded) res.end();
@@ -193,7 +194,7 @@ test('(e) the consultation queue yields to a waiting owner message', async () =>
   const fake = { agent: B, clientId: 'fake', res: { write() {}, end() {}, writableEnded: false }, dead: true };
   T.ownerWaiters.set(B, [fake]);
   T.drainConsultQueue(0);
-  await tick(500);
+  await tick(100);   // short: the 1 s poll must not release the stand-in waiter (it has no connection) inside this window
   assert.ok(!startedMessages().some(m => /queued-e/.test(m)), 'not started while an owner message waits');
   assert.strictEqual(cq.getConsultQueue().pendingFor(B).length, 1);
   T.ownerWaiters.delete(B);
@@ -411,13 +412,17 @@ test('(l) the started receipt lasts hours, is kept in data/owner-queue-started.j
   const c7 = person(B, 'owner-l-7h', { client_id: 'c7h' }, { user: 'sam' });
   await until(() => c7.ended, '7h ran');
   assert.strictEqual(ofType(c7, 'already_sent').length, 0);
-  // an unreadable file is treated as empty and kept as .bad
+  // a damaged file is kept as .bad and the store is unusable: nothing runs until it is repaired (see (p))
   fs.writeFileSync(startedFile(), '{not json');
   T.resetOwnerStarted();
   const bad = person(B, 'owner-l-bad', { client_id: 'cl' }, { user: 'sam' });
-  await until(() => bad.ended, 'ran with a damaged file');
+  await until(() => bad.ended, 'refused with a damaged file');
   assert.strictEqual(ofType(bad, 'already_sent').length, 0);
+  assert.strictEqual(ofType(bad, 'error')[0].status, 503);
+  assert.ok(!startedMessages().includes('owner-l-bad'));
   assert.strictEqual(fs.readFileSync(startedFile() + '.bad', 'utf8'), '{not json');
+  fs.writeFileSync(startedFile(), '[]');
+  T.resetOwnerStarted();
   await idle(B);
 });
 
@@ -461,5 +466,142 @@ test('(o) takeover is refused when the turn has already finished writing (no liv
   assert.strictEqual(T.pausedForOwner.size, 0);
   g.open(); await consultP;
   await until(() => c.ended, 'owner ran after');
+  await idle(B);
+});
+
+const REFUSED = { type: 'error', error: 'Your Maestro could not record this message, so it was not run. Try again in a moment.', status: 503, retry: true };
+
+test('(p) a corrupt receipts file refuses (503, retry) and runs nothing until it is repaired; a missing file is just empty', async () => {
+  starts.length = 0;
+  fs.rmSync(startedFile(), { force: true });
+  T.resetOwnerStarted();
+  const fine = person(B, 'owner-p-enoent', { client_id: 'cp0' }, { user: 'sam' });
+  await until(() => fine.ended, 'ran with no file');
+  assert.deepStrictEqual(ofType(fine, 'error'), []);
+  assert.ok(startedMessages().includes('owner-p-enoent'), 'a missing file is empty, not an error');
+  for (const damaged of ['{"a":1}', '[1,', '']) {
+    starts.length = 0;
+    fs.writeFileSync(startedFile(), damaged);
+    T.resetOwnerStarted();
+    const c = person(B, 'owner-p-bad', { client_id: 'cp1' }, { user: 'sam' });
+    await until(() => c.ended, `refused (${damaged})`);
+    assert.deepStrictEqual(ofType(c, 'error'), [REFUSED]);
+    assert.strictEqual(startedMessages().length, 0, 'no turn ran');
+    // still refused at once while the file is damaged (the load is tried again at most once a minute)
+    const c2 = person(B, 'owner-p-bad', { client_id: 'cp1' }, { user: 'sam' });
+    await until(() => c2.ended, 'refused again');
+    assert.deepStrictEqual(ofType(c2, 'error'), [REFUSED]);
+    // repaired: the next request after the retry window clears the mark and runs
+    fs.writeFileSync(startedFile(), '[]');
+    T.ownerStartedRetryNow();
+    const ok = person(B, 'owner-p-ok', { client_id: 'cp1' }, { user: 'sam' });
+    await until(() => ok.ended, 'ran after repair');
+    assert.deepStrictEqual(ofType(ok, 'error'), []);
+    assert.deepStrictEqual(startedMessages(), ['owner-p-ok']);
+    assert.strictEqual(T.ownerStartedUnusable(), false);
+  }
+  await idle(B);
+});
+
+test('(q) a receipt that cannot be written refuses (503, retry), runs no turn, and a repeat is a new message, not already_sent', async () => {
+  starts.length = 0;
+  fs.writeFileSync(startedFile(), '[]');
+  T.resetOwnerStarted();
+  // the data folder's receipt path is made unwritable: a directory sits where the temporary file goes
+  const tmp = startedFile() + '.tmp';
+  fs.mkdirSync(tmp);
+  try {
+    const c = person(B, 'owner-q', { client_id: 'cq1' }, { user: 'sam' });
+    await until(() => c.ended, 'refused');
+    assert.deepStrictEqual(ofType(c, 'error'), [REFUSED]);
+    assert.strictEqual(startedMessages().length, 0);
+    const again = person(B, 'owner-q', { client_id: 'cq1' }, { user: 'sam' });
+    await until(() => again.ended, 'refused again');
+    assert.strictEqual(ofType(again, 'already_sent').length, 0, 'nothing was recorded');
+    assert.deepStrictEqual(ofType(again, 'error'), [REFUSED]);
+  } finally { fs.rmdirSync(tmp); }
+  const ok = person(B, 'owner-q', { client_id: 'cq1' }, { user: 'sam' });
+  await until(() => ok.ended, 'ran once writable');
+  assert.deepStrictEqual(startedMessages(), ['owner-q']);
+  await idle(B);
+});
+
+test('(r) a held message whose receipt cannot be written gets the 503 error and the next waiter stays in place and runs', async () => {
+  const g = gate('consult-r'); starts.length = 0;
+  fs.writeFileSync(startedFile(), '[]');
+  T.resetOwnerStarted();
+  const consultP = (await consultStart(A, 'consult-r', 'w-r')).p;
+  const first = person(B, 'owner-r-first', { client_id: 'cr1' }, { user: 'sam' });
+  await until(() => first.queued().length >= 1, 'first queued');
+  const second = person(B, 'owner-r-second', { client_id: 'cr2' }, { user: 'lee' });
+  await until(() => second.queued().length >= 1, 'second queued');
+  const tmp = startedFile() + '.tmp';
+  fs.mkdirSync(tmp);
+  g.open(); await consultP;
+  try {
+    await until(() => first.ended, 'first refused');
+    assert.deepStrictEqual(ofType(first, 'error'), [REFUSED]);
+    assert.ok(!startedMessages().includes('owner-r-first'));
+    assert.strictEqual(sdkChat.ownerWaitersFor(B), 1, 'the next waiter stays in place');
+  } finally { fs.rmdirSync(tmp); }
+  await until(() => second.ended, 'second ran once the store could be written');
+  assert.ok(startedMessages().includes('owner-r-second'));
+  assert.ok(!startedMessages().includes('owner-r-first'));
+  await idle(B);
+});
+
+test('(s) expect_user: another account signed in since gets a 409 error, nothing held or run, not even already_sent', async () => {
+  starts.length = 0;
+  fs.writeFileSync(startedFile(), '[]');
+  T.resetOwnerStarted();
+  const g = gate('consult-s');
+  const consultP = (await consultStart(A, 'consult-s', 'w-s')).p;
+  const wrong = person(B, 'owner-s-wrong', { client_id: 'cs1', expect_user: 'sam' }, { user: 'lee' });
+  await until(() => wrong.ended, 'refused');
+  assert.deepStrictEqual(ofType(wrong, 'error'), [{ type: 'error', error: 'Signed in as someone else: this message was not sent.', status: 409 }]);
+  assert.strictEqual(sdkChat.ownerWaitersFor(B), 0, 'not held');
+  // the same account (and "no accounts" = '') is held as usual
+  const mine = person(B, 'owner-s-mine', { client_id: 'cs2', expect_user: 'lee' }, { user: 'lee' });
+  await until(() => mine.queued().length >= 1, 'queued');
+  const blank = person(B, 'owner-s-blank', { client_id: 'cs3', expect_user: '' }, { user: 'lee' });
+  await until(() => blank.ended, 'blank refused');
+  assert.strictEqual(ofType(blank, 'error')[0].status, 409, "'' is a person too: an account is signed in now");
+  g.open(); await consultP;
+  await until(() => mine.ended, 'mine ran');
+  assert.deepStrictEqual(starts.filter(s => /^owner-/.test(s.message)).map(s => s.message), ['owner-s-mine']);
+  // already_sent is not shown to the wrong account either
+  const stale = person(B, 'owner-s-mine', { client_id: 'cs2', expect_user: 'sam' }, { user: 'lee' });
+  await until(() => stale.ended, 'stale answered');
+  assert.deepStrictEqual(ofType(stale, 'already_sent'), []);
+  assert.strictEqual(ofType(stale, 'error')[0].status, 409);
+  await idle(B);
+});
+
+test('(t) release uses the account as it is now: an admin demoted while the message waited runs as a member with owner_turn false', async () => {
+  const g = gate('consult-t'); starts.length = 0;
+  fs.writeFileSync(startedFile(), '[]');
+  T.resetOwnerStarted();
+  admins.add('ada');
+  const consultP = (await consultStart(A, 'consult-t', 'w-t')).p;
+  const held = person(B, 'owner-t-ada', { client_id: 'ct1' }, { user: 'ada' });
+  await until(() => held.queued().length >= 1, 'queued');
+  admins.delete('ada');   // demoted, but still allowed to use the agent
+  g.open(); await consultP;
+  await until(() => held.ended, 'ran');
+  const run = starts.find(s => s.message === 'owner-t-ada');
+  assert.ok(run, 'it still runs');
+  assert.strictEqual(run.admin, false, 'the context is the fresh account');
+  assert.strictEqual(run.ownerTurn, false);
+  // control: an admin who stays an admin keeps both
+  admins.add('ada');
+  const g2 = gate('consult-t2');
+  const consult2 = (await consultStart(A, 'consult-t2', 'w-t2')).p;
+  const held2 = person(B, 'owner-t-ada2', { client_id: 'ct2' }, { user: 'ada' });
+  await until(() => held2.queued().length >= 1, 'queued 2');
+  g2.open(); await consult2;
+  await until(() => held2.ended, 'ran 2');
+  const run2 = starts.find(s => s.message === 'owner-t-ada2');
+  assert.strictEqual(run2.admin, true); assert.strictEqual(run2.ownerTurn, true);
+  admins.delete('ada');
   await idle(B);
 });
