@@ -1642,6 +1642,42 @@
       "leadAgentAccess": true
     },
     {
+      "id": "OPT-1096",
+      "kind": "setting",
+      "name": "May connect to machines on the home network",
+      "labels": [
+        "May connect to machines on the home network",
+        "Home network"
+      ],
+      "what": "Lets this agent run commands that connect to other machines on your home network, such as ssh, scp, sftp and rsync to a robot, a computer or a device in your house. Only private addresses count: your home network, link-local addresses and your Tailscale network. Anything on the internet stays refused.",
+      "when": "Turn it on for an agent whose job is to work on another machine in your house, for example one that runs commands on a robot. Leave it off for every other agent.",
+      "risk": "The agent can reach other devices on your network and run commands on any of them it can sign in to. It does not change what the agent may read or write on this computer, and an agent in a box keeps the network its box has.",
+      "def": "Default: off. We recommend turning it on only for the agent that needs it.",
+      "restart": false,
+      "danger": "dangerous",
+      "who": "admin",
+      "lead": "confirm",
+      "words": [
+        "home network",
+        "local network",
+        "lan",
+        "ssh",
+        "scp",
+        "rsync",
+        "ssh to robot",
+        "robot",
+        "other machines",
+        "devices",
+        "connect"
+      ],
+      "scope": "per-agent",
+      "home": "Agent card > Access",
+      "storedAs": "agents[].localNetwork",
+      "anchors": [],
+      "facts": "Stored agents[].localNetwork (true or absent) lib/agents.js updateAgentField; read by lib/tool-policy.js policyFor (never for the member or wallet role); homeNetworkConnect lifts only the ssh/scp/sftp/rsync send patterns when every remote target is a home-network address (isHomeNetworkHost: private, link-local, loopback, 100.64/10, fc00::/7, fe80::/10, *.ts.net, .local or single-label names that resolve only to those). Admin or lead-confirmed only (lib/settings-apply.js agentFieldAllowed). No restart.",
+      "leadAgentAccess": true
+    },
+    {
       "id": "OPT-0054",
       "kind": "setting",
       "name": "Command lockbox",

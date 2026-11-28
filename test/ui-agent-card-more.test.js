@@ -139,7 +139,7 @@ const inp = (row) => all(row, 'input')[0];
 const change = (el, v) => { if (typeof v === 'boolean') el.checked = v; else el.value = v; el.dispatch('change'); };
 
 // The Access rows that used to be doors to the agent page: lib/ui-agent-card-access.js registers them live now.
-const MOVED = ['OPT-0008', 'OPT-0009', 'OPT-0010', 'OPT-0011', 'OPT-0012', 'OPT-0013', 'OPT-0017', 'OPT-0018', 'OPT-0053', 'OPT-0054', 'OPT-0055'];
+const MOVED = ['OPT-0008', 'OPT-0009', 'OPT-0010', 'OPT-0011', 'OPT-0012', 'OPT-0013', 'OPT-0017', 'OPT-0018', 'OPT-0053', 'OPT-0054', 'OPT-0055', 'OPT-1096'];
 
 // ---- 1. registration and first rows ---------------------------------------------------------------------------------------
 test('every record of Memory, Access and Schedule has a registered row (nothing falls back to the "Change it on the agent page" link), and the first rows are set', async () => {
