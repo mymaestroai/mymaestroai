@@ -12833,6 +12833,7 @@
       if (ev.origin?.kind === 'user') {
         // Our own send is already streaming in this window (or re-attaching to it).
         if (!chat || chat.controller || chat.reattach || chat.status === 'thinking') return;
+        if (typeof qomOwnsTurn === 'function' && qomOwnsTurn(ev.agent, ev.message)) return;   // one of this page's waiting messages: its own stream draws it
       }
       if (!chat) {
         if (!HUB_AUTO_OPEN.has(ev.origin?.kind)) return;   // plain consultations only show in an already open window
@@ -14704,6 +14705,17 @@
     // (it would go to the other agent): it waits as its own request, the hub runs it next, and "Answer me now" pauses the
     // consultation so it runs at once. The same words and logic are on the phone page (mobile.js); Simple uses both pages.
     const qomWait = new Map();   // client_id -> the waiting message { chatId, agent, message, images, userEl, ts, client_id, position, behindName, fromName, line, ... }
+    // A turn the hub starts for one of this page's own waiting messages is this page's (its stream attaches a moment later):
+    // the turn_start mirror must not draw it again as from another device or the hub.
+    const qomReleased = new Map();   // agent -> { message, ts } of the waiting message whose turn just began here
+    function qomOwnsTurn(agent, message) {
+      if (!agent) return false;
+      const text = typeof message === 'string' ? message.trim() : '';
+      const r = qomReleased.get(agent);
+      if (r && Date.now() - r.ts < 60000 && r.message === text) return true;   // kept for its minute: turn_start and a re-attach may both ask
+      for (const w of qomWait.values()) if (w.agent === agent && !w.ended && !w.refused && String(w.message || '').trim() === text) return true;
+      return false;
+    }
     function qomKey() { return 'mmQueuedOwnerMessages'; }
     // Who is signed in: the account id, '' when the hub has no accounts, null while the page does not know yet (nothing is restored or sent then).
     function qomUser() {
@@ -14770,9 +14782,9 @@
         else { const c = qomContainer(w); if (c) c.appendChild(line); }
       }
       w.text.textContent = qomLineText(w);
-      if (w.refused) { if (w.btn) { w.btn.remove(); w.btn = null; } }
+      // Once pressed (pausing) the button is gone, not just disabled; it returns if the pause fails (pausing false again).
+      if (w.refused || w.pausing) { if (w.btn) { w.btn.remove(); w.btn = null; } }
       else if (!w.btn) { w.btn = qomButton(w); w.line.appendChild(w.btn); }
-      else w.btn.disabled = !!w.pausing;
       qomPaintBusy(w.agent);
     }
     // Answer me now: pause the consultation; the waiting message then runs at once (this request carries on as the turn).
@@ -14846,6 +14858,7 @@
     }
     // The first normal event arrived: the line goes, the request carries on as a completely normal turn stream.
     function qomStarted(w, reader, rest) {
+      qomReleased.set(w.agent, { message: String(w.message || '').trim(), ts: Date.now() });
       qomEnd(w, true);
       const bytes = new TextEncoder().encode(rest);
       let first = bytes.length > 0;
@@ -15040,25 +15053,13 @@
       const from = st.consultedBy || (run && run.origin && run.origin.from) || '';
       return qomEnqueue({ chatId, agent: chat.agent, message: content, images: [...images], userEl, ts, client_id: qomNewId(), behindName: qomName(chat.agent), fromName: from ? qomName(from) : 'another agent' });
     }
-    // The busy line (header text and the card in the chat): Answer me now acts on the first waiting message.
+    // Answer me now lives only on the waiting line under the message: the header offers none (it only clears an old one).
     function qomHeaderBtn(chat) {
-      const textEl = document.getElementById(`status-text-${chat.id}`);
-      if (!textEl || !textEl.parentNode) return;
-      const first = qomWaiting(chat.agent)[0];
-      let btn = document.getElementById(`qom-busy-${chat.id}`);
-      if (btn) btn.remove();   // painted again so its click and disabled state follow the first waiting message
-      if (!first) return;
-      btn = qomButton(first);
-      btn.id = `qom-busy-${chat.id}`;
-      btn.style.marginLeft = '8px';
-      textEl.parentNode.insertBefore(btn, textEl.nextSibling);
+      const btn = document.getElementById(`qom-busy-${chat.id}`);
+      if (btn) btn.remove();
     }
-    function qomDecorate(card, agent) {
-      const first = qomWaiting(agent)[0];
-      if (!first) return;
-      card.appendChild(document.createTextNode(' '));
-      card.appendChild(qomButton(first));
-    }
+    // Same for the busy card in the chat: nothing is added (one button, on the waiting line).
+    function qomDecorate(card, agent) { /* intentionally adds nothing */ }
     function qomPaintBusy(agent) {
       const chat = findSoloChat(agent);
       if (chat) { try { qomHeaderBtn(chat); busyCardRefresh(chat); } catch (e) { /* cosmetic */ } }

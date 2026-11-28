@@ -77,7 +77,7 @@ function desk({ status = { busy: true, consultedBy: 'helper' }, chatOver = {}, s
   const agentStatus = { lead: status };
   const ctx = {
     window: { hubMe: me }, document: doc, chats: { c1: chat }, skipInterjectOnce: new Set(), agentStatus, busyRun: {}, localStorage: memStorage(stored), tzSentAt: 0,
-    qomWait: new Map(), setTimeout: () => 0, clearTimeout() {}, zoneHeader: () => ({}),
+    qomWait: new Map(), qomReleased: new Map(), setTimeout: () => 0, clearTimeout() {}, zoneHeader: () => ({}),
     agentDisplayName: (n) => NAMES[n] || n, findSoloChat: (a) => (a === 'lead' ? chat : null),
     appendMessageWithImages: (id, role, content) => { const d = new El('div'); d.own = content; d.className = `msg ${role}`; msgs.appendChild(d); return 'm1'; },
     setMessageTime() {}, msgTimeLabel: () => 't', clearPendingImages: () => { chat.pendingImages = []; }, busyCardRefresh() {}, resync: () => { calls.resync++; },
@@ -203,23 +203,42 @@ test('desktop: Answer me now posts /api/chat/takeover with the agent and client_
   const post = d.calls.fetch.find(f => f.url === '/api/chat/takeover');
   assert.deepStrictEqual(post.body, { agent: 'lead', client_id: id });
   assert.strictEqual(line.children[0].textContent, "Pausing Helper's request…");
-  assert.strictEqual(line.find(e => e.tagName === 'button').disabled, true, 'the button is disabled while it runs');
+  assert.strictEqual(btnsOf(line).length, 0, 'the button is gone (not just disabled) while it runs');
   finish({ ok: false, error: 'Helper is not on a request right now.' });
   await tick();
   assert.strictEqual(line.children[0].textContent, 'Helper is not on a request right now.');
-  assert.strictEqual(line.find(e => e.tagName === 'button').disabled, false);
+  assert.strictEqual(btnsOf(line).length, 1, 'the button is back after the error');
+  assert.strictEqual(btnsOf(line)[0].disabled, false);
   // success: nothing else is drawn (the stream continues)
-  line.find(e => e.tagName === 'button').click();
+  btnsOf(line)[0].click();
   await tick();
   finish({ ok: true, from: 'helper' });
   await tick();
   assert.strictEqual(line.children[0].textContent, "Pausing Helper's request…");
+  assert.strictEqual(btnsOf(line).length, 0, 'no button while pausing');
   // a takeover_failed event
   const s = d.streams[0];
   s.ev({ type: 'takeover_failed', error: 'boom' });
   await tick();
   assert.strictEqual(line.children[0].textContent, 'Could not pause: boom');
-  assert.strictEqual(line.find(e => e.tagName === 'button').disabled, false);
+  assert.strictEqual(btnsOf(line).length, 1, 'takeover_failed brings the button back');
+  assert.strictEqual(btnsOf(line)[0].disabled, false);
+});
+
+test('desktop: after pressing the waiting-line button the line has no Answer me now button while pausing; takeover_failed brings it back', async () => {
+  const d = desk();
+  await d.api.sendSoloMessage('c1');
+  await tick();
+  d.answers['/api/chat/takeover'] = () => new Promise(() => {});
+  const line = lineOf(d.msgs);
+  assert.strictEqual(btnsOf(line).length, 1);
+  btnsOf(line)[0].click();
+  await tick();
+  assert.strictEqual(line.children[0].textContent, "Pausing Helper's request…");
+  assert.strictEqual(btnsOf(line).length, 0);
+  d.streams[0].ev({ type: 'takeover_failed', error: 'boom' });
+  await tick();
+  assert.strictEqual(btnsOf(line).length, 1);
 });
 
 test('desktop: the waiting message is kept in localStorage; a lost stream is sent again with the same client_id; already_sent clears it', async () => {
@@ -276,7 +295,7 @@ test('desktop: a page that loaded with a kept message draws and sends it again w
   assert.strictEqual(d.calls.fetch.length, 1, 'and is not sent again by this page');
 });
 
-test('desktop: the busy line (header text and chat card) shows Answer me now only while one of the person\'s messages waits, acting on the first', async () => {
+test('desktop: the busy line (header text and chat card) carries no Answer me now; the waiting line has the only one, acting on the first', async () => {
   const d = desk();
   // nothing waits: no button anywhere
   const card = new El('div');
@@ -292,12 +311,13 @@ test('desktop: the busy line (header text and chat card) shows Answer me now onl
   const id1 = d.calls.fetch[0].body.client_id;
   const card2 = new El('div');
   d.api.qomDecorate(card2, 'lead');
-  assert.strictEqual(btnsOf(card2).length, 1);
+  assert.strictEqual(btnsOf(card2).length, 0, 'the busy card carries no button');
   d.api.qomHeaderBtn(d.chat);
-  const head = d.doc.getElementById('qom-busy-c1');
-  assert.ok(head, 'the header carries the button');
-  assert.strictEqual(head.textContent, 'Answer me now');
-  head.click();
+  assert.strictEqual(d.doc.getElementById('qom-busy-c1'), null, 'the header carries no button');
+  const lines = d.msgs.all(e => e.className === 'owner-queue-line');
+  assert.strictEqual(lines.length, 2);
+  assert.strictEqual(btnsOf(d.msgs).length, 2, 'one button per waiting line, nowhere else');
+  btnsOf(lines[0])[0].click();
   await tick();
   assert.strictEqual(d.calls.fetch.find(f => f.url === '/api/chat/takeover').body.client_id, id1, 'the first waiting message');
   // when the waiting ends, the button goes
@@ -413,7 +433,7 @@ function phone({ live = { lead: { busy: true, consultedBy: 'helper' } }, stored 
   const sstreams = new Map(); if (own) sstreams.set('lead', {});
   const ctx = {
     hubMe: me, document: doc, current: 'lead', screen: 'chat', live, streams: sstreams, reattaches: new Map(), pendingImages: [], imagesPreparing: new Set(), sendWaiting: false, tzSentAt: 0,
-    localStorage: memStorage(stored), qomWait: new Map(), setTimeout: () => 0, clearTimeout() {}, zoneHeader: () => ({}),
+    localStorage: memStorage(stored), qomWait: new Map(), qomReleased: new Map(), setTimeout: () => 0, clearTimeout() {}, zoneHeader: () => ({}),
     turnOrigins: origin ? { lead: origin } : {}, openTurns: {},
     $: (id) => doc.getElementById(id), chatEl: () => msgs, displayName: (n) => NAMES[n] || n,
     addUserBubble: (text) => { const d = new El('div'); d.own = text; d.className = 'msg user'; msgs.appendChild(d); return d; },
@@ -484,14 +504,19 @@ test('phone: the queued event, position 2, Answer me now (pausing words, error),
   await tick();
   assert.deepStrictEqual(p.calls.api.find(f => f.url === '/api/chat/takeover').body, { agent: 'lead', client_id: id });
   assert.strictEqual(line.children[0].textContent, "Pausing Helper's request…");
-  assert.strictEqual(line.find(e => e.tagName === 'button').disabled, true);
+  assert.strictEqual(btnsOf(line).length, 0, 'no button while pausing');
   finish({ ok: false, error: 'Nothing to pause.' });
   await tick();
   assert.strictEqual(line.children[0].textContent, 'Nothing to pause.');
-  assert.strictEqual(line.find(e => e.tagName === 'button').disabled, false);
+  assert.strictEqual(btnsOf(line).length, 1);
+  assert.strictEqual(btnsOf(line)[0].disabled, false);
+  btnsOf(line)[0].click();
+  await tick();
+  assert.strictEqual(btnsOf(line).length, 0, 'no button while pausing again');
   s.ev({ type: 'takeover_failed', error: 'boom' });
   await tick();
   assert.strictEqual(line.children[0].textContent, 'Could not pause: boom');
+  assert.strictEqual(btnsOf(line).length, 1, 'takeover_failed brings the button back');
   // the turn starts: sendMessage takes the running request over with the message already drawn
   s.ev({ type: 'text', content: 'hi' });
   await tick(10);
@@ -501,6 +526,25 @@ test('phone: the queued event, position 2, Answer me now (pausing words, error),
   assert.strictEqual(p.calls.begun[0].userEl, p.msgs.children[0]);
   assert.ok(p.calls.begun[0].response && p.calls.begun[0].response.body.getReader);
   assert.strictEqual(p.ctx.localStorage.getItem('mmQueuedOwnerMessages'), '[]');
+});
+
+test('phone: after pressing the waiting-line button the line has no Answer me now button while pausing; takeover_failed brings it back', async () => {
+  const p = phone();
+  await p.api.sendMessage();
+  await tick();
+  const s = p.streams[0], id = p.calls.api[0].body.client_id;
+  s.ev({ type: 'queued', agent: 'lead', behind: { kind: 'consultation', from: 'helper' }, position: 1, client_id: id });
+  await tick();
+  p.answers['/api/chat/takeover'] = () => new Promise(() => {});
+  const line = lineOf(p.msgs);
+  assert.strictEqual(btnsOf(line).length, 1);
+  btnsOf(line)[0].click();
+  await tick();
+  assert.strictEqual(line.children[0].textContent, "Pausing Helper's request…");
+  assert.strictEqual(btnsOf(line).length, 0);
+  s.ev({ type: 'takeover_failed', error: 'boom' });
+  await tick();
+  assert.strictEqual(btnsOf(line).length, 1);
 });
 
 test('phone: kept in localStorage; a lost stream is sent again with the same client_id (not while hidden); already_sent clears it and reads the history', async () => {
@@ -545,8 +589,9 @@ test('phone: the busy line (#chat-busy and the card) shows Answer me now only wh
   assert.strictEqual(p.doc.getElementById('chat-busy-answer'), null, 'never in the phone header: it squeezed the name and was clipped');
   const card = new El('div');
   p.api.qomDecorate(card, 'lead');
-  assert.strictEqual(btnsOf(card).length, 1);
-  const b = btnsOf(card)[0];
+  assert.strictEqual(btnsOf(card).length, 0, 'the busy card carries no button');
+  const b = btnsOf(lineOf(p.msgs))[0];
+  assert.ok(b, 'the waiting line carries the button');
   assert.strictEqual(b.tagName, 'button');
   assert.strictEqual(b.type, 'button');
   assert.strictEqual(b.textContent, 'Answer me now');
@@ -874,4 +919,30 @@ test('desktop: while the agent answers a consultation the composer reads Send wi
   // wiring: setStatus's busy branch and the status feed both call it
   assert.match(APP, /simpleBusyLook\(sendBtn, input, cancelBtn\);[^\n]*\n\s*if \(typeof qomComposerLook === 'function'\) qomComposerLook\(chats\[chatId\]\);/);
   assert.match(APP, /busyCardRefresh\(c\); if \(typeof qomComposerLook === 'function'\) qomComposerLook\(c\);/);
+});
+
+// A released waiting message's turn_start comes to the page before its own stream attaches: it is this page's turn.
+for (const [label, SRC] of [['desktop', APP], ['phone', MOBILE]]) {
+  test(`${label}: qomOwnsTurn claims a turn for one of the page's waiting messages, or one released within the minute; not other text, agents or refused ones`, () => {
+    const qomWait = new Map(), qomReleased = new Map();
+    const { api } = load(SRC, ['qomOwnsTurn'], { qomWait, qomReleased });
+    qomWait.set('a', { agent: 'lead', message: 'Please check the plan', ended: false });
+    assert.strictEqual(api.qomOwnsTurn('lead', '  Please check the plan '), true);
+    assert.strictEqual(api.qomOwnsTurn('lead', 'something else'), false);
+    assert.strictEqual(api.qomOwnsTurn('helper', 'Please check the plan'), false);
+    qomWait.get('a').refused = true;
+    assert.strictEqual(api.qomOwnsTurn('lead', 'Please check the plan'), false, 'a refused message never ran');
+    qomWait.clear();
+    qomReleased.set('lead', { message: 'released one', ts: Date.now() - 5000 });
+    assert.strictEqual(api.qomOwnsTurn('lead', 'released one'), true);
+    assert.strictEqual(api.qomOwnsTurn('lead', 'released one'), true, 'kept for its minute: turn_start and a re-attach may both ask');
+    qomReleased.set('lead', { message: 'released one', ts: Date.now() - 61000 });
+    assert.strictEqual(api.qomOwnsTurn('lead', 'released one'), false, 'older than a minute');
+    assert.match(fnSource(SRC, 'qomStarted'), /qomReleased\.set\(w\.agent, \{ message: String\(w\.message \|\| ''\)\.trim\(\), ts: Date\.now\(\) \}\);\s*qomEnd\(w, true\);/);
+  });
+}
+test('wiring: the desktop turn_start mirror and the phone turn_start and re-attach skip a turn of the page\'s own waiting message', () => {
+  assert.match(fnSource(APP, 'onHubTurnStart'), /chat\.status === 'thinking'\) return;\s*if \(typeof qomOwnsTurn === 'function' && qomOwnsTurn\(ev\.agent, ev\.message\)\) return;/);
+  assert.match(fnSource(MOBILE, 'onTurnStart'), /const own = ev\.origin\?\.kind === 'user' && \(ownTurnFor\(ev\.agent\) \|\| \(typeof qomOwnsTurn === 'function' && qomOwnsTurn\(ev\.agent, ev\.message\)\)\);/);
+  assert.match(fnSource(MOBILE, 'reattachIfIdle'), /const r = typeof qomReleased !== 'undefined' \? qomReleased\.get\(agent\) : null; if \(r && Date\.now\(\) - r\.ts < 60000\) return;/);
 });

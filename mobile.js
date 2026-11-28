@@ -10520,6 +10520,17 @@ function setSendMode(own) {
 // (it would go to the other agent): it waits as its own request, the hub runs it next, and "Answer me now" pauses the
 // consultation so it runs at once. The same words and logic are on the desktop page (app.js); Simple uses both pages.
 const qomWait = new Map();   // client_id -> the waiting message { chatId, agent, message, images, userEl, ts, client_id, position, behindName, fromName, line, ... }
+// A turn the hub starts for one of this page's own waiting messages is this page's (its stream attaches a moment later):
+// the turn_start mirror must not draw it again as from another device or the hub.
+const qomReleased = new Map();   // agent -> { message, ts } of the waiting message whose turn just began here
+function qomOwnsTurn(agent, message) {
+  if (!agent) return false;
+  const text = typeof message === 'string' ? message.trim() : '';
+  const r = qomReleased.get(agent);
+  if (r && Date.now() - r.ts < 60000 && r.message === text) return true;   // kept for its minute: turn_start and a re-attach may both ask
+  for (const w of qomWait.values()) if (w.agent === agent && !w.ended && !w.refused && String(w.message || '').trim() === text) return true;
+  return false;
+}
 function qomKey() { return 'mmQueuedOwnerMessages'; }
 // Who is signed in: the account id, '' when the hub has no accounts, null while the page does not know yet (nothing is restored or sent then).
 function qomUser() {
@@ -10587,9 +10598,9 @@ function qomPaint(w) {
     else { const c = qomContainer(w); if (c) c.appendChild(line); }
   }
   w.text.textContent = qomLineText(w);
-  if (w.refused) { if (w.btn) { w.btn.remove(); w.btn = null; } }
+  // Once pressed (pausing) the button is gone, not just disabled; it returns if the pause fails (pausing false again).
+  if (w.refused || w.pausing) { if (w.btn) { w.btn.remove(); w.btn = null; } }
   else if (!w.btn) { w.btn = qomButton(w); w.line.appendChild(w.btn); }
-  else w.btn.disabled = !!w.pausing;
   qomPaintBusy(w.agent);
 }
 // Answer me now: pause the consultation; the waiting message then runs at once (this request carries on as the turn).
@@ -10663,6 +10674,7 @@ function qomEvent(w, ev) {
 }
 // The first normal event arrived: the line goes, the request carries on as a completely normal turn stream.
 function qomStarted(w, reader, rest) {
+  qomReleased.set(w.agent, { message: String(w.message || '').trim(), ts: Date.now() });
   qomEnd(w, true);
   const bytes = new TextEncoder().encode(rest);
   let first = bytes.length > 0;
@@ -10858,12 +10870,8 @@ function qomBusyBtn() {
   // The phone header has no room for it: a button there squeezed the agent's name and was clipped to one letter. The
   // phone offers Answer me now on the waiting line and on the busy card in the chat (qomDecorate) instead.
 }
-function qomDecorate(card, agent) {
-  const first = qomWaiting(agent)[0];
-  if (!first) return;
-  card.appendChild(document.createTextNode(' '));
-  card.appendChild(qomButton(first));
-}
+// The busy card in the chat adds nothing: Answer me now is only on the waiting line under the message.
+function qomDecorate(card, agent) { /* intentionally adds nothing */ }
 function qomPaintBusy(agent) { if (agent === current) { try { paintChatStatus(); } catch (e) { /* cosmetic */ } } }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) qomResendAll(); });
 window.addEventListener('online', () => qomResendAll());
@@ -13712,6 +13720,7 @@ function followedHubTurn(agent) {
 function reattachIfIdle(agent, partial = '') {
   if (!agent || !chatOpenFor(agent) || streams.has(agent) || reattaches.has(agent)) return;
   if (followedHubTurn(agent)) return;   // that turn is already drawn live; a re-attach would be a second copy
+  { const r = typeof qomReleased !== 'undefined' ? qomReleased.get(agent) : null; if (r && Date.now() - r.ts < 60000) return; }   // a waiting message of this phone's just began: its own stream is about to draw it
   const s = live[agent];
   if (!s || !s.busy) return;
   if (busyCardInfo(agent)) return;   // main view, a hub-started turn is running: the busy card says so, no live bubble
@@ -15430,7 +15439,7 @@ function onTurnStart(ev) {
   if (ev.turnId && hubTurns[ev.turnId]) return;   // replayed after a reconnect (?since=): the turn is already followed
   setLive(ev.agent, { busy: true, busySince: ev.startedAt || null, activity: ev.activity || originLabel(ev.origin), ...(ev.reviewingTeamFor || (ev.origin && ev.origin.kind === 'optimize_team' && ev.origin.for) ? { reviewingTeamFor: ev.reviewingTeamFor || ev.origin.for } : {}), ...(ev.settingUpTeams || (ev.origin && ev.origin.kind === 'team_setup') ? { settingUpTeams: true } : {}) });
   noteTurnOrigin(ev.agent, ev.turnId, ev.origin, ev.startedAt);
-  const own = ev.origin?.kind === 'user' && ownTurnFor(ev.agent);
+  const own = ev.origin?.kind === 'user' && (ownTurnFor(ev.agent) || (typeof qomOwnsTurn === 'function' && qomOwnsTurn(ev.agent, ev.message)));   // a waiting message of this phone's: its own stream draws it
   if (chatOpenFor(ev.agent) && !streams.has(ev.agent) && !own) {
     // The last saved entry: renderHistory leaves out a running turn's inProgress entry, so does this.
     let last;
