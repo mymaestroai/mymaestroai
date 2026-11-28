@@ -10583,6 +10583,7 @@ function qomPaint(w) {
     w.line = line;
     w.btn = null;
     if (w.userEl && w.userEl.parentNode) w.userEl.parentNode.insertBefore(line, w.userEl.nextSibling);
+    else if (current !== w.agent || screen !== 'chat') { w.line = null; w.text = null; qomPaintBusy(w.agent); return; }   // not this agent's chat on screen: nothing is drawn into another chat; qomChatOpened draws it
     else { const c = qomContainer(w); if (c) c.appendChild(line); }
   }
   w.text.textContent = qomLineText(w);
@@ -10793,25 +10794,35 @@ function qomOnConsult(agent) {
   return !!s.consultedBy || !!(o && o.origin && o.origin.kind === 'consultation');
 }
 // The composer's message goes as a waiting request (the same steps as an interjection: the box is emptied, the bubble drawn).
-function qomSendNew(agent, again) {   // again { text, images }: words already taken from the composer (a refused interjection or send): the composer is left alone
+function qomSendNew(agent) {   // a fresh send from the composer: it takes the words and pictures out of it
   const input = $('msg-input');
-  const text = again ? String(again.text || '').trim() : input.value.trim();
-  const images = again ? [...(again.images || [])] : pendingImages.slice();
+  const text = input.value.trim();
+  const images = pendingImages.slice();
+  if (!text && !images.length) return null;
+  input.value = '';
+  input.style.height = 'auto';
+  saveDraft(agent, '');
+  composerTypingPaint();
+  pendingImages = [];
+  renderPreviews();
+  return qomQueueMessage(agent, text, images);
+}
+// Queue words and pictures already taken (a late re-route: a refused interjection or send) for the agent they were sent to, wherever the
+// person is now. The composer is never touched. The bubble and line are drawn only when that agent's chat is on screen; otherwise the
+// message just waits (kept on this device) and qomChatOpened draws it when the chat is opened.
+function qomQueueMessage(agent, textIn, imagesIn) {
+  const text = String(textIn || '').trim();
+  const images = [...(imagesIn || [])];
   if (!text && !images.length) return null;
   tzSentAt = Date.now();
-  if (!again) {
-    input.value = '';
-    input.style.height = 'auto';
-    saveDraft(agent, '');
-    composerTypingPaint();
-    pendingImages = [];
-    renderPreviews();
-  }
-  stick = true;
   const ts = Date.now();
-  const userEl = addUserBubble(text, images);
-  setBubbleTime(userEl, msgTimeLabel(ts));
-  scrollChat(true);
+  let userEl = null;
+  if (current === agent && screen === 'chat') {
+    stick = true;
+    userEl = addUserBubble(text, images);
+    setBubbleTime(userEl, msgTimeLabel(ts));
+    scrollChat(true);
+  }
   const s = live[agent] || {};
   const o = currentTurnOrigin(agent);
   const from = s.consultedBy || (o && o.origin && o.origin.from) || '';
@@ -10902,7 +10913,7 @@ async function sendInterjection(agent) {
   }
   if (result && result.consultation === true) {   // the hub refuses an interjection into a consultation (the status came late): the bubble and note go, the same words wait as the person's own message
     try { userEl.remove(); noteEl.remove(); } catch (e) { /* gone */ }
-    qomSendNew(agent, { text, images });
+    qomQueueMessage(agent, text, images);   // for the agent it was sent to, even if another chat is open now; the composer is left alone
     return;
   }
   if (result && result.success) {
@@ -13624,8 +13635,8 @@ async function sendMessage(fallback) {
       fallback?.noteEl?.remove();
       if (fallback && fallback.voice) {
         // a call keeps the composer as it was; the controller was told (notify) and says "That did not go through." itself, or keeps the words for the next idle
-      } else if (!(fallback && fallback.response) && current === agent && await qomRefusedOnConsult(agent, rec)) {
-        qomSendNew(agent, { text, images });   // busy on a consultation (the status came late): the message waits for its turn, it is not refused
+      } else if (!(fallback && fallback.response) && await qomRefusedOnConsult(agent, rec)) {
+        qomQueueMessage(agent, text, images);   // busy on a consultation (the status came late): the message waits for its turn, it is not refused
       } else if (current === agent) {
         input.value = text;
         saveDraft(agent, text);

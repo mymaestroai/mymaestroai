@@ -14998,17 +14998,26 @@
       } catch (e) { /* no fresh status: not a consultation as far as the page knows */ }
       return ok();
     }
-    function qomSendNew(chatId, content, images) {   // (sendSoloMessage armed the zone header for this send)
-      const chat = chats[chatId];
+    function qomSendNew(chatId, content, images) {   // a fresh send from the composer: it takes the words and pictures out of it (sendSoloMessage armed the zone header for this send)
       const input = document.getElementById(`input-${chatId}`);
       input.value = '';
       input.style.height = 'auto';
       clearPendingImages(chatId);
-      chat.messages.push({ role: 'user', content, images: images.length > 0 ? [...images] : undefined });
-      appendMessageWithImages(chatId, 'user', content, images);
-      const userEl = document.getElementById(`messages-${chatId}`)?.lastElementChild || null;
+      return qomQueueMessage(chatId, content, images);
+    }
+    // Queue words and pictures already taken (a late re-route: a refused interjection or send). The composer is never touched,
+    // so whatever was typed or attached since stays. Draws the person's message once (not when opts.userEl is already on screen).
+    function qomQueueMessage(chatId, content, images, opts) {
+      const chat = chats[chatId];
+      images = images || [];
+      let userEl = (opts && opts.userEl) || null;
       const ts = Date.now();
-      setMessageTime(userEl, msgTimeLabel(ts));
+      if (!userEl) {
+        chat.messages.push({ role: 'user', content, images: images.length > 0 ? [...images] : undefined });
+        appendMessageWithImages(chatId, 'user', content, images);
+        userEl = document.getElementById(`messages-${chatId}`)?.lastElementChild || null;
+        setMessageTime(userEl, msgTimeLabel(ts));
+      }
       const st = agentStatus[chat.agent] || {};
       const run = busyRun[chat.agent];
       const from = st.consultedBy || (run && run.origin && run.origin.from) || '';
@@ -15089,10 +15098,7 @@
           // and the same words and pictures wait as the person's own message instead (drawn once, by qomSendNew).
           const ijEl = document.getElementById(ijBubbleId); if (ijEl) ijEl.remove();
           if (noticeEl) noticeEl.remove();
-          const typedNow = input.value, imagesNow = chat.pendingImages;   // what was typed or attached since stays
-          input.value = ''; chat.pendingImages = [];
-          try { return qomSendNew(chatId, content, [...imagesToSend]); }
-          finally { input.value = typedNow; chat.pendingImages = imagesNow; if (imagesNow && imagesNow.length) renderImagePreviews(chatId); }
+          return qomQueueMessage(chatId, content, [...imagesToSend]);   // the composer stays as the person left it
         }
         if (result.success) {
           if (noticeEl) noticeEl.textContent = '⚡ Interjection delivered into the running turn';
@@ -15252,7 +15258,7 @@
           if (!chat.bounced409 && !isVoice) {   // (a call's own message was refused above)
             // The hub says busy: if it is a consultation (the status says so, or a fresh /api/agents/status does), the message waits
             // as the person's own request instead of being interjected.
-            if (await qomStatusConsult(chat)) { chat.bounced409 = false; return qomSendNew(chatId, content, [...imagesToSend]); }
+            if (await qomStatusConsult(chat)) { chat.bounced409 = false; return qomQueueMessage(chatId, content, [...imagesToSend]); }   // late: the composer is left alone
           }
           if (!chat.bounced409) {
             chat.bounced409 = true;

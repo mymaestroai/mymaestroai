@@ -61,7 +61,7 @@ function makeStream() {
 }
 const memStorage = (init) => { const m = new Map(Object.entries(init || {})); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, removeItem: (k) => { m.delete(k); }, m }; };
 const NAMES = { lead: 'Lead', helper: 'Helper' };
-const QOM_SHARED = ['qomKey', 'qomUser', 'qomAll', 'qomForgetAll', 'qomStored', 'qomSave', 'qomKeep', 'qomForget', 'qomNewId', 'qomHidden', 'qomWords', 'qomLineText', 'qomWaiting', 'qomButton', 'qomPaint', 'qomTakeover', 'qomScan', 'qomEnd', 'qomEvent', 'qomStarted', 'qomRun', 'qomResendAll', 'qomEnqueue', 'qomName', 'qomPost', 'qomStream', 'qomReady', 'qomRestore', 'qomReread', 'qomBegin', 'qomOnConsult', 'qomSendNew', 'qomDecorate', 'qomPaintBusy', 'qomRetryLater', 'qomForeign', 'qomDrop'];
+const QOM_SHARED = ['qomKey', 'qomUser', 'qomAll', 'qomForgetAll', 'qomStored', 'qomSave', 'qomKeep', 'qomForget', 'qomNewId', 'qomHidden', 'qomWords', 'qomLineText', 'qomWaiting', 'qomButton', 'qomPaint', 'qomTakeover', 'qomScan', 'qomEnd', 'qomEvent', 'qomStarted', 'qomRun', 'qomResendAll', 'qomEnqueue', 'qomName', 'qomPost', 'qomStream', 'qomReady', 'qomRestore', 'qomReread', 'qomBegin', 'qomOnConsult', 'qomSendNew', 'qomQueueMessage', 'qomDecorate', 'qomPaintBusy', 'qomRetryLater', 'qomForeign', 'qomDrop'];
 
 // ── desktop ──
 function desk({ status = { busy: true, consultedBy: 'helper' }, chatOver = {}, stored = {}, hidden = false, me = { user: { id: 'sam' } }, more = {} } = {}) {
@@ -379,6 +379,27 @@ test('desktop: a normal send the hub answers 409 busy, while the status (or a fr
   assert.strictEqual(linesOf(d.msgs).length, 1);
 });
 
+test('desktop: a late re-route (409, then the status says consultation) queues the captured message and never touches the composer', async () => {
+  const d = desk({ status: { busy: false }, more: full() });
+  d.answers['/api/chat/stream'] = async () => ({ ok: false, status: 409, statusText: 'Conflict' });
+  let release;
+  d.answers['/api/agents/status'] = () => new Promise((res) => { release = () => res({ ok: true, json: async () => ({ agents: { lead: { busy: true, consultedBy: 'helper' } } }) }); });
+  const sending = d.api.sendSoloMessage('c1');
+  await tick(12);
+  assert.ok(release, 'the status lookup is pending');
+  d.input.value = 'something new';   // typed and attached while the lookup was pending
+  d.chat.pendingImages = ['data:image/png;base64,NEW'];
+  release();
+  await sending;
+  await tick(12);
+  const queued = d.calls.fetch.filter(f => f.url === '/api/chat/stream' && f.body && f.body.queue_behind_consult === true);
+  assert.strictEqual(queued.length, 1, 'the original message is queued');
+  assert.strictEqual(queued[0].body.message, 'Please check the plan');
+  assert.strictEqual(d.input.value, 'something new', 'the composer keeps the new text');
+  assert.deepStrictEqual(d.chat.pendingImages, ['data:image/png;base64,NEW'], 'and the new picture');
+  assert.strictEqual(d.msgs.all(e => /^msg user/.test(e.className)).length, 1, 'drawn once');
+});
+
 // ── phone ──
 function phone({ live = { lead: { busy: true, consultedBy: 'helper' } }, stored = {}, own = false, origin = null, me = { user: { id: 'sam' } } } = {}) {
   const doc = makeDoc();
@@ -556,7 +577,7 @@ function phoneFull(opts = {}) {
     applySnapshot(map) { for (const [n, v] of Object.entries(map)) c.live[n] = { ...v }; },
     ...(opts.ctx || {}),
   });
-  const { api, ctx: vctx } = load(MOBILE, [...QOM_SHARED, 'qomBusyBtn', 'isBusy', 'ownTurnFor', 'currentTurnOrigin', 'qomStatusConsult', 'qomRefusedOnConsult', 'sendInterjection', 'sendMessage'], c);
+  const { api, ctx: vctx } = load(MOBILE, [...QOM_SHARED, 'qomBusyBtn', 'isBusy', 'ownTurnFor', 'currentTurnOrigin', 'qomStatusConsult', 'qomRefusedOnConsult', 'qomChatOpened', 'sendInterjection', 'sendMessage'], c);
   vctx.sendMessage = c.sendMessage;
   Object.assign(p, { api, vctx, bubbles });
   return p;
@@ -591,6 +612,51 @@ test('phone: a normal send the hub answers 409 busy while a fresh /api/agents/st
   assert.strictEqual(p.input.value, '', 'the text is not put back in the box');
   assert.strictEqual(p.bubbles().length, 1, 'drawn once');
   assert.strictEqual(linesOf(p.msgs).length, 1);
+});
+
+const keptFor = (p) => JSON.parse(p.ctx.localStorage.getItem('mmQueuedOwnerMessages') || '[]');
+function lateOnOtherChat(p, how) {
+  // the person switched to another agent's chat while the answer was pending: nothing is drawn there, the message waits for helper
+  assert.strictEqual(p.msgs.all(e => /^msg /.test(e.className)).length, 0, 'nothing is drawn in the other chat');
+  assert.strictEqual(linesOf(p.msgs).length, 0, 'no waiting line there either');
+  const kept = keptFor(p).filter(e => e.agent === 'helper');
+  assert.strictEqual(kept.length, 1, `${how}: kept for helper`);
+  assert.strictEqual(kept[0].message, 'Please check the plan');
+  assert.strictEqual(p.vctx.qomWait.size, 1);
+  assert.strictEqual([...p.vctx.qomWait.values()][0].agent, 'helper');
+  assert.strictEqual(p.input.value, 'typed in lead', 'the composer is left alone');
+  p.vctx.current = 'helper'; p.vctx.screen = 'chat';   // helper's chat is opened
+  p.api.qomChatOpened('helper');
+  assert.strictEqual(p.msgs.all(e => e.className === 'msg user').length, 1, 'opening helper draws the message');
+  assert.strictEqual(linesOf(p.msgs).length, 1, 'with its waiting line');
+}
+
+test('phone: a refused interjection (consultation: true) that comes back after a switch to another chat is queued for the agent it was sent to, not drawn in the other chat', async () => {
+  const p = phoneFull({ live: { helper: { busy: true }, lead: { busy: false } }, ctx: { current: 'helper' } });
+  let release;
+  p.answers['/api/chat/interject'] = () => new Promise((res) => { release = () => res({ ok: true, status: 200, json: async () => ({ success: false, consultation: true, error: 'busy answering a consultation' }) }); });
+  const sending = p.api.sendInterjection('helper');
+  await tick(6);
+  p.vctx.current = 'lead'; p.input.value = 'typed in lead';
+  p.msgs.children.splice(0);   // lead's chat on screen: empty
+  release();
+  await sending; await tick(12);
+  lateOnOtherChat(p, 'refusal');
+});
+
+test('phone: a 409 whose status lookup says consultation, after a switch to another chat, is queued for the agent it was sent to, not drawn in the other chat', async () => {
+  const p = phoneFull({ live: { helper: { busy: false }, lead: { busy: false } }, ctx: { current: 'helper' } });
+  p.answers['/api/chat/stream'] = async () => { p.answers['/api/chat/stream'] = null; return { ok: false, status: 409 }; };
+  let release;
+  p.answers['/api/agents/status'] = () => new Promise((res) => { release = () => res({ ok: true, json: async () => ({ agents: { helper: { busy: true, consultedBy: 'lead' } } }) }); });
+  const sending = p.api.sendMessage();
+  await tick(12);
+  assert.ok(release, 'the status lookup is pending');
+  p.vctx.current = 'lead'; p.input.value = 'typed in lead';
+  p.msgs.children.splice(0);
+  release();
+  await sending; await tick(12);
+  lateOnOtherChat(p, '409');
 });
 
 test('phone: the Answer me now button sits right after #chat-busy (never inside it: #chat-busy is a button), stays through every repaint (once), and goes when no message waits', async () => {
