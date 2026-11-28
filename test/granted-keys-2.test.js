@@ -101,3 +101,39 @@ test('the lockbox widening list (pathsOf) applies the policy check\'s .. rule: a
   assert.ok(tp.pathsOf(cmd, { cwd: '/tmp', roots: [X], keyRoots, agentName: 'torque' }).reads.length, 'so the widening list names it too');
   assert.deepEqual(tp.pathsOf(`cat ${X}/id_ed25519`, { cwd: '/tmp', roots: [X], keyRoots, agentName: 'torque' }).reads, [], 'without .. the key stays the agent\'s own');
 });
+
+test('kernelPath follows links before .., as the kernel does; a loop, a missing folder and a file used as a folder are told apart', () => {
+  const T = fs.mkdtempSync(path.join(os.tmpdir(), 'granted-keys-2-kp-'));
+  fs.mkdirSync(path.join(T, 'o/sub'), { recursive: true });
+  fs.writeFileSync(path.join(T, 'o/f'), 'x');
+  fs.mkdirSync(path.join(T, 'x'));
+  fs.symlinkSync(path.join(T, 'o/sub'), path.join(T, 'x/link'));
+  fs.symlinkSync('loop2', path.join(T, 'x/loop1'));
+  fs.symlinkSync('loop1', path.join(T, 'x/loop2'));
+  assert.deepEqual(tp.kernelPath(`${T}/x/link/../f`), { status: 'ok', path: `${T}/o/f` });
+  assert.deepEqual(tp.kernelPath(`${T}/x/link/../new.txt`), { status: 'ok', path: `${T}/o/new.txt` }, 'a file it would create: in the real folder');
+  assert.equal(tp.kernelPath(`${T}/x/loop1/../f`).status, 'loop');
+  assert.equal(tp.kernelPath(`${T}/x/nothere/../f`).status, 'missing');
+  assert.equal(tp.kernelPath(`${T}/o/f/../f`).status, 'unknown', 'a file used as a folder');
+  assert.equal(tp.kernelPath('rel/../f').status, 'unknown');
+});
+
+test('the lockbox widening list opens a .. path where the file system takes it, nothing for a loop, as typed when a folder is missing', () => {
+  const X = fs.mkdtempSync(path.join(os.tmpdir(), 'granted-keys-2-wl-'));
+  const O = fs.mkdtempSync(path.join(os.tmpdir(), 'granted-keys-2-wl-other-'));
+  fs.mkdirSync(path.join(O, 'sub'));
+  fs.writeFileSync(path.join(O, 'id_ed25519'), 'k');
+  fs.writeFileSync(path.join(X, 'id_ed25519'), 'k');
+  fs.symlinkSync(path.join(O, 'sub'), path.join(X, 'link'));
+  fs.symlinkSync('loop2', path.join(X, 'loop1'));
+  fs.symlinkSync('loop1', path.join(X, 'loop2'));
+  const a = worker([X]);
+  const keyRoots = tp.policyFor(a).keyRoots;
+  const of = (cmd) => tp.pathsOf(cmd, { cwd: '/tmp', roots: [X], keyRoots, agentName: 'torque' });
+  assert.deepEqual(of(`cat ${X}/link/../id_ed25519`).reads, [path.join(O, 'id_ed25519')], 'the key the link reaches, not the folded X/id_ed25519');
+  assert.deepEqual(of(`cat ${X}/loop1/../id_ed25519`).reads, [], 'a link loop opens nothing');
+  assert.deepEqual(of(`cat ${X}/nothere/../id_ed25519`).reads, [path.join(X, 'id_ed25519')], 'a missing folder: as typed');
+  assert.deepEqual(of(`cat ${X}/id_ed25519 ${X}/link/../id_ed25519`).reads.sort(), [path.join(O, 'id_ed25519'), path.join(X, 'id_ed25519')].sort(), 'also named plainly: both');
+  // never wider than the policy check judged: X/link/../out is X/out to the check (inside the grant), O/out to the file system
+  assert.deepEqual(of(`cp /dev/null ${X}/link/../out.txt`).writes, []);
+});
